@@ -1,6 +1,9 @@
 using Zenkins.Server.Components;
+using Zenkins.Server.Data;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddZenkinsData(builder.Configuration, builder.Environment.ContentRootPath);
 
 builder.Services
     .AddRazorComponents()
