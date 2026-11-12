@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [F-001](issues/f-001-identity-auth-bootstrap.md) | Identity auth + first-run Owner bootstrap | P1 | M | — | I-002 |
 | [F-002](issues/f-002-organization-membership.md) | Organization CRUD, members, switcher | P1 | M | — | F-001 |
 | [F-003](issues/f-003-project-crud.md) | Project CRUD | P1 | M | — | F-002, D-001 |
 | [DOC-001](issues/doc-001-developer-setup-guide.md) | Developer setup guide | P2 | S | — | I-001 |
@@ -24,3 +23,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [I-002](issues/i-002-efcore-multitenant-data-layer.md) | EF Core data layer with enforced tenant isolation | P1 | 2026-11-12 |
 | [D-001](issues/d-001-app-shell-blazorblueprint.md) | Blazor Server app shell on BlazorBlueprint v4 | P1 | 2026-11-12 |
 | [Q-001](issues/q-001-tenant-isolation-tests.md) | Tenant isolation test harness (two-org fixture) | P1 | 2026-11-12 |
+| [F-001](issues/f-001-identity-auth-bootstrap.md) | Identity auth + first-run Owner bootstrap | P1 | 2026-11-12 |

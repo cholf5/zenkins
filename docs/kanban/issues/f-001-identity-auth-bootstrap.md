@@ -4,7 +4,7 @@ title: Identity auth + first-run Owner bootstrap
 type: feature
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-12
 updated: 2026-11-12
 blocked: none
@@ -271,6 +271,17 @@ claimed that branch as verified.** Fixed:
    the login URL and must keep scheme + authority. The sanitizer now also rejects control characters
    (header-injection defence), not just protocol-relative forms.
 
+## Known gaps (from the review)
+
+- **Malformed forwarded-header config fails startup** with `ArgumentOutOfRangeException (prefixLength)`
+  for a bad CIDR (`ForwardedHeaders:KnownNetworks:0=10.0.0.0/99`); a bare IP in `KnownProxies` or a scalar
+  (non-`:0`) value is silently ignored. Fail-safe but inconsistent — add range checks with an error
+  naming the config key before this reaches an operator.
+- **PostgreSQL end-to-end is unverified** (same gap I-002 records): the migration is Npgsql-generated and
+  has no pending model changes, but no registration/bootstrap run has happened on a live PG instance.
+- **Logout does not revoke tickets** (see the accepted-limitation entry above) and registration enumerates
+  accounts (open registration); both are recorded, not fixed.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -330,7 +341,7 @@ claimed that branch as verified.** Fixed:
     counts `users=2 organizations=1 memberships=1 owner_memberships=1 bootstrap_markers=1`,
     `Secure` present only when `X-Forwarded-Proto: https`, and 0 secret hits in the app log ->
     `e2e-curl.log`, `e2e-app.log`
-  - guard red proof: marker id changed to a fresh GUID (uniqueness disabled) ->
+  - guard red proof: the marker id in `BootstrapService` (`SingletonId` use site, not the entity default) changed to a fresh GUID (uniqueness disabled) ->
     `Bootstrap_guard_lets_exactly_one_of_two_concurrent_attempts_create_the_organization` **FAILS**,
     `Expected: 1 / Actual: 2` -> `red-proof-bootstrap-guard.log`; tree reverted immediately.
   - atomicity red proof: `transaction.CommitAsync` inserted right after `UserManager.CreateAsync` ->
