@@ -11,6 +11,13 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
+| [F-004](issues/f-004-worker-registration-tokens.md) | Worker registration, tokens and heartbeat (Server) | P1 | M | none | none |
+| [F-005](issues/f-005-worker-console-host.md) | Worker console host (register, heartbeat, reconnect) | P1 | M | none | F-004 |
+| [F-006](issues/f-006-runs-queue-scheduler.md) | Build runs, queue and scheduler (atomic claim/lease) | P1 | L | none | F-004, F-005 |
+| [F-007](issues/f-007-workdir-process-runner.md) | Per-run work directory and process runner (Worker) | P1 | M | none | F-006 |
+| [F-008](issues/f-008-log-streaming.md) | Real-time log streaming with incremental persistence | P1 | L | none | F-006, F-007 |
+| [F-009](issues/f-009-cancellation-timeout.md) | Cancellation propagation and per-run timeout | P1 | M | none | F-006, F-007, F-008 |
+| [F-010](issues/f-010-offline-detection-lost-runs.md) | Offline detection → Lost runs | P1 | M | none | F-004, F-006 |
 
 ## Done
 
