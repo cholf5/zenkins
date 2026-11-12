@@ -42,7 +42,7 @@ Credentials are a placeholder reference in this card (`GitCredentialId` nullable
 - [ ] URL + path validators with unit tests.
 - [ ] Per-Organization unique name (DB index + friendly error).
 - [ ] Delete flow with confirmation.
-- [ ] Extend `Q-001` with a project id-swap probe over HTTP.
+- [ ] Replace Q-001's test-only `/__probe/projects` + `X-Test-Organization` with the real authenticated endpoint: a request authenticated as A, with B's project id in route/query/form, must return 404 and never B's data.
 
 ## Dependencies
 

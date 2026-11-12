@@ -4,7 +4,7 @@ title: Tenant isolation test harness (two-org fixture)
 type: test
 priority: P1
 size: S
-status: review
+status: done
 created: 2026-11-12
 updated: 2026-11-12
 blocked: none
@@ -35,7 +35,8 @@ TwoOrgsFixture                (one temp SQLite file per instance, migrated with 
   - `IClassFixture<TwoOrgsFixture>` for read-mostly probe classes; a `new TwoOrgsFixture()` per test where a test mutates rows. One temp SQLite file per instance, deleted on dispose (pools cleared first).
 - [x] Probe: unfiltered query returns only the active tenant's rows, for A then for B.
 - [x] Probe: write carrying the other tenant's id is rejected (and nothing persists, in the active *and* the foreign tenant).
-- [x] Probe: a request authenticated as A's user, with B's ids substituted into route/query/form, fails authorization — never returns B's data.
+- [~] Probe: a request authenticated as A's user, with B's ids substituted into route/query/form, fails authorization — never returns B's data.
+  **Data-layer half done** here (route/query/form id swaps return 404, never B's row). The **authorization half** (a caller must not be able to *choose* tenant B) is deferred: the test host trusts `X-Test-Organization`, which F-001/F-002 replace with membership-derived tenant resolution. F-003 must add the authenticated probe.
   - No auth pipeline exists yet (F-001/F-003), so a **test-only** middleware selects the tenant from the `X-Test-Organization` header. The request itself is real HTTP over the app's pipeline (`WebApplicationFactory<Program>`, TestServer) and the id-swap is real (B's id in the route, the query string and the form body). The probe returns 404 with no B data; the positive control returns A's own row. The auth-dependent half (a user may only activate an organization they belong to) lands with F-003 — see Handoffs. Not skipped.
 - [x] Probing helper functions are named so a new entity only needs one line to join the harness.
   (`TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<TEntity>(fixture)`, `…AssertCrossTenantWriteRejectedAsync<TEntity>(fixture, factory)`, `…AssertFindAfterTenantSwitchReturnsNullAsync<TEntity>(fixture, idOfA, idOfB)`; plus one registry line in `CoveredEntityTypes`, enforced by `Every_tenant_owned_entity_is_covered_by_the_harness`.)
@@ -88,7 +89,7 @@ Card created. Not started.
 ### 2026-11-12 — implemented
 
 **Fixture (`Tenancy/TwoOrgsFixture.cs`).** One public type, one `Seed()` routine, one temp SQLite file
-per instance (`%TEMP%/zenkins-q001-<guid>.db`, migrated with the product's real migration set, never
+per instance (`%TEMP%/zenkins-q001-<guid:N>.db`, migrated with the product's real migration set, never
 `App_Data`). Seed: OrgA "Alpha" with `alice` (Owner) and `bob` (Member) and project `alpha-app`; OrgB
 "Beta" with `carol` (Owner) and project `beta-app`. Ids are fixed literals (`OrgAId`, `OrgBId`,
 `ProjectAId`, `ProjectBId`, three membership ids) so tests and URLs read as prose; names/users are
@@ -114,7 +115,7 @@ with one line:
   guarantee: a row tracked under A is not returned by `Find`/`FindAsync` after switching to B, in
   either direction, on the same context instance.
 - `CoveredEntityTypes` + the `Every_tenant_owned_entity_is_covered_by_the_harness` reflection guard:
-  a later card that adds an `ITenantOwned` entity without a probe fails instead of silently widening
+  a later card that adds an `ITenantOwned` entity without a **registry line** fails instead of silently widening
   the isolation surface.
 
 **Existing I-002 tests refactored onto the fixture.** `TenantIsolationTests` keeps all 13 tests and
@@ -197,3 +198,22 @@ Handoffs:
     runs above are the restored/final evidence: `build-final.log` 0/0, `test-all-final.log` 34/0/0,
     `test-tenant-isolation-final.log` 32/0/0.
   - No test in the suite is `[Skip]` / `Skip =`; total skipped is 0 in every run above.
+
+## Known gaps (from the review, deliberately not fixed here)
+
+- **The HTTP probe is a terminal middleware, not an endpoint.** It short-circuits before endpoint
+  routing, `UseAntiforgery`, the status-page gate and any future auth middleware. What it proves is the
+  host + request-scoped DI + `IDbContextFactory` + query-filter + JSON/status path — not middleware
+  ordering. F-003 must add the authenticated probe against a real endpoint.
+- **The query/write probes are per-entity by design.** Update/delete guards stay in
+  `TenantIsolationTests`; a new entity joining the harness gets insert-only coverage until it adds its
+  own update/delete probe.
+- **Registry membership is not coverage.** `CoveredEntityTypes` is enforced by a reflection guard, but
+  adding a type to the registry without calling a probe is still green. Driving the probes from the
+  registry via `[Theory][MemberData]` would make one imply the other.
+- **Cheap test strengthening left undone:** negative HTTP cases should assert
+  `Content-Length == 0` (the 404 body is empty by construction, so `DoesNotContain` cannot fail
+  independently); the positive control should assert the returned `id`; `AssertFindAfterTenantSwitch...`
+  should be constrained `where TEntity : ITenantOwned`; the read probe should require rows in both orgs
+  instead of silently narrowing to one direction; the duplicate-membership test should assert all three
+  seeded memberships survive the failed insert.
