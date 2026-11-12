@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
@@ -29,13 +30,25 @@ public sealed class AuthTestHost : IDisposable
     private readonly string _databasePath;
     private readonly WebApplicationFactory<Program> _factory;
 
-    public AuthTestHost()
+    /// <param name="configureTestServices">
+    /// Extra DI replacements, applied after the database is pointed at this host's temp file (used
+    /// to substitute the bootstrap seam).
+    /// </param>
+    /// <param name="configureAppConfiguration">Extra configuration sources (used for forwarded-header binding).</param>
+    public AuthTestHost(
+        Action<IServiceCollection>? configureTestServices = null,
+        Action<IConfigurationBuilder>? configureAppConfiguration = null)
     {
         _databasePath = Path.Combine(Path.GetTempPath(), $"zenkins-f001-{Guid.NewGuid():N}.db");
 
         _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment("Development");
+            if (configureAppConfiguration is not null)
+            {
+                builder.ConfigureAppConfiguration((_, configuration) => configureAppConfiguration(configuration));
+            }
+
             builder.ConfigureTestServices(services =>
             {
                 // Program resolves Database:Provider / ConnectionStrings:Default into a singleton;
@@ -44,9 +57,17 @@ public sealed class AuthTestHost : IDisposable
                 services.AddSingleton(new ZenkinsDataOptions(
                     DatabaseProvider.Sqlite,
                     $"Data Source={_databasePath}"));
+
+                configureTestServices?.Invoke(services);
             });
         });
     }
+
+    /// <summary>The running host's service provider (root scope).</summary>
+    public IServiceProvider Services => _factory.Services;
+
+    /// <summary>A new DI scope, for code that needs two scopes concurrently (the bootstrap race test).</summary>
+    public AsyncServiceScope CreateScope() => _factory.Services.CreateAsyncScope();
 
     /// <summary>Absolute path of this host's temporary SQLite file (never inside the repository).</summary>
     public string DatabasePath => _databasePath;

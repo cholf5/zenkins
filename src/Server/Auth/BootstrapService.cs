@@ -19,6 +19,26 @@ public enum BootstrapOutcome
 }
 
 /// <summary>
+/// First-run bootstrap seam. <see cref="RegistrationService"/> depends on this interface rather
+/// than the concrete service so tests can exercise the "lost the race" and "bootstrap write failed"
+/// branches of the registration transaction; the only production implementation is
+/// <see cref="BootstrapService"/>.
+/// </summary>
+public interface IBootstrapService
+{
+    /// <summary>Whether the one-time bootstrap has already committed.</summary>
+    Task<bool> HasCompletedAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates the starter organization, Owner membership and marker for <paramref name="user"/>,
+    /// or reports that another transaction already did it.
+    /// </summary>
+    Task<BootstrapOutcome> TryCreateOwnerOrganizationAsync(
+        User user,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// First-run bootstrap (PRD §3.1.1 / card F-001): the very first registration becomes Owner of a
 /// starter organization.
 /// <para>
@@ -35,12 +55,12 @@ public enum BootstrapOutcome
 /// <c>OrganizationId</c>, because it happens before any tenant is selected (I-002 handoff).
 /// </para>
 /// </summary>
-public sealed class BootstrapService(ZenkinsDbContext context, ISystemDataScope systemDataScope)
+public sealed class BootstrapService(ZenkinsDbContext context, ISystemDataScope systemDataScope) : IBootstrapService
 {
     /// <summary>Name of the organization created by the first-run bootstrap.</summary>
     public const string StarterOrganizationName = "Starter Organization";
 
-    /// <summary>Whether the one-time bootstrap has already committed.</summary>
+    /// <inheritdoc />
     public Task<bool> HasCompletedAsync(CancellationToken cancellationToken = default) =>
         context.BootstrapMarkers.AnyAsync(cancellationToken);
 

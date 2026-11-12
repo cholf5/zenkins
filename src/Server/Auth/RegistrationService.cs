@@ -30,7 +30,7 @@ public sealed record RegistrationResult(
 public sealed class RegistrationService(
     UserManager<User> userManager,
     ZenkinsDbContext context,
-    BootstrapService bootstrap,
+    IBootstrapService bootstrap,
     ILogger<RegistrationService> logger)
 {
     /// <summary>

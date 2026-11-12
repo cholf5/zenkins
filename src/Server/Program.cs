@@ -1,3 +1,4 @@
+using System.Net;
 using BlazorBlueprint.Components;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -19,10 +20,33 @@ builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogL
 
 // Behind a TLS-terminating reverse proxy, X-Forwarded-Proto is what makes Request.IsHttps true and
 // therefore what makes the auth cookie Secure in production. Loopback proxies are trusted by
-// default; ForwardedHeaders:KnownProxies / KnownNetworks in configuration add real ones.
+// default; a proxy on another host or network must be listed, otherwise its headers are ignored
+// (a remote client can never make this app trust its own X-Forwarded-Proto). Configuration:
+//   ForwardedHeaders:KnownProxies:0   = 203.0.113.7
+//   ForwardedHeaders:KnownNetworks:0  = 10.0.0.0/8
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+
+    var forwardedHeaders = builder.Configuration.GetSection("ForwardedHeaders");
+    foreach (var proxy in forwardedHeaders.GetSection("KnownProxies").Get<string[]>() ?? [])
+    {
+        if (IPAddress.TryParse(proxy, out var address))
+        {
+            options.KnownProxies.Add(address);
+        }
+    }
+
+    foreach (var network in forwardedHeaders.GetSection("KnownNetworks").Get<string[]>() ?? [])
+    {
+        var parts = network.Split('/', 2);
+        if (parts.Length == 2
+            && IPAddress.TryParse(parts[0], out var prefix)
+            && int.TryParse(parts[1], out var prefixLength))
+        {
+            options.KnownIPNetworks.Add(new System.Net.IPNetwork(prefix, prefixLength));
+        }
+    }
 });
 
 builder.Services.AddBlazorBlueprintComponents(configureTheme: theme =>

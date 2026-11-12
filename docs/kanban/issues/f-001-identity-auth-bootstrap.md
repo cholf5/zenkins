@@ -44,7 +44,7 @@ Bootstrap rule: if the database has zero users, the first successful registratio
 - [x] Register/login/logout Razor components (Blazor Server form model, not MVC pages).
   - `Components/Pages/Account/{Register,Login,Logout}.razor` with `EditForm` + `[SupplyParameterFromForm]` + `DataAnnotationsValidator`, static SSR only.
 - [x] Implement bootstrap transaction with a race-safe guard (unique constraint on bootstrap, not a "count == 0" check alone).
-  - `BootstrapMarker` with a fixed primary key (`"bootstrap"`), inserted in the same `SaveChanges` as the organization and Owner membership, inside the registration transaction, under `ISystemDataScope` with an explicit `OrganizationId`.
+  - `BootstrapMarker` with a fixed primary key (`"bootstrap"`), inserted in the same `SaveChanges` as the organization and Owner membership, inside the registration transaction, under `ISystemDataScope` with an explicit `OrganizationId`. `RegistrationService` depends on the one-method `IBootstrapService` seam so the two rare branches (lost race, bootstrap write failure) are testable without production branches or flags.
 - [x] Add `[Authorize]` at the layout level and a `RedirectToLogin` fallback.
   - `[Authorize]` on Home/Projects/Workers/Secrets/NoOrganization; `AuthorizeRouteView` wraps the routed page in `Routes.razor`; `RedirectToLogin` preserves the path + query.
 - [x] Add the no-organization state page.
@@ -84,12 +84,16 @@ bootstrap insert and gets `AlreadyCompleted`, still one Organization). Registrat
 because Background explicitly says later sign-ups exist without an Organization until F-002 invites
 them; the second account is created with **no** membership and lands on `/no-organization`.
 Curl gate: second registration → 302 `/no-organization`, then `organizations=1, memberships=1,
-bootstrap_markers=1, users=2`. The concurrent variant
-(`Concurrent_first_registrations_create_exactly_one_organization`) starts two first registrations in
-parallel and still ends with exactly one Organization, one Owner membership and one marker.
+bootstrap_markers=1, users=2`.
 `Bootstrap_stays_closed_after_the_first_account_is_deleted` also proves deleting the first account
 cannot re-open the bootstrap: the marker has no foreign key to the user, so it survives while the
-membership cascades away.
+membership cascades away. The real race at the guard is pinned by
+`BootstrapTests.Bootstrap_guard_lets_exactly_one_of_two_concurrent_attempts_create_the_organization`
+(two scopes, two connections, both parked before `TryCreateOwnerOrganizationAsync`) → exactly one
+`Created`, one `AlreadyCompleted`, `organizations=1, memberships=1, markers=1`, no exception.
+The registration-level fallback is covered separately by
+`RegistrationTransactionTests` through the `IBootstrapService` seam (see the review round-1 notes
+for why SQLite's own locking makes that branch unreachable through the HTTP flow).
 
 ### TC-003: Anonymous access is blocked
 
@@ -155,7 +159,14 @@ which - under `ISystemDataScope` and with an explicit `OrganizationId` - adds Or
 this race-safe: two concurrent first registrations both attempt the insert, the database accepts exactly
 one, and the loser gets a unique-constraint violation, rolls its transaction back (including its user),
 and re-creates the account without an organization. The pre-check (`AnyAsync`) is only an optimization;
-the constraint is the guard. Deliberate decision recorded in TC-002: registration stays open so invited
+the constraint is the guard.
+**Correction (review round 1):** the earlier "concurrent registrations" test did not actually reach the
+loser branch - SQLite starts a `BEGIN IMMEDIATE` transaction for the registration write, so the second
+request is serialized until the first commits and then sees `HasCompletedAsync == true`. The guard is
+now pinned directly at `BootstrapService` (two scopes parked before the insert, one `Created` + one
+`AlreadyCompleted`), and the two registration branches are pinned through `IBootstrapService` stubs
+(`RegistrationTransactionTests`). The registration-level fallback remains provider-unreachable on
+SQLite and is a PostgreSQL-path behaviour; that is now stated, not claimed as end-to-end verified. Deliberate decision recorded in TC-002: registration stays open so invited
 members can create accounts, but the *bootstrap* is closed forever after the first commit.
 
 **Passwords, lockout, cookies.** Policy configured explicitly in `IdentitySetup` (see AC notes).
@@ -189,7 +200,7 @@ SecurityStamp/ConcurrencyStamp and emails) so the new FK is satisfiable; ids sta
 the existing probes use, so **all 34 pre-existing tests keep their assertions unchanged** and stay green.
 No test was skipped or weakened.
 
-**Counts.** 34 → **50 tests**, 0 skipped (16 new: 9 HTTP flow cases + 7 bootstrap/data-layer cases).
+**Counts.** 34 → **70 tests**, 0 skipped (9 HTTP flow cases, 4 bootstrap/transaction cases, 17 return-url sanitizer payloads, 1 host-configuration case, plus the pre-existing I-002/Q-001 suite).
 
 Handoffs:
 
@@ -197,10 +208,68 @@ Handoffs:
   `TenantResolutionMiddleware` with the selected-organization switch; `UserSession` is the seam the
   shell already uses. Invitations are the only way to add the missing membership, and the
   `/no-organization` copy points there.
-- **F-003** can attach real data reads to the tenant that `TenantResolutionMiddleware` / `UserSession`
-  select; components must still read through `IDbContextFactory`, never an injected `ZenkinsDbContext`.
+- **F-003 hazard:** the circuit tenant is established by `MainLayout.razor` resolving `UserSession`, not
+  by the HTTP middleware (interactive circuits get a new DI scope). A page whose own
+  `OnInitializedAsync` reads tenant data can therefore run before the shell and see
+  `OrganizationId = null` (fail-closed, no leak, but an empty page). F-003 pages must resolve
+  `UserSession.GetAsync()` first or read through a service that does; do not rely on ordering against a
+  layout.
+- **Production migration path:** the startup migration is Development-only
+  (`Database:ApplyMigrationsOnStartup`); production runs `dotnet ef database update --project src/Server`
+  once before starting. No live PostgreSQL instance exists in this environment (same gap as I-002), so
+  the PostgreSQL path is schema/script parity only, not a live apply.
 - A future "remember me" option only needs `PasswordSignInAsync(isPersistent: true)`; nothing in the
   cookie policy blocks it.
+
+### 2026-11-12 — review round 1 (FAIL -> fixes)
+
+**B1 (blocking) — the "concurrent" registration test never reached the loser branch, and the card
+claimed that branch as verified.** Fixed:
+- `BootstrapTests.Bootstrap_guard_lets_exactly_one_of_two_concurrent_attempts_create_the_organization`:
+  two scopes/connections, both parked on an async gate immediately before
+  `TryCreateOwnerOrganizationAsync`, then racing; asserts exactly one `Created`, one
+  `AlreadyCompleted`, and `users=2 organizations=1 memberships=1 owner_memberships=1 markers=1` with
+  no exception. (On SQLite two *explicit* transactions serialise at `BEGIN`, so the race is forced at
+  the insert instead of at transaction start; the unique-constraint branch is the same.)
+- `RegistrationTransactionTests.Registration_rolls_back_the_account_when_the_bootstrap_write_fails`:
+  `IBootstrapService` stub throws after the account insert → the transaction rolls the account back
+  (`users=0 organizations=0 memberships=0 markers=0`). Red proof: committing the transaction right
+  after `UserManager.CreateAsync` makes it fail with `Expected: 0 / Actual: 1`.
+- `RegistrationTransactionTests.Registration_falls_back_to_an_account_without_organization_when_the_bootstrap_loses_the_race`:
+  stub returns `AlreadyCompleted` → the first account insert is rolled back, the account is re-created
+  without an organization, and the result is a successful `AlreadyCompleted` registration.
+- **Why the fallback cannot be reached end-to-end on SQLite:** the registration transaction begins
+  with `BEGIN IMMEDIATE`, writes the account, and only then attempts the marker, so a competing writer
+  cannot commit between the pre-check and the insert; the second request simply sees the marker. The
+  unique-violation → rollback → re-create path is a PostgreSQL-concurrency behaviour, now exercised
+  through the seam and explicitly *not* claimed as an SQLite end-to-end proof. Red proof for the guard:
+  giving the marker a random id makes the guard test report `Expected: 1 / Actual: 2`.
+
+**Cheap items, all done:**
+1. **Upgrade path with data.** The observed `dotnet ef database update` gate covered *empty* databases
+   only. A pre-F-001 dev database that already has `OrganizationMembers` rows without matching users
+   fails when the migration rebuilds the table and adds the FK (`SQLite Error 19: FOREIGN KEY
+   constraint failed`; the rebuild rolls back and is retryable). Recovery: delete the dev database
+   (`src/Server/App_Data/zenkins.db`) or delete the orphan membership rows, then run the update.
+   The migration was not regenerated (the rebuild is the provider's normal way to add a FK).
+2. **Forwarded headers are actually bound now.** `Program.cs` reads
+   `ForwardedHeaders:KnownProxies:<n>` (IPs) and `ForwardedHeaders:KnownNetworks:<n>` (CIDR) and adds
+   them to `ForwardedHeadersOptions.KnownProxies`/`KnownIPNetworks`; loopback stays trusted by default.
+   `HostConfigurationTests.Forwarded_proxy_allowlist_is_bound_from_configuration` pins both keys. The
+   verified property is unchanged: a non-loopback client's `X-Forwarded-Proto` is ignored, so it
+   cannot change the cookie's `Secure` flag.
+3. **Registration enumerates accounts (accepted v0.1 property).** A duplicate email produces
+   `Username '...' is already taken.` (open registration needs to tell the user the address exists);
+   login deliberately stays generic ("Incorrect email or password.") so it does not confirm accounts.
+4. **Logout does not revoke tickets (accepted v0.1 limitation).** `SignOutAsync` expires the three
+   cookies, but there is no `UpdateSecurityStampAsync`, so a captured cookie remains usable until it
+   expires (8h sliding). Future fix: bump the security stamp on sign-out (plus revalidation) or move to
+   a per-user session store; no revocation path exists in v0.1.
+5. **`ReturnUrlSanitizer` payload theory.** `ReturnUrlSanitizerTests` covers `//evil.example`,
+   `https://evil.com`, `/\evil.com`, `%2f%2fevil.com`, `/%2f%2fevil.com`, `///evil.com`,
+   `..%2f..%2f`, `http:/evil.com`, `//evil.com/%2e%2e`, and CR/LF payloads; each is resolved against
+   the login URL and must keep scheme + authority. The sanitizer now also rejects control characters
+   (header-injection defence), not just protocol-relative forms.
 
 ## Bugs
 
@@ -240,7 +309,7 @@ Handoffs:
      ```
 - Results (full output in `/tmp/orca-logs/F-001/`):
   - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build.log`
-  - `dotnet test` -> **PASS**, **50 passed / 0 failed / 0 skipped** (34 before this card) -> `test.log`
+  - `dotnet test` -> **PASS**, **70 passed / 0 failed / 0 skipped** (34 before this card) -> `test.log`
   - `dotnet ef migrations list` -> **PASS**, `20261112051428_Initial` and
     `20261112070211_AddIdentityAndBootstrap` listed -> `ef-migrations-list.log`
   - `dotnet ef database update` (SQLite, empty temp file) -> **PASS**
@@ -249,15 +318,24 @@ Handoffs:
     -> `ef-database-update-sqlite.log`, `sqlite-tables.log`
   - upgrade path (`database update Initial` then latest) -> **PASS**, migration applied on top of the
     existing table; the rebuilt table keeps both FKs and the check constraint ->
-    `ef-upgrade-from-initial.log`
+    `ef-upgrade-from-initial.log`. **Limitation:** this gate used an empty database; a pre-F-001 dev
+    database with membership rows and no users fails the FK step (SQLite Error 19) and needs the
+    recovery described in review round 1, item 1.
   - `dotnet ef migrations has-pending-model-changes` (Postgres) -> **PASS**, no pending changes ->
     `ef-pending-model-changes-postgres.log`
-  - curl end-to-end -> **PASS**, every step above plus 12 `PASS` lines; observed:
+  - curl end-to-end -> **PASS**, every step above plus 16 `PASS` lines; observed:
     `Set-Cookie: Zenkins.Auth=<redacted>; path=/; samesite=lax; httponly`,
     `Location: …/account/login?ReturnUrl=%2Fprojects`,
     `Location: …/projects`, `Set-Cookie: Zenkins.Auth=; expires=Thu, 01 Jan 1970`,
     counts `users=2 organizations=1 memberships=1 owner_memberships=1 bootstrap_markers=1`,
     `Secure` present only when `X-Forwarded-Proto: https`, and 0 secret hits in the app log ->
     `e2e-curl.log`, `e2e-app.log`
-  - concurrency stability: `dotnet test --filter "FullyQualifiedName~Concurrent_first_registrations"`
-    run three times -> 1/1 passed each time.
+  - guard red proof: marker id changed to a fresh GUID (uniqueness disabled) ->
+    `Bootstrap_guard_lets_exactly_one_of_two_concurrent_attempts_create_the_organization` **FAILS**,
+    `Expected: 1 / Actual: 2` -> `red-proof-bootstrap-guard.log`; tree reverted immediately.
+  - atomicity red proof: `transaction.CommitAsync` inserted right after `UserManager.CreateAsync` ->
+    `Registration_rolls_back_the_account_when_the_bootstrap_write_fails` **FAILS**,
+    `Expected: 0 / Actual: 1` -> `red-proof-atomicity.log`; tree reverted immediately.
+  - `dotnet test --filter Category=Auth` -> **PASS**, 36 passed / 0 failed / 0 skipped (includes the
+    guard test, the two `IBootstrapService`-seam tests, 17 `ReturnUrlSanitizer` payloads and the
+    forwarded-header binding test) -> `auth-tests.log`.

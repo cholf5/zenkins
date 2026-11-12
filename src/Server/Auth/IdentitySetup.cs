@@ -96,6 +96,8 @@ public static class IdentitySetup
         services.AddScoped<UserOrganizationDirectory>();
         services.AddScoped<UserSession>();
         services.AddScoped<BootstrapService>();
+        services.AddScoped<IBootstrapService>(serviceProvider =>
+            serviceProvider.GetRequiredService<BootstrapService>());
         services.AddScoped<RegistrationService>();
 
         return services;

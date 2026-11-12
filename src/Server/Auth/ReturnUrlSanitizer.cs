@@ -24,6 +24,13 @@ public static class ReturnUrlSanitizer
             return fallback;
         }
 
+        // A decoded query value can contain CR/LF; reflecting it into a redirect would be header
+        // injection. No legitimate in-app path needs a control character.
+        if (returnUrl.Any(char.IsControl))
+        {
+            return fallback;
+        }
+
         return returnUrl;
     }
 

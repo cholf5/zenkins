@@ -124,17 +124,47 @@ public sealed class BootstrapTests : IDisposable
     }
 
     [Fact]
-    public async Task Concurrent_first_registrations_create_exactly_one_organization()
+    public async Task Bootstrap_guard_lets_exactly_one_of_two_concurrent_attempts_create_the_organization()
     {
-        // Two independent DI scopes = two concurrent first requests against the same database. Only
-        // one can insert the marker; the loser must still end up with a valid account.
-        var alice = RegisterAsync(AliceEmail);
-        var bob = RegisterAsync(BobEmail);
+        // Seed the two accounts outside the race; no bootstrap has happened yet. (Creating them via
+        // RegisterAsync would already complete the bootstrap.)
+        await SeedAccountsAsync("race-a", "race-b");
 
-        var results = await Task.WhenAll(alice, bob);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arrivals = 0;
 
-        Assert.All(results, result => Assert.True(result.Succeeded));
-        Assert.Single(results, result => result.Bootstrap == BootstrapOutcome.Created);
+        // Two independent DI scopes = two connections, both parked immediately before the guard and
+        // then racing into it. TryCreateOwnerOrganizationAsync always attempts the marker insert, so
+        // exactly one SaveChanges can commit it; the other must hit the unique constraint. (SQLite
+        // serializes the two implicit SaveChanges transactions, which is why the winner is
+        // deterministic in time but the outcome - one Created, one AlreadyCompleted - is the same.)
+        async Task<BootstrapOutcome> AttemptAsync(string userId)
+        {
+            await using var scope = _host.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<ZenkinsDbContext>();
+            var user = await context.Users.SingleAsync(
+                candidate => candidate.Id == userId,
+                cancellationToken);
+
+            if (Interlocked.Increment(ref arrivals) == 2)
+            {
+                gate.SetResult();
+            }
+
+            await gate.Task;
+
+            return await scope.ServiceProvider
+                .GetRequiredService<BootstrapService>()
+                .TryCreateOwnerOrganizationAsync(user, cancellationToken);
+        }
+
+        var outcomes = await Task.WhenAll(
+            Task.Run(() => AttemptAsync("race-a"), cancellationToken),
+            Task.Run(() => AttemptAsync("race-b"), cancellationToken));
+
+        Assert.Equal(1, outcomes.Count(outcome => outcome == BootstrapOutcome.Created));
+        Assert.Equal(1, outcomes.Count(outcome => outcome == BootstrapOutcome.AlreadyCompleted));
 
         var snapshot = await _host.ReadSnapshotAsync();
         Assert.Equal(2, snapshot.Users);
@@ -191,6 +221,29 @@ public sealed class BootstrapTests : IDisposable
     private Task<RegistrationResult> RegisterAsync(string email, string password = AuthTestHost.ValidPassword) =>
         _host.InScopeAsync(services =>
             services.GetRequiredService<RegistrationService>().RegisterAsync(email, password));
+
+    /// <summary>Creates accounts directly, i.e. two users with no bootstrap marker.</summary>
+    private Task SeedAccountsAsync(params string[] userIds) =>
+        _host.InScopeAsync(async services =>
+        {
+            await using var context = await services
+                .GetRequiredService<IDbContextFactory<ZenkinsDbContext>>()
+                .CreateDbContextAsync(TestContext.Current.CancellationToken);
+
+            foreach (var userId in userIds)
+            {
+                context.Users.Add(new User
+                {
+                    Id = userId,
+                    UserName = userId,
+                    NormalizedUserName = userId.ToUpperInvariant(),
+                    SecurityStamp = $"seed-{userId}",
+                });
+            }
+
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
 
     public void Dispose() => _host.Dispose();
 }
