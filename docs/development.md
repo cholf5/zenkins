@@ -3,10 +3,11 @@
 Everything needed to go from a clean machine to a signed-in dashboard: prerequisites, build, first
 run, configuration, repository layout, and troubleshooting.
 
-> **Verified on:** macOS 26.5 (arm64) with .NET SDK **10.0.403**, on 2026-11-12. Every command in the
-> POSIX (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
-> quoted here are the ones that run produced. PowerShell equivalents differ only in shell syntax
-> (`$env:`, `Remove-Item`) and are marked where they appear.
+> **Verified on:** macOS 26.5 (arm64) with .NET SDK **10.0.403**, on 2026-11-12; re-verified after
+> project CRUD landed. Every command in the POSIX (macOS/Linux) form below was run in that order from
+> a fresh `git clone`; the expected outputs quoted here are the ones those runs produced. PowerShell
+> equivalents differ only in shell syntax (`$env:`, `Remove-Item`, `Tee-Object`) and are given
+> wherever they differ.
 
 ## 1. Prerequisites
 
@@ -55,7 +56,7 @@ Expected results, as observed:
 |---|---|
 | `dotnet restore` | restores 4 projects (`Zenkins.Shared`, `Zenkins.Worker`, `Zenkins.Server`, `Zenkins.Tests`) |
 | `dotnet build -c Release` | `Build succeeded.` / `0 Warning(s)` / `0 Error(s)` — warnings are errors (`Directory.Build.props`) |
-| `dotnet test` | `Passed!` / `failed: 0` / `skipped: 0` — 88 tests on the revision this guide was verified against; the count grows as cards land, so expect more. Every test must pass and none may be skipped |
+| `dotnet test` | `Passed!` / `failed: 0` / `skipped: 0` — 152 tests at the revision this guide was last verified against (a snapshot: the count grows as cards land). No test may fail and none may be skipped |
 
 `dotnet test` builds the Debug configuration unless you pass `-c Release`; that is why its log says
 `bin/Debug/net10.0/Zenkins.Tests.dll` even after a Release build. Tests use the Microsoft Testing
@@ -88,6 +89,10 @@ whose `http` profile sets the port *and* `ASPNETCORE_ENVIRONMENT=Development`. B
 profile wins, you do **not** need to set the environment variable for this command — and setting
 `ASPNETCORE_ENVIRONMENT` or `ASPNETCORE_URLS` in the shell has no effect while the profile is used
 (see §6).
+
+The profile also sets `launchBrowser: true`. Editor launch configurations (Visual Studio, Rider, VS
+Code) honour it and open the page for you, so a tab may appear on its own; from a terminal just use
+the URL printed in the log.
 
 ### Where the database lives
 
@@ -145,7 +150,9 @@ dotnet run --project src/Server
 ```
 
 The register page says "first account becomes the Owner" again afterwards. This is the standard
-recovery for a dev database you no longer trust — see §6.
+recovery for a dev database you no longer trust — see §6. A *published* run keeps its database in
+`App_Data/` under the directory you started it from (§6), not in the repository: if you ran the
+published DLL elsewhere, delete that directory instead.
 
 ### Headless smoke test (optional, macOS/Linux)
 
@@ -210,13 +217,14 @@ Start a PostgreSQL server you can reach, create a database and a user (for examp
 export Database__Provider=Postgres
 export ConnectionStrings__Default="Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins"
 dotnet ef database update --project src/Server
-dotnet run --project src/Server --no-launch-profile
+ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Server --no-launch-profile
 ```
 
 ```powershell
 $env:Database__Provider = 'Postgres'
 $env:ConnectionStrings__Default = 'Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins'
 dotnet ef database update --project src/Server
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
 dotnet run --project src/Server --no-launch-profile
 ```
 
@@ -227,8 +235,11 @@ dotnet run --project src/Server --no-launch-profile
 dotnet tool install --global dotnet-ef --version 10.0.15   # only if `dotnet ef --version` fails
 ```
 
-Because `dotnet run` would otherwise use the launch profile, the run command above passes
-`--no-launch-profile`; that is also what makes the exported environment variables take effect.
+`--no-launch-profile` is what lets the exported variables take effect, but it also drops the profile's
+`ASPNETCORE_ENVIRONMENT=Development` — and without an environment variable the host runs in
+**Production**, where `_framework`/`_content` assets return 500 from a source run (§6). That is why
+the run command sets `ASPNETCORE_ENVIRONMENT=Development` explicitly. Use the profile
+(`dotnet run --project src/Server`) if you only want the local SQLite development setup.
 
 > **Status of this section:** on the machine where this guide was verified there is no PostgreSQL
 > server and no Docker, so the switch could not be completed end to end. The provider selection,
@@ -237,7 +248,8 @@ Because `dotnet run` would otherwise use the launch profile, the run command abo
 > `Failed to connect to 127.0.0.1:5432`. The first command in a real environment that proves the
 > switch is that same `dotnet ef database update` exiting 0, followed by a successful first-run
 > registration against PostgreSQL. Installing a database server or Docker was deliberately avoided
-> (PRD §7.2: no Docker as an infrastructure dependency).
+> (PRD §2.2 and §8.9: no Docker as an infrastructure dependency). The server-side setup commands
+> (`createdb`, role creation) were not run either.
 
 ### Production database path
 
@@ -245,8 +257,18 @@ Startup migration is Development-only. For anything else, run the migration once
 leave `Database:ApplyMigrationsOnStartup` unset (or `false`):
 
 ```bash
-Database__Provider=Postgres ConnectionStrings__Default="..." dotnet ef database update --project src/Server
+Database__Provider=Postgres ConnectionStrings__Default="Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins" \
+  dotnet ef database update --project src/Server
 ```
+
+```powershell
+$env:Database__Provider = 'Postgres'
+$env:ConnectionStrings__Default = 'Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins'
+dotnet ef database update --project src/Server
+```
+
+The same two variables (or `ConnectionStrings__Default` alone for SQLite) are what the deployed
+process needs; nothing else about the production run differs from §6's published-run example.
 
 ### Reverse proxy (TLS termination)
 
@@ -279,6 +301,8 @@ src/Server/                  ASP.NET Core host, Blazor Server UI, Identity, EF C
   Components/                Razor components: layout, account, organizations, projects pages
   Data/                      DbContext, entities, tenancy, migrations
   Organizations/             membership management + POST endpoints
+  Projects/                  project service, validation and CRUD endpoints (POST forms)
+  Properties/                launchSettings.json — local port and Development environment
   wwwroot/                   project CSS and the two small JS files (theme, antiforgery bridge)
 src/Shared/                  code shared by Server and Worker (must not reference ASP.NET Core)
 src/Worker/                  console worker (placeholder in v0.1)
@@ -304,15 +328,23 @@ Where new work belongs:
 
 ### The migration contract
 
-There is **one** migration set, and it is written for PostgreSQL (uuid, timestamptz,
-varchar(450)). SQLite is dynamically typed, so the same files apply there unchanged, which keeps a
-single history for both providers. Consequences:
+There is **one** migration set, and it is written for PostgreSQL: the generated files contain
+`uuid`, `timestamp with time zone` and `character varying(450)` — exactly those strings, so
+`grep -r "character varying" src/Server/Data/Migrations` finds them and a SQLite-generated set would
+not. SQLite is dynamically typed, so the same files apply there unchanged, which keeps a single
+history for both providers. Consequences:
 
 - **Generate migrations with the PostgreSQL provider**, never with SQLite:
 
   ```bash
   Database__Provider=Postgres ConnectionStrings__Default="Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins" \
     dotnet ef migrations add <MigrationName> --project src/Server
+  ```
+
+  ```powershell
+  $env:Database__Provider = 'Postgres'
+  $env:ConnectionStrings__Default = 'Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins'
+  dotnet ef migrations add <MigrationName> --project src/Server
   ```
 
   (Generating a migration needs no running database; only `database update` does.) Generating with
@@ -323,6 +355,12 @@ single history for both providers. Consequences:
   ```bash
   Database__Provider=Postgres ConnectionStrings__Default="Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins" \
     dotnet ef migrations has-pending-model-changes --project src/Server
+  ```
+
+  ```powershell
+  $env:Database__Provider = 'Postgres'
+  $env:ConnectionStrings__Default = 'Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins'
+  dotnet ef migrations has-pending-model-changes --project src/Server
   ```
 
   It must print `No changes have been made to the model since the last migration.` With the SQLite
@@ -357,10 +395,12 @@ dotnet run --project src/Server --urls http://localhost:5098
 5067, with it on the requested port):
 
 ```bash
-ASPNETCORE_URLS=http://localhost:5097 dotnet run --project src/Server --no-launch-profile
+ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5097 dotnet run --project src/Server --no-launch-profile
 ```
 
-On Windows: `$env:ASPNETCORE_URLS='http://localhost:5097'` before the same command.
+On Windows: set `$env:ASPNETCORE_ENVIRONMENT='Development'` and `$env:ASPNETCORE_URLS='http://localhost:5097'`
+before the same command. Without the environment variable the host would run in Production here too,
+with the asset 500s described below.
 
 ### Reset the local database
 
@@ -381,20 +421,25 @@ Fix: use Development for local work, or publish and run the output, which serves
 
 ```bash
 dotnet publish src/Server -c Release -o ./artifacts/publish
-ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS=http://localhost:5095 dotnet ./artifacts/publish/Zenkins.Server.dll
+cd artifacts/publish
+ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS=http://localhost:5095 dotnet Zenkins.Server.dll
 ```
 
 ```powershell
 dotnet publish src/Server -c Release -o .\artifacts\publish
+Set-Location .\artifacts\publish
 $env:ASPNETCORE_ENVIRONMENT = 'Production'
 $env:ASPNETCORE_URLS = 'http://localhost:5095'
-dotnet .\artifacts\publish\Zenkins.Server.dll
+dotnet .\Zenkins.Server.dll
 ```
 
-`artifacts/` is git-ignored, so the publish output cannot accidentally be committed. In the published
-output the SQLite file lands in `./artifacts/publish/App_Data/zenkins.db` (content root is the
-publish directory). Remember that Production does not migrate on startup, so either set
-`Database__ApplyMigrationsOnStartup=true` for that run or run `dotnet ef database update` first.
+`artifacts/` is git-ignored, so the publish output cannot accidentally be committed. **The published
+app's content root is the current working directory**, not the directory containing the DLL: started
+from `artifacts/publish`, the SQLite file is `artifacts/publish/App_Data/zenkins.db`; started with
+`dotnet ./artifacts/publish/Zenkins.Server.dll` from the repository root, it is
+`<repo root>/App_Data/zenkins.db` and `artifacts/publish/App_Data` never exists. `cd` first if you want
+the database next to the binaries. Remember that Production does not migrate on startup, so either
+set `Database__ApplyMigrationsOnStartup=true` for that run or run `dotnet ef database update` first.
 
 ### Sign-in bounces back to the sign-in page
 
@@ -422,7 +467,9 @@ change.
 
 ### Forms do nothing, or return 400, when JavaScript is blocked
 
-The organization switcher and the Owner-only management forms are plain HTML POSTs. They carry
+The organization switcher, the Owner-only organization management forms and the project forms
+(create, edit and delete — `Components/Shared/ProjectFormCard.razor`,
+`Components/Pages/Projects/DeleteProject.razor`) are plain HTML POSTs. They carry
 `data-zenkins-antiforgery`, and `wwwroot/js/antiforgery.js` copies the request token rendered into
 `<meta name="request-verification-token">` into a hidden `__RequestVerificationToken` field on submit.
 Without that script the POST has no token and antiforgery rejects it with **400** (verified). If you
@@ -459,7 +506,11 @@ printed before `Now listening on:` appears — that is the first place to look.
 ## Current state (what you can actually do)
 
 Working today: first-run Owner bootstrap, cookie sign-in/out, organizations and members (invite,
-role change, remove), server-side organization switching, and a `/projects` list scoped to the active
-organization. Not implemented yet: pipelines, workers, build runs, live logs, secrets and webhooks
-(the Workers and Secrets pages are shell previews), and project management (create/edit/delete) is a
-separate card in progress. Do not expect those features to work in this revision.
+role change, remove), server-side organization switching, and projects scoped to the active
+organization. The project surface is `/projects`, `/projects/new`, `/projects/{id}`,
+`/projects/{id}/edit` and `/projects/{id}/delete/confirm`: Members may create and edit, only an
+Owner may delete, the repository URL, default branch and pipeline path are validated, and a project
+name is unique per organization (`AddProjectUniqueName`).
+
+Not implemented yet: pipelines (Lua execution), workers, build runs, live logs, secrets and webhooks;
+the Workers and Secrets pages are shell previews. Do not expect those to work in this revision.

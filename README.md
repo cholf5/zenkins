@@ -5,7 +5,8 @@
 A lightweight, cross-platform, self-hosted CI server. Built with C# / .NET 10, Blazor Server, and Lua pipelines — no Java, no Docker required.
 
 > Status: **pre-alpha**. The Server runs: first-run Owner bootstrap, cookie sign-in, Organizations
-> and members, and an organization-scoped project list. Pipelines, workers, runs and secrets are not
+> and members, organization switching, and projects scoped to the active organization (create/edit as
+> a Member, delete reserved to an Owner). Pipelines, workers, runs, logs and secrets are not
 > implemented yet. Work is tracked in [`docs/kanban/board.md`](docs/kanban/board.md).
 
 ## Why another CI server
@@ -29,6 +30,8 @@ Browser → Blazor Server UI → ASP.NET Core Server → (Auth · Scheduler · S
 ```
 
 The Server never executes builds. Workers connect outbound to the Server, pull jobs, execute native processes, and stream logs back.
+
+## Documentation
 
 - [Product requirements (v1.0)](docs/prd.md) — the spec of record
 - [Development setup](docs/development.md) — clone, build, run, configure, troubleshoot
