@@ -1,0 +1,47 @@
+# ---- .NET ----
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ---- Test / coverage ----
+TestResults/
+[Cc]overage*/
+*.coverage
+*.trx
+
+# ---- IDE / OS ----
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Zenkins runtime data (never commit) ----
+**/App_Data/
+*.db
+*.db-shm
+*.db-wal
+**/work/
+**/artifacts_upload/
+logs/
+*.log
+
+# ---- Local secrets / config overrides ----
+appsettings.Local.json
+appsettings.Development.json
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+*.key
