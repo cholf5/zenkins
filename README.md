@@ -44,7 +44,8 @@ The only prerequisite is the .NET 10 SDK: no Java, no Docker, no Node.js and no 
 the default (SQLite) path.
 
 ```bash
-git clone <repository-url> zenkins && cd zenkins
+git clone https://github.com/your-org/zenkins.git zenkins   # replace with the real clone URL
+cd zenkins
 dotnet build -c Release
 dotnet run --project src/Server
 ```

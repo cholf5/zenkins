@@ -130,6 +130,28 @@ also created a project over the real form endpoints (`POST /projects/create` →
 list shows it) and confirmed the published run's content root and `App_Data` under the publish
 directory.
 
+### 2026-11-12 — review round 2 (published-run migration)
+
+One blocking defect: the published-run paragraph offered `dotnet ef database update --project src/Server`
+as the way to prepare the publish database. That command migrates the *design-time* content root
+(`src/Server/App_Data/zenkins.db`), so the published app kept failing on `/account/register` with
+`SQLite Error 1: 'no such table: BootstrapMarkers'`.
+
+- Reproduced first in a fresh clone (`33-published-migration.log`): `database update` applied all four
+  migrations to `src/Server/App_Data`, `artifacts/publish/App_Data` did not exist, and the published
+  Production app answered the register page with the `no such table` error.
+- Replaced with the form that targets the publish database via
+  `ConnectionStrings__Default="Data Source=$(pwd)/artifacts/publish/App_Data/zenkins.db"` (bash and
+  PowerShell), kept `Database__ApplyMigrationsOnStartup=true` as the alternative, and verified both:
+  all four migrations land in the publish directory and `/account/register` returns 200
+  (`34-published-migration-fixed.log`, `walkthrough3.log`).
+- Also fixed in the same commit: `launchBrowser` is now attributed to IDE launch profiles rather than a
+  terminal `dotnet run`; the `migrations add` example uses a bare name (`AddProjectTag`) because
+  `<MigrationName>` is not parseable by either shell; the published example returns to the repository
+  root with `cd ../..` (`Set-Location ..\..`); the test snapshot names its revisions (152 at
+  `6674587`, 153 at HEAD); `git clone` lines use a syntactically valid placeholder URL instead of a
+  `<...>` token, which bash rejects as redirection.
+
 ## Verification
 
 - Related files: `docs/development.md`, `README.md`
@@ -139,12 +161,11 @@ directory.
   PowerShell. Transcripts are on the verification host under `/tmp/zenkins-doc-001/`.
 - Results: PASS on every executed step; the one deferred AC is the PostgreSQL switch (above).
 
-Gates run in the repository at HEAD (transcripts `gate-build.log`, `gate-test.log`):
+Gates at HEAD (transcripts `gate-build.log`, `gate-test.log`, `walkthrough3.log`):
 `dotnet build -c Release` → `Build succeeded. 0 Warning(s) 0 Error(s)`;
-`dotnet test` → `total: 152, failed: 0, succeeded: 152, skipped: 0` in a clean checkout of this commit
-(`walkthrough2.log`, which cloned it). The same gate on the working tree — which at the time of writing
-also carried uncommitted F-003 test edits — reported `total: 153, failed: 0, skipped: 0`, so the exact
-number moves with the next card; 152 is the count of the revision this guide describes.
+`dotnet test` → `total: 153, failed: 0, succeeded: 153, skipped: 0` in a clean clone of this commit.
+The doc now names both revisions (152 at `6674587`, 153 at HEAD) so the snapshot cannot be mistaken
+for a constant.
 Markdown link check: every relative `](...)` target in `README.md` and `docs/development.md` resolves
 (`grep`-driven loop over both files, exit 0); `README.md` links `docs/development.md` twice and has a
 `## Documentation` heading again.
@@ -156,10 +177,10 @@ Per-section transcripts:
 | Prereqs (§1) | `01-restore.log`, `25-tool-install.log` | `dotnet --version` 10.0.403; `dotnet --list-sdks` 10.0.101 / 10.0.403; `dotnet-ef` 10.0.15 installs and reports its version |
 | Clone/restore/build/test (§2) | `01-restore.log`, `02-build.log`, `03-test.log`, `gate-build.log`, `gate-test.log` | restore 4 projects; build `0 Warning(s) 0 Error(s)`; tests green: `88/0/0` before F-003, `152/0/0` at the revision this card now targets |
 | First run (§3) | `04-first-run.log`, `05-http-probe.log`, `06-register.log`, `07-second-user.log`, `08-logout.log`, `19-reset-db.log`, `24-dev-assets.log` | migrations applied on startup; listening on 5067/Development; `/` 302 → login; register POST 302 → `/` + `Zenkins.Auth` cookie; dashboard shows `Starter Organization`; second account → `/no-organization`; logout clears the cookie; deleting `App_Data` recreates and re-migrates the DB; `_framework`/`_content` 200 in Development |
-| Configuration (§4) | `16-ef-sqlite.log`, `17-ef-pg-modelcheck.log`, `12-production-assets.log`, `13-publish.log`, `14-published-prod.log`, `15-postgres-probe.log`, `18-ef-pg-update.log` | SQLite `database update` no-op exit 0; PG model check passes (exit 0) while SQLite reports pending changes (exit 1); Production-from-source 500 on `_framework`/`_content` with `FileNotFoundException`, published output 200; PostgreSQL switch fails only at `Failed to connect to 127.0.0.1:5432` (AC deferred) |
+| Configuration (§4) | `16-ef-sqlite.log`, `17-ef-pg-modelcheck.log`, `12-production-assets.log`, `13-publish.log`, `14-published-prod.log`, `15-postgres-probe.log`, `18-ef-pg-update.log`, `33-published-migration.log`, `34-published-migration-fixed.log` | SQLite `database update` no-op exit 0; PG model check passes (exit 0) while SQLite reports pending changes (exit 1); Production-from-source 500 on `_framework`/`_content` with `FileNotFoundException`, published output 200; PostgreSQL switch fails only at `Failed to connect to 127.0.0.1:5432` (AC deferred). Round 2: plain `database update` migrates `src/Server/App_Data` and leaves the publish DB empty → published app 500s `/account/register` with `no such table: BootstrapMarkers` (`33`); the `ConnectionStrings__Default=…artifacts/publish/App_Data/zenkins.db` form applies all four migrations to the publish DB and `/account/register` is 200, as does `ApplyMigrationsOnStartup=true` (`34`) |
 | Layout/migrations (§5) | `23-ef-migrations-add.log`, `30-recheck.log` | `migrations add` with the PG provider succeeds and is undone cleanly (`migrations remove` under SQLite rewrites the snapshot — documented); `has-pending-model-changes` exits 0 with F-003's `AddProjectUniqueName`; `grep -rl "character varying(450)" src/Server/Data/Migrations` lists the generated files |
 | Troubleshooting (§6) | `09-port-in-use.log`, `10-urls.log`, `11-env-urls.log`, `11b-env-urls.log`, `20-returnurl.log`, `21-antiforgery.log`, `22-pre-f001-fk.log`, `27-nolaunch-env.log`, `28-published-cwd.log`, `32-published-dbpath.log` | `address already in use` text; `--urls` and `ASPNETCORE_URLS --no-launch-profile` both bind the requested port; `ReturnUrl` sanitising and the `/account/login` bounce; tokenless POST → 400; pre-F-001 DB reproduces `SQLite Error 19: FOREIGN KEY constraint failed`, delete-and-recreate recovers; `--no-launch-profile` alone = Production + asset 500 (`27`), with `ASPNETCORE_ENVIRONMENT=Development` = 200 (`31`); published run writes `App_Data/` into the cwd unless you `cd` into the publish directory (`28`, `32`) |
-| End-to-end | `walkthrough.log`, `26-docblock.log`, `walkthrough2.log` | `walkthrough.log` / `26-docblock.log`: the pre-F-003 flow (302 → login, register 302 → `/`, `Starter Organization` + `Dashboard`, second account → `/no-organization`, sign-out, clean clone). `walkthrough2.log`: the same flow from a fresh clone of this fix commit plus the re-verified changed commands — 152/0/0, project create 302 → detail, Development run with `--no-launch-profile` 200 on both asset prefixes, Production equivalent 500, published run from the publish directory writing `zenkins.db` next to the DLL, clone clean at the end |
+| End-to-end | `walkthrough.log`, `26-docblock.log`, `walkthrough2.log`, `walkthrough3.log` | `walkthrough.log` / `26-docblock.log`: the pre-F-003 flow (302 → login, register 302 → `/`, `Starter Organization` + `Dashboard`, second account → `/no-organization`, sign-out, clean clone). `walkthrough2.log`: the same flow from a fresh clone of the round-1 commit plus the changed commands — 152/0/0, project create 302 → detail, Development run with `--no-launch-profile` 200 on both asset prefixes, Production equivalent 500, published run from the publish directory writing `zenkins.db` next to the DLL. `walkthrough3.log`: a fresh clone of this commit runs the published-run sequence verbatim — publish, migrate the publish DB, Production app serves `/account/register` 200 and a full registration (302 → `Starter Organization`), `cd ../..` returns to the repo root, no `no such table`/`fail:` in the log, every `bash` fence parses with `bash -n`, clone ends clean |
 
 ## Bugs
 

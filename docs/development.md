@@ -42,7 +42,7 @@ Windows: the installer or `winget install Microsoft.DotNet.SDK.10`) and open a n
 ## 2. Clone, restore, build, test
 
 ```bash
-git clone <repository-url> zenkins
+git clone https://github.com/your-org/zenkins.git zenkins   # replace with the real clone URL
 cd zenkins
 
 dotnet restore
@@ -56,7 +56,7 @@ Expected results, as observed:
 |---|---|
 | `dotnet restore` | restores 4 projects (`Zenkins.Shared`, `Zenkins.Worker`, `Zenkins.Server`, `Zenkins.Tests`) |
 | `dotnet build -c Release` | `Build succeeded.` / `0 Warning(s)` / `0 Error(s)` — warnings are errors (`Directory.Build.props`) |
-| `dotnet test` | `Passed!` / `failed: 0` / `skipped: 0` — 152 tests at the revision this guide was last verified against (a snapshot: the count grows as cards land). No test may fail and none may be skipped |
+| `dotnet test` | `Passed!` / `failed: 0` / `skipped: 0` — 152 tests at commit `6674587`, 153 at the current HEAD (the project-CRUD card added tests). Treat the number as a snapshot of the revision you have, not a target; no test may fail and none may be skipped |
 
 `dotnet test` builds the Debug configuration unless you pass `-c Release`; that is why its log says
 `bin/Debug/net10.0/Zenkins.Tests.dll` even after a Release build. Tests use the Microsoft Testing
@@ -90,8 +90,8 @@ profile wins, you do **not** need to set the environment variable for this comma
 `ASPNETCORE_ENVIRONMENT` or `ASPNETCORE_URLS` in the shell has no effect while the profile is used
 (see §6).
 
-The profile also sets `launchBrowser: true`. Editor launch configurations (Visual Studio, Rider, VS
-Code) honour it and open the page for you, so a tab may appear on its own; from a terminal just use
+The profile also sets `launchBrowser: true`, which **IDE launch configurations** (Visual Studio, Rider,
+VS Code) honour by opening the page for you. A plain `dotnet run` in a terminal opens nothing — use
 the URL printed in the log.
 
 ### Where the database lives
@@ -338,14 +338,17 @@ history for both providers. Consequences:
 
   ```bash
   Database__Provider=Postgres ConnectionStrings__Default="Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins" \
-    dotnet ef migrations add <MigrationName> --project src/Server
+    dotnet ef migrations add AddProjectTag --project src/Server
   ```
 
   ```powershell
   $env:Database__Provider = 'Postgres'
   $env:ConnectionStrings__Default = 'Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins'
-  dotnet ef migrations add <MigrationName> --project src/Server
+  dotnet ef migrations add AddProjectTag --project src/Server
   ```
+
+  Replace `AddProjectTag` with your migration name (a bare name; `<MigrationName>` is a placeholder
+  that the shell would try to read as input redirection).
 
   (Generating a migration needs no running database; only `database update` does.) Generating with
   SQLite rewrites `ZenkinsDbContextModelSnapshot.cs` with SQLite type names and silently breaks the
@@ -423,6 +426,7 @@ Fix: use Development for local work, or publish and run the output, which serves
 dotnet publish src/Server -c Release -o ./artifacts/publish
 cd artifacts/publish
 ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS=http://localhost:5095 dotnet Zenkins.Server.dll
+cd ../..   # back to the repository root
 ```
 
 ```powershell
@@ -431,6 +435,7 @@ Set-Location .\artifacts\publish
 $env:ASPNETCORE_ENVIRONMENT = 'Production'
 $env:ASPNETCORE_URLS = 'http://localhost:5095'
 dotnet .\Zenkins.Server.dll
+Set-Location ..\..   # back to the repository root
 ```
 
 `artifacts/` is git-ignored, so the publish output cannot accidentally be committed. **The published
@@ -438,8 +443,27 @@ app's content root is the current working directory**, not the directory contain
 from `artifacts/publish`, the SQLite file is `artifacts/publish/App_Data/zenkins.db`; started with
 `dotnet ./artifacts/publish/Zenkins.Server.dll` from the repository root, it is
 `<repo root>/App_Data/zenkins.db` and `artifacts/publish/App_Data` never exists. `cd` first if you want
-the database next to the binaries. Remember that Production does not migrate on startup, so either
-set `Database__ApplyMigrationsOnStartup=true` for that run or run `dotnet ef database update` first.
+the database next to the binaries.
+
+Production does not migrate on startup, so that database starts empty — and
+`dotnet ef database update --project src/Server` on its own does **not** fill it: the design-time
+content root is `src/Server`, so the migrations land in `src/Server/App_Data/zenkins.db` instead and
+the published app fails on `/account/register` with `SQLite Error 1: 'no such table: BootstrapMarkers'`
+(verified). Point `ConnectionStrings:Default` at the publish database:
+
+```bash
+ConnectionStrings__Default="Data Source=$(pwd)/artifacts/publish/App_Data/zenkins.db" \
+  dotnet ef database update --project src/Server
+```
+
+```powershell
+$env:ConnectionStrings__Default = "Data Source=$($PWD.Path)\artifacts\publish\App_Data\zenkins.db"
+dotnet ef database update --project src/Server
+```
+
+Run that from the repository root, before starting the published app. Alternatively let the published
+process migrate its own content root with `Database__ApplyMigrationsOnStartup=true` (both were
+verified: all four migrations apply, `/account/register` then answers 200).
 
 ### Sign-in bounces back to the sign-in page
 
