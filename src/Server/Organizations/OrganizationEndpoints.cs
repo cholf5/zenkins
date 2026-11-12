@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Zenkins.Server.Auth;
-using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 
 namespace Zenkins.Server.Organizations;
@@ -134,20 +133,12 @@ public static class OrganizationEndpoints
             return Results.Unauthorized();
         }
 
-        if (!Guid.TryParse(form.MembershipId, out var membershipId))
-        {
-            return RedirectWithError(MembersPath, "member-not-found");
-        }
-
-        if (!Enum.TryParse<OrganizationRole>(form.Role, ignoreCase: true, out var role) || !Enum.IsDefined(role))
-        {
-            return RedirectWithError(MembersPath, "invalid-role");
-        }
-
+        // No parsing here on purpose: the service authorizes the caller before validating the id or
+        // role, so a Member always gets 403, even for malformed input.
         var result = await management.ChangeRoleAsync(
             userId,
-            membershipId,
-            role,
+            form.MembershipId,
+            form.Role,
             httpContext.RequestAborted);
 
         return MutationResult(result, MembersPath, "role-changed");
@@ -165,14 +156,10 @@ public static class OrganizationEndpoints
             return Results.Unauthorized();
         }
 
-        if (!Guid.TryParse(form.MembershipId, out var membershipId))
-        {
-            return RedirectWithError(MembersPath, "member-not-found");
-        }
-
+        // Authorization before id parsing, same as the role endpoint.
         var result = await management.RemoveMemberAsync(
             userId,
-            membershipId,
+            form.MembershipId,
             httpContext.RequestAborted);
 
         return MutationResult(result, MembersPath, "member-removed");

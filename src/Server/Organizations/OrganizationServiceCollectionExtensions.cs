@@ -11,6 +11,7 @@ public static class OrganizationServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddZenkinsOrganizations(this IServiceCollection services)
     {
+        services.AddSingleton<IOrganizationRowLock, OrganizationRowLock>();
         services.AddScoped<OrganizationManagementService>();
         return services;
     }

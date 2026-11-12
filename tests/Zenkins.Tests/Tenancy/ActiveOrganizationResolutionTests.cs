@@ -1,9 +1,12 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
+using Zenkins.Server.Data.Tenancy;
 
 namespace Zenkins.Tests.Tenancy;
 
@@ -68,21 +71,10 @@ public sealed class ActiveOrganizationResolutionTests : IDisposable
     [Fact]
     public async Task Switching_to_a_valid_membership_persists_the_selection()
     {
-        await SetPersistedSelectionAsync(TwoOrgsFixture.OrgAOwnerUserId, TwoOrgsFixture.OrgAId);
-
         var directory = CreateDirectory();
-        var selected = await directory.SwitchAsync(
-            TwoOrgsFixture.OrgAOwnerUserId,
-            TwoOrgsFixture.OrgBId,
-            CancellationToken);
-
-        Assert.Null(selected); // alice is not a member of B
-        Assert.Equal(
-            TwoOrgsFixture.OrgAId,
-            await ReadPersistedSelectionAsync(TwoOrgsFixture.OrgAOwnerUserId));
 
         // carol owns B, so switching her is a legitimate move; resolve it and read it back.
-        await SetPersistedSelectionAsync(TwoOrgsFixture.OrgBOwnerUserId, TwoOrgsFixture.OrgBId);
+        await SetPersistedSelectionAsync(TwoOrgsFixture.OrgBOwnerUserId, TwoOrgsFixture.OrgAId);
         var carolSwitch = await directory.SwitchAsync(
             TwoOrgsFixture.OrgBOwnerUserId,
             TwoOrgsFixture.OrgBId,
@@ -99,21 +91,38 @@ public sealed class ActiveOrganizationResolutionTests : IDisposable
     {
         await SetPersistedSelectionAsync(TwoOrgsFixture.OrgAMemberUserId, TwoOrgsFixture.OrgAId);
 
-        using (var scope = _fixture.SystemDataScope.BeginScope())
-        {
-            await using var context = _fixture.CreateContext();
-            var membership = await context.SystemQueryAsync<OrganizationMember>(
-                row => row.UserId == TwoOrgsFixture.OrgAMemberUserId,
-                CancellationToken);
-            context.OrganizationMembers.Remove(membership.Single());
-            await context.SaveChangesAsync(CancellationToken);
-        }
+        await RevokeMembershipAsync(TwoOrgsFixture.OrgAMemberUserId);
 
         var resolved = await CreateDirectory().ResolveAsync(TwoOrgsFixture.OrgAMemberUserId, CancellationToken);
 
         Assert.Null(resolved.Active);
         Assert.Empty(resolved.Memberships);
         Assert.Null(await ReadPersistedSelectionAsync(TwoOrgsFixture.OrgAMemberUserId));
+    }
+
+    [Fact]
+    public async Task UserSession_re_resolves_so_a_revoked_member_loses_read_access_without_a_reload()
+    {
+        var tenantContext = new TenantContext();
+        var session = new UserSession(
+            new FixedAuthenticationStateProvider(TwoOrgsFixture.OrgAMemberUserId, "bob@example.test"),
+            CreateDirectory(),
+            tenantContext);
+
+        var first = await session.GetAsync();
+        Assert.Equal(TwoOrgsFixture.OrgAId, first?.Organization?.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.OrgAId, tenantContext.OrganizationId);
+        var revisionAfterFirstResolution = tenantContext.TenantRevision;
+
+        // Another Owner removes bob while this "circuit" stays open.
+        await RevokeMembershipAsync(TwoOrgsFixture.OrgAMemberUserId);
+
+        var second = await session.GetAsync();
+
+        Assert.Null(second?.Organization);
+        Assert.False(second?.HasOrganization ?? true);
+        Assert.Null(tenantContext.OrganizationId);
+        Assert.True(tenantContext.TenantRevision > revisionAfterFirstResolution);
     }
 
     [Fact]
@@ -149,6 +158,17 @@ public sealed class ActiveOrganizationResolutionTests : IDisposable
 
     private readonly List<IServiceScope> _scopes = [];
 
+    private async Task RevokeMembershipAsync(string userId)
+    {
+        using var scope = _fixture.SystemDataScope.BeginScope();
+        await using var context = _fixture.CreateContext();
+        var membership = await context.SystemQueryAsync<OrganizationMember>(
+            row => row.UserId == userId,
+            CancellationToken);
+        context.OrganizationMembers.Remove(membership.Single());
+        await context.SaveChangesAsync(CancellationToken);
+    }
+
     private async Task SetPersistedSelectionAsync(string userId, Guid organizationId)
     {
         using var scope = _fixture.SystemDataScope.BeginScope();
@@ -163,6 +183,22 @@ public sealed class ActiveOrganizationResolutionTests : IDisposable
         await using var context = _fixture.CreateContext();
         return (await context.Users.SingleAsync(candidate => candidate.Id == userId, CancellationToken))
             .ActiveOrganizationId;
+    }
+
+    private sealed class FixedAuthenticationStateProvider(string userId, string? email)
+        : AuthenticationStateProvider
+    {
+        public override Task<AuthenticationState> GetAuthenticationStateAsync()
+        {
+            var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId) };
+            if (email is not null)
+            {
+                claims.Add(new Claim(ClaimTypes.Email, email));
+            }
+
+            var identity = new ClaimsIdentity(claims, authenticationType: "Zenkins.Tests");
+            return Task.FromResult(new AuthenticationState(new ClaimsPrincipal(identity)));
+        }
     }
 
     public void Dispose()

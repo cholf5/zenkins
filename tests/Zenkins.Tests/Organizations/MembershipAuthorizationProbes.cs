@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text.RegularExpressions;
 using Xunit;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Organizations;
@@ -112,6 +111,40 @@ public static class MembershipAuthorizationProbes
             OrganizationRole.Member,
             (await host.ReadMembersAsync(starterOrganizationId))
                 .Single(member => member.Email == memberEmail).Role);
+
+        // Authorization precedes validation: malformed input as a Member is still 403, never a
+        // validation redirect that would reveal the endpoint's shape or the caller's standing.
+        var malformedRole = await OrganizationTestHost.PostFormAsync(
+            memberClient,
+            OrganizationEndpoints.MembersPath,
+            "/organizations/members/role",
+            new Dictionary<string, string>
+            {
+                ["MembershipId"] = "not-a-guid",
+                ["Role"] = "Bogus",
+            });
+        Assert.Equal(HttpStatusCode.Forbidden, malformedRole.StatusCode);
+
+        var malformedRemove = await OrganizationTestHost.PostFormAsync(
+            memberClient,
+            OrganizationEndpoints.MembersPath,
+            "/organizations/members/remove",
+            new Dictionary<string, string> { ["MembershipId"] = "not-a-guid" });
+        Assert.Equal(HttpStatusCode.Forbidden, malformedRemove.StatusCode);
+
+        var malformedInvite = await OrganizationTestHost.PostFormAsync(
+            memberClient,
+            OrganizationEndpoints.MembersPath,
+            "/organizations/members/invite",
+            new Dictionary<string, string> { ["Email"] = "not-an-email" });
+        Assert.Equal(HttpStatusCode.Forbidden, malformedInvite.StatusCode);
+
+        var malformedRename = await OrganizationTestHost.PostFormAsync(
+            memberClient,
+            OrganizationEndpoints.SettingsPath,
+            "/organizations/settings",
+            new Dictionary<string, string> { ["Name"] = string.Empty });
+        Assert.Equal(HttpStatusCode.Forbidden, malformedRename.StatusCode);
     }
 
     /// <summary>
@@ -238,8 +271,4 @@ public static class MembershipAuthorizationProbes
             $"Expected a redirect, got {(int)response.StatusCode}.");
         Assert.Equal(expectedLocation, response.Headers.Location?.OriginalString);
     }
-
-    /// <summary>Whether the HTML contains a form that posts to <paramref name="action"/>.</summary>
-    public static bool HasFormAction(string html, string action) =>
-        Regex.IsMatch(html, $"action=\"{Regex.Escape(action)}\"", RegexOptions.CultureInvariant);
 }

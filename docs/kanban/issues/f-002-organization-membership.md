@@ -26,7 +26,7 @@ Invitation email delivery is out of scope for v0.1 — an invite may be represen
 
 - [x] Switcher lists only Organizations the current user belongs to; switching changes the active tenant for all subsequent queries.
 - [x] A forged/switched-to-Organization the user does not belong to is rejected server-side and falls back to a valid membership.
-- [x] Owner can rename the Organization, change another member's role, and remove a member; the last Owner cannot be removed or demoted.
+- [x] Owner can rename the Organization, change another member's role, and remove a member; the last Owner cannot be removed or demoted. *Atomic on PostgreSQL by construction: an organization-row `FOR UPDATE` lock precedes the Owner count in both mutation paths; not end-to-end verified on a live PG instance (none here), while SQLite serializes writers.*
 - [x] Member sees no management controls and management endpoints reject them regardless of UI.
 - [x] Members list shows name, email, role, joined date.
 - [x] `Q-001` probes extended to cover membership-based authorization.
@@ -137,15 +137,17 @@ from the meta tag (the curl E2E does).
 member up through the tenant filter, and when the target is an Owner count the remaining Owners inside the
 same transaction; `<= 1` rolls back with `error=last-owner` ("The last Owner cannot be demoted or removed.
 Make another member an Owner first.") and no state change. Removal also clears the removed user's
-`ActiveOrganizationId` when it pointed here. Known gap: no row lock is taken, so two simultaneous Owner
-demotions by two different Owners could interleave on PostgreSQL; recorded rather than claimed solved.
+`ActiveOrganizationId` when it pointed here. The organization row is locked (`FOR UPDATE` under
+PostgreSQL) before the count, so the guard is atomic on PG; review round 2 records that this is
+fixed-by-construction, not executed against a live PG instance.
 
 **Projects page.** It now renders the active organization's projects read-only (name, repository, branch,
 pipeline path) so TC-004 can be observed and the switch is visibly tenant-scoped. Project create/edit/
 delete remains F-003's scope; no F-003 code was added.
 
-**Tests.** The 70 pre-existing tests are unchanged and green; 15 were added: 9 authenticated HTTP tests
-(`OrganizationEndpointTests`) and 6 data-layer resolution tests (`ActiveOrganizationResolutionTests`).
+**Tests.** The 70 pre-existing tests are unchanged and green; 15 were added in this round (9 authenticated
+HTTP tests in `OrganizationEndpointTests` and 6 data-layer resolution tests in
+`ActiveOrganizationResolutionTests`; review round 2 adds three more, for 88 total).
 Q-001's harness is extended by `MembershipAuthorizationProbes`, which drives the real endpoints with
 cookies and antiforgery tokens: Member cannot manage (403s, no state change, no controls), non-member
 cannot switch (403, selection unchanged), and switching between two memberships changes the rendered
@@ -157,6 +159,56 @@ clients use the meta token); no display name exists yet, so the members-list "Na
 account name (registrations set it to the email); PostgreSQL end-to-end is still unverified (no live PG
 instance), as in I-002/F-001.
 
+### 2026-11-12 — review round 2 (B1 + notes)
+
+**B1 (blocking) — the last-owner guard is now serialized.** `IOrganizationRowLock` /
+`OrganizationRowLock` takes `SELECT "Id" AS "Value" FROM "Organizations" WHERE "Id" = @id FOR UPDATE`
+inside the existing mutation transaction (no `#if`; `Database.IsNpgsql()` decides) before either
+`ChangeRoleAsync` or `RemoveMemberAsync` counts Owners. Under PostgreSQL READ COMMITTED two concurrent
+demotions can no longer both observe two Owners: the second waits on the organization row lock and
+recounts after the first commits, so it either refuses (`last-owner`) or proceeds against a genuinely
+two-Owner organization. SQLite is a deliberate no-op because it serializes writers at the database
+level - which is why the reviewer's SQLite probe already held. Tests:
+`OrganizationRowLockTests.Lock_query_is_a_for_update_on_the_organization_row_under_npgsql` asserts the
+executed statement's shape under Npgsql, and
+`...Role_change_and_removal_both_take_the_organization_lock` records both mutation paths with a fake
+lock, failing if either path drops the call. Red proof: with both `LockAsync` calls removed in a /tmp
+copy the wiring test FAILS (`Expected [A, A] / Actual []`) -> `red-proof-lock.log`; restored -> PASS
+-> `red-proof-lock-restored.log`. **Caveat:** the PG race is fixed by construction, not executed
+end-to-end (no PostgreSQL instance in this environment), the same gap I-002/F-001 record.
+
+**Authorization before validation.** `Rename` authorizes before validating the name, `Invite`
+authorizes before validating the email, and `ChangeRole`/`RemoveMember` now take the raw form strings
+and parse id/role only after `IsOwnerAsync`. A Member therefore gets 403 for malformed
+ids/roles/emails/names instead of a `?error=` validation redirect. The endpoints no longer pre-parse;
+`MembershipAuthorizationProbes` adds four malformed Member POSTs and the curl E2E repeats them.
+
+**Circuit tenant cache removed.** `UserSession.GetAsync` resolves on every call instead of memoising
+the first result. A membership revoked while a tab is open stops granting that organization on the
+next page render/navigation (the circuit's `TenantContext` revision changes), without a full browser
+reload. Price: the resolution query set (two SELECTs plus at most one fallback UPDATE) per page render
+that asks for the session. Pinned by
+`UserSession_re_resolves_so_a_revoked_member_loses_read_access_without_a_reload`.
+
+**Housekeeping.** Removed the untracked literal-backslash directory `C:\tmp\orca-logs\F-001-review`
+(never tracked), dead `MembershipAuthorizationProbes.HasFormAction`, the stale
+`ActiveOrganizationResolver` doc reference in `User.cs`, and split the misleading
+`Switching_to_a_valid_membership_persists_the_selection` test: its rejection half already existed as
+`Switching_to_an_organization_the_user_does_not_belong_to_is_rejected`.
+
+No schema change: the migration set is unchanged, and `dotnet ef database update` was re-run on both
+empty and populated databases.
+
+Known gaps recorded for v0.1 (accepted, not implemented): invite by exact email is a global
+account-existence oracle for any Owner (cross-tenant signal); mutating forms depend on
+`wwwroot/js/antiforgery.js` and return 400 with JavaScript blocked (<c>AntiforgeryToken</c> is not
+usable in an interactive circuit); `SystemDataScope` is a counter on one scoped instance and is now
+entered from inside a circuit where an await can interleave with another render - reads stay
+tenant-filtered and no tenant writes originate in a circuit, but "one scope, one request" no longer
+holds for circuits; resolution writes on read (idempotent fallback repair, 2 queries + at most 1
+UPDATE per request); mutating forms require JavaScript because `AntiforgeryToken` is not usable in an
+interactive circuit.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -166,7 +218,7 @@ instance), as in I-002/F-001.
 
 - Related files:
   - `src/Server/Organizations/**` (`OrganizationEndpoints`, `OrganizationManagementService`,
-    `OrganizationServiceCollectionExtensions`)
+    `OrganizationRowLock`, `OrganizationServiceCollectionExtensions`)
   - `src/Server/Auth/UserOrganizationDirectory.cs`, `UserSession.cs`, `TenantResolutionMiddleware.cs`
   - `src/Server/Components/Pages/Organizations/{OrganizationSettings,OrganizationMembers}.razor`,
     `src/Server/Components/Pages/Projects.razor`, `src/Server/Components/Layout/{MainLayout,NavMenu}.razor`,
@@ -200,27 +252,24 @@ instance), as in I-002/F-001.
      # as carol (non-member) POST /organizations/switch Bravo -> 403; ActiveOrganizationId unchanged
      ```
 - Results (full output in `/tmp/orca-logs/F-002/`):
-  - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build-final3.log`
-  - `dotnet test` -> **PASS**, **85 passed / 0 failed / 0 skipped** (70 before this card; 15 added) ->
-    `test-final.log`
-  - `dotnet ef database update` on an empty temp SQLite file -> **PASS**, applied
-    `20261112080443_AddActiveOrganization`; schema has `ActiveOrganizationId uuid NULL`,
-    `IX_AspNetUsers_ActiveOrganizationId`, `FK_AspNetUsers_Organizations_ActiveOrganizationId ... ON DELETE SET NULL`;
-    temp file deleted -> `ef-database-update-sqlite.log`, `sqlite-schema.log`; the same migration also
-    applies on top of a populated F-001 database (legacy organization, user and membership preserved,
-    `ActiveOrganizationId` null until first resolution) -> `ef-upgrade-f001-state.log`
+  - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build-review-final.log`
+  - `dotnet test` -> **PASS**, **88 passed / 0 failed / 0 skipped** (70 pre-card; 18 added, including
+    the two row-lock tests) -> `test-review-final.log`
+  - `dotnet ef database update` on an empty temp SQLite file -> **PASS**, all three migrations applied,
+    `ActiveOrganizationId`, its index and the `ON DELETE SET NULL` FK present; temp deleted ->
+    `ef-database-update-empty-review.log`
+  - `dotnet ef database update` on a populated F-001 database -> **PASS**, legacy organization/user/
+    membership preserved, `ActiveOrganizationId` null; no new migration was needed ->
+    `ef-database-update-populated-review.log`
   - `dotnet ef migrations has-pending-model-changes` (Postgres) -> **PASS**, no pending changes ->
-    `ef-pending-model-changes-postgres.log`
-  - curl E2E -> **PASS**, 47/47 checks -> `e2e-curl.log`; observed `302` on register/rename/invite/role/switch,
-    `403` on every Member management POST and on the non-member switch, last-owner attempts redirected to
-    `?error=last-owner` with the role/membership unchanged, and the Projects page showing `alpha-app` vs
-    `beta-app` depending on the active organization; app log contains no password/antiforgery token/auth
-    cookie (`e2e-app.log`)
-  - red proof, last-owner guard: both `ownerCount <= 1` checks disabled in a scratch copy under `/tmp` ->
-    `Last_owner_cannot_be_demoted_or_removed_but_the_guard_is_conditional` **FAILS**
-    (`Expected: "/organizations/members?error=last-owner" / Actual: "...?notice=role-changed"`) ->
-    `red-proof-last-owner.log`; guard restored -> **PASS** -> `red-proof-last-owner-restored.log`
-  - red proof, Member server-side rejection: `IsOwnerAsync` reduced to "is a member" in the same scratch
-    copy -> `Member_cannot_manage_and_sees_no_management_controls` **FAILS**
-    (`Expected: Forbidden / Actual: Found`) -> `red-proof-member-guard.log`; guard restored -> **PASS** ->
-    `red-proof-member-guard-restored.log`; scratch copy deleted.
+    `ef-pending-model-changes-postgres-review.log`
+  - curl E2E -> **PASS**, 52/52 checks -> `e2e-curl-review.log`; all earlier rename/invite/role/
+    last-owner/switch/403 checks still pass, plus four malformed Member POSTs (bad membership id, role,
+    email, empty name) each `403` with state unchanged.
+  - red proof, last-owner lock: both `LockAsync` calls removed in a /tmp copy ->
+    `Role_change_and_removal_both_take_the_organization_lock` **FAILS**
+    (`Expected [a0000000..., a0000000...] / Actual []`) -> `red-proof-lock.log`; restored -> **PASS** ->
+    `red-proof-lock-restored.log`.
+  - earlier red proofs still stand: last-owner count guard disabled -> FAIL -> `red-proof-last-owner.log`;
+    Owner guard disabled -> FAIL -> `red-proof-member-guard.log`; both restored -> PASS ->
+    `red-proof-*-restored.log`.

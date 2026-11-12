@@ -88,6 +88,7 @@ public sealed record OrganizationMemberView(
 /// </summary>
 public sealed class OrganizationManagementService(
     IDbContextFactory<ZenkinsDbContext> contextFactory,
+    IOrganizationRowLock rowLock,
     ITenantContext tenantContext,
     ILookupNormalizer lookupNormalizer,
     ILogger<OrganizationManagementService> logger)
@@ -136,7 +137,10 @@ public sealed class OrganizationManagementService(
             .ToArray();
     }
 
-    /// <summary>Renames the active organization. Owner-only, guarded server-side.</summary>
+    /// <summary>
+    /// Renames the active organization. Owner-only, guarded server-side. Authorization runs before
+    /// input validation so a Member gets 403 even for a malformed name, not a validation hint.
+    /// </summary>
     public async Task<OrganizationMutationResult> RenameActiveOrganizationAsync(
         string actingUserId,
         string? name,
@@ -145,10 +149,13 @@ public sealed class OrganizationManagementService(
         var activeOrganizationId = tenantContext.OrganizationId;
         if (activeOrganizationId is null)
         {
-            return OrganizationMutationResult.Failure(
-                OrganizationMutationStatus.Forbidden,
-                "forbidden",
-                "Only an organization Owner can change these settings.");
+            return Forbidden("Only an organization Owner can change these settings.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
+        {
+            return Forbidden("Only an organization Owner can change these settings.");
         }
 
         var trimmedName = name?.Trim();
@@ -166,15 +173,6 @@ public sealed class OrganizationManagementService(
                 OrganizationMutationStatus.InvalidInput,
                 "invalid-name",
                 $"The organization name must be at most {MaxOrganizationNameLength} characters.");
-        }
-
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
-        {
-            return OrganizationMutationResult.Failure(
-                OrganizationMutationStatus.Forbidden,
-                "forbidden",
-                "Only an organization Owner can change these settings.");
         }
 
         var organization = await context.Organizations
@@ -206,6 +204,18 @@ public sealed class OrganizationManagementService(
         string? email,
         CancellationToken cancellationToken = default)
     {
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return Forbidden("Only an organization Owner can invite members.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
+        {
+            return Forbidden("Only an organization Owner can invite members.");
+        }
+
         var trimmedEmail = email?.Trim();
         if (string.IsNullOrEmpty(trimmedEmail) || !new EmailAddressAttribute().IsValid(trimmedEmail))
         {
@@ -215,16 +225,9 @@ public sealed class OrganizationManagementService(
                 "Enter the email address of an existing account.");
         }
 
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
-        {
-            return OrganizationMutationResult.Failure(
-                OrganizationMutationStatus.Forbidden,
-                "forbidden",
-                "Only an organization Owner can invite members.");
-        }
-
-        // Exact match on the normalized email via the unique Identity index; no user enumeration.
+        // Exact match on the normalized email via the unique Identity index; no user enumeration
+        // beyond the existence signal an Owner already gets from this endpoint (recorded as a v0.1
+        // known gap in the card).
         var normalizedEmail = lookupNormalizer.NormalizeEmail(trimmedEmail);
         var user = await context.Users
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, cancellationToken);
@@ -249,7 +252,7 @@ public sealed class OrganizationManagementService(
         context.OrganizationMembers.Add(new OrganizationMember
         {
             // The tenant comes from the active request; the data layer rejects any other value.
-            OrganizationId = tenantContext.OrganizationId ?? Guid.Empty,
+            OrganizationId = activeOrganizationId.Value,
             UserId = user.Id,
             Role = OrganizationRole.Member,
         });
@@ -269,7 +272,7 @@ public sealed class OrganizationManagementService(
 
         logger.LogInformation(
             "Organization member invited. OrganizationId={OrganizationId} MemberUserId={MemberUserId} ByUserId={UserId}",
-            tenantContext.OrganizationId,
+            activeOrganizationId,
             user.Id,
             actingUserId);
         return OrganizationMutationResult.Success();
@@ -277,22 +280,16 @@ public sealed class OrganizationManagementService(
 
     /// <summary>
     /// Changes a member's role. Owner-only; refuses to demote the last Owner in the same transaction
-    /// as the write.
+    /// as the write. The organization row is locked before the Owner count, so two concurrent
+    /// demotions cannot both observe two Owners on PostgreSQL (SQLite serializes writers already).
+    /// Authorization runs before id/role parsing, so a Member always gets 403.
     /// </summary>
     public async Task<OrganizationMutationResult> ChangeRoleAsync(
         string actingUserId,
-        Guid membershipId,
-        OrganizationRole role,
+        string? membershipId,
+        string? role,
         CancellationToken cancellationToken = default)
     {
-        if (!Enum.IsDefined(role))
-        {
-            return OrganizationMutationResult.Failure(
-                OrganizationMutationStatus.InvalidInput,
-                "invalid-role",
-                "Choose either Owner or Member.");
-        }
-
         var activeOrganizationId = tenantContext.OrganizationId;
         if (activeOrganizationId is null)
         {
@@ -305,16 +302,33 @@ public sealed class OrganizationManagementService(
             return Forbidden("Only an organization Owner can change roles.");
         }
 
+        if (!Guid.TryParse(membershipId, out var memberId))
+        {
+            return InvalidMember();
+        }
+
+        if (!Enum.TryParse<OrganizationRole>(role, ignoreCase: true, out var parsedRole)
+            || !Enum.IsDefined(parsedRole))
+        {
+            return OrganizationMutationResult.Failure(
+                OrganizationMutationStatus.InvalidInput,
+                "invalid-role",
+                "Choose either Owner or Member.");
+        }
+
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
 
-        var member = await FindMemberAsync(context, membershipId, cancellationToken);
+        // Serialize owner-affecting mutations per organization before the count below.
+        await rowLock.LockAsync(context, activeOrganizationId.Value, cancellationToken);
+
+        var member = await FindMemberAsync(context, memberId, cancellationToken);
         if (member is null)
         {
             await transaction.RollbackAsync(cancellationToken);
             return NotFound("That member no longer exists.");
         }
 
-        if (member.Role == OrganizationRole.Owner && role != OrganizationRole.Owner)
+        if (member.Role == OrganizationRole.Owner && parsedRole != OrganizationRole.Owner)
         {
             var ownerCount = await context.OrganizationMembers
                 .CountAsync(candidate => candidate.Role == OrganizationRole.Owner, cancellationToken);
@@ -325,7 +339,7 @@ public sealed class OrganizationManagementService(
             }
         }
 
-        member.Role = role;
+        member.Role = parsedRole;
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -333,19 +347,20 @@ public sealed class OrganizationManagementService(
             "Organization member role changed. OrganizationId={OrganizationId} MemberUserId={MemberUserId} Role={Role} ByUserId={UserId}",
             activeOrganizationId,
             member.UserId,
-            role,
+            parsedRole,
             actingUserId);
         return OrganizationMutationResult.Success();
     }
 
     /// <summary>
     /// Removes a member from the active organization. Owner-only; refuses to remove the last Owner in
-    /// the same transaction as the delete. Also clears the removed user's server-side selection when
-    /// it pointed here, so the next request falls back instead of re-validating a dead selection.
+    /// the same transaction as the delete, with the organization row locked first. Also clears the
+    /// removed user's server-side selection when it pointed here, so the next request falls back
+    /// instead of re-validating a dead selection.
     /// </summary>
     public async Task<OrganizationMutationResult> RemoveMemberAsync(
         string actingUserId,
-        Guid membershipId,
+        string? membershipId,
         CancellationToken cancellationToken = default)
     {
         var activeOrganizationId = tenantContext.OrganizationId;
@@ -360,9 +375,17 @@ public sealed class OrganizationManagementService(
             return Forbidden("Only an organization Owner can remove members.");
         }
 
+        if (!Guid.TryParse(membershipId, out var memberId))
+        {
+            return InvalidMember();
+        }
+
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
 
-        var member = await FindMemberAsync(context, membershipId, cancellationToken);
+        // Same lock as the role path: both are owner-affecting mutations on the organization.
+        await rowLock.LockAsync(context, activeOrganizationId.Value, cancellationToken);
+
+        var member = await FindMemberAsync(context, memberId, cancellationToken);
         if (member is null)
         {
             await transaction.RollbackAsync(cancellationToken);
@@ -424,6 +447,13 @@ public sealed class OrganizationManagementService(
 
     private static OrganizationMutationResult NotFound(string message) =>
         OrganizationMutationResult.Failure(OrganizationMutationStatus.NotFound, "member-not-found", message);
+
+    /// <summary>Malformed membership id (input validation, not a missing row): PRG with a clear code.</summary>
+    private static OrganizationMutationResult InvalidMember() =>
+        OrganizationMutationResult.Failure(
+            OrganizationMutationStatus.InvalidInput,
+            "member-not-found",
+            "That member no longer exists.");
 
     private static OrganizationMutationResult LastOwner() =>
         OrganizationMutationResult.Failure(
