@@ -1,0 +1,136 @@
+@* Card F-003's shared create/edit form. A plain HTML form (not an EditForm) so it posts to the
+   real endpoint, is antiforgery-validated by UseAntiforgery and works without a Blazor circuit -
+   the same shape F-002's organization forms use. Field values are supplied by the page, which reads
+   them back from the validation redirect so a failed submit does not erase the user's input. *@
+<form method="post" action="@Action" data-zenkins-antiforgery class="bb:space-y-4">
+    <div class="bb:space-y-2">
+        <label for="project-name" class="bb:text-sm bb:font-medium">Name</label>
+        <input id="project-name"
+               name="Name"
+               value="@Name"
+               required
+               maxlength="200"
+               autocomplete="off"
+               spellcheck="false"
+               aria-invalid="@(NameError is null ? null : "true")"
+               aria-describedby="@(NameError is null ? null : "project-name-error")"
+               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
+        @if (NameError is { } nameError)
+        {
+            <p id="project-name-error" role="alert" class="bb:text-xs bb:text-destructive">@nameError</p>
+        }
+    </div>
+
+    <div class="bb:space-y-2">
+        <label for="project-repository-url" class="bb:text-sm bb:font-medium">Repository URL</label>
+        <input id="project-repository-url"
+               name="RepositoryUrl"
+               value="@RepositoryUrl"
+               required
+               maxlength="2048"
+               autocomplete="off"
+               spellcheck="false"
+               placeholder="https://github.com/owner/repo.git or git@github.com:owner/repo.git"
+               aria-invalid="@(RepositoryUrlError is null ? null : "true")"
+               aria-describedby="@(RepositoryUrlError is null ? null : "project-repository-url-error")"
+               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
+        @if (RepositoryUrlError is { } repositoryUrlError)
+        {
+            <p id="project-repository-url-error" role="alert" class="bb:text-xs bb:text-destructive">@repositoryUrlError</p>
+        }
+        <p class="bb:text-xs bb:text-muted-foreground">
+            HTTPS and SSH only. <code>file://</code>, <code>ext::</code> and other transports that can
+            execute commands are rejected on the server.
+        </p>
+    </div>
+
+    <div class="bb:space-y-2">
+        <label for="project-default-branch" class="bb:text-sm bb:font-medium">Default branch</label>
+        <input id="project-default-branch"
+               name="DefaultBranch"
+               value="@DefaultBranch"
+               required
+               maxlength="200"
+               autocomplete="off"
+               spellcheck="false"
+               placeholder="main"
+               aria-invalid="@(DefaultBranchError is null ? null : "true")"
+               aria-describedby="@(DefaultBranchError is null ? null : "project-default-branch-error")"
+               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
+        @if (DefaultBranchError is { } defaultBranchError)
+        {
+            <p id="project-default-branch-error" role="alert" class="bb:text-xs bb:text-destructive">@defaultBranchError</p>
+        }
+    </div>
+
+    <div class="bb:space-y-2">
+        <label for="project-pipeline-path" class="bb:text-sm bb:font-medium">Pipeline path</label>
+        <input id="project-pipeline-path"
+               name="PipelinePath"
+               value="@PipelinePath"
+               maxlength="512"
+               autocomplete="off"
+               spellcheck="false"
+               placeholder="pipeline.lua"
+               aria-invalid="@(PipelinePathError is null ? null : "true")"
+               aria-describedby="@(PipelinePathError is null ? null : "project-pipeline-path-error")"
+               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
+        @if (PipelinePathError is { } pipelinePathError)
+        {
+            <p id="project-pipeline-path-error" role="alert" class="bb:text-xs bb:text-destructive">@pipelinePathError</p>
+        }
+        <p class="bb:text-xs bb:text-muted-foreground">
+            Repository-relative and defaults to <code>pipeline.lua</code>. Absolute paths and
+            <code>..</code> are rejected.
+        </p>
+    </div>
+
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@SubmitLabel</BbButton>
+        @if (CancelHref is not null)
+        {
+            <BbButton Href="@CancelHref" Variant="ButtonVariant.Outline">Cancel</BbButton>
+        }
+    </div>
+</form>
+
+@code {
+    /// <summary>POST target of the form.</summary>
+    [Parameter]
+    public string Action { get; set; } = string.Empty;
+
+    [Parameter]
+    public string SubmitLabel { get; set; } = "Save project";
+
+    [Parameter]
+    public string? CancelHref { get; set; }
+
+    [Parameter]
+    public string? Name { get; set; }
+
+    [Parameter]
+    public string? RepositoryUrl { get; set; }
+
+    [Parameter]
+    public string? DefaultBranch { get; set; } = "main";
+
+    [Parameter]
+    public string? PipelinePath { get; set; } = ProjectValidation.DefaultPipelinePath;
+
+    /// <summary>The stable validation code from the redirect query, if any.</summary>
+    [Parameter]
+    public string? ErrorCode { get; set; }
+
+    private string? NameError => ErrorFor(ProjectFields.Name);
+
+    private string? RepositoryUrlError => ErrorFor(ProjectFields.RepositoryUrl);
+
+    private string? DefaultBranchError => ErrorFor(ProjectFields.DefaultBranch);
+
+    private string? PipelinePathError => ErrorFor(ProjectFields.PipelinePath);
+
+    private string? ErrorFor(string field) =>
+        ProjectErrorCodes.FieldFor(ErrorCode) == field
+            ? ProjectErrorCodes.MessageFor(ErrorCode)
+            : null;
+}

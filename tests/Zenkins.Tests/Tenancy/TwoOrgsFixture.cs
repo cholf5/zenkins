@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -65,6 +66,13 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string OrgAOwnerUserId = "alice";
     public const string OrgAMemberUserId = "bob";
     public const string OrgBOwnerUserId = "carol";
+
+    /// <summary>
+    /// Password of the three seeded accounts, so the authenticated HTTP probes can sign in through
+    /// the real login form instead of a test-only tenant header. Same policy-compliant value the
+    /// auth tests use.
+    /// </summary>
+    public const string UserPassword = Zenkins.Tests.Auth.AuthTestHost.ValidPassword;
 
     public const string ProjectAName = "alpha-app";
     public const string ProjectBName = "beta-app";
@@ -244,19 +252,28 @@ public sealed class TwoOrgsFixture : IDisposable
 
     /// <summary>
     /// A seeded account with a non-null security stamp (Identity's claims factory requires one) and
-    /// no password: these users exist to satisfy the membership foreign key, not to sign in.
+    /// a real password hash, so the HTTP probes sign in through the product's login form. The user
+    /// name is the email because that is what <c>SignInManager.PasswordSignInAsync</c> looks up.
     /// </summary>
-    private static User CreateUser(string userId, string email) => new()
+    private static User CreateUser(string userId, string email)
     {
-        Id = userId,
-        UserName = userId,
-        NormalizedUserName = userId.ToUpperInvariant(),
-        Email = email,
-        NormalizedEmail = email.ToUpperInvariant(),
-        EmailConfirmed = true,
-        SecurityStamp = $"seed-security-stamp-{userId}",
-        ConcurrencyStamp = $"seed-concurrency-stamp-{userId}",
-    };
+        var user = new User
+        {
+            Id = userId,
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            EmailConfirmed = true,
+            SecurityStamp = $"seed-security-stamp-{userId}",
+            ConcurrencyStamp = $"seed-concurrency-stamp-{userId}",
+        };
+
+        // F-003 replaces the test-only X-Test-Organization probe with the real authenticated
+        // endpoints, so the seeded accounts need a real password hash for the login form.
+        user.PasswordHash = new PasswordHasher<User>().HashPassword(user, UserPassword);
+        return user;
+    }
 
     public void Dispose()
     {

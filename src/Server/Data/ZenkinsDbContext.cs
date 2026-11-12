@@ -212,6 +212,12 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         {
             entity.HasKey(project => project.Id);
             entity.Property(project => project.Name).IsRequired().HasMaxLength(200);
+
+            // F-003: a project name is unique inside an organization (PRD §3.2 / card TC-002). The
+            // index is the guard, not a pre-flight query, so two concurrent creates cannot both
+            // pass a "does it exist" check; ProjectService translates the violation into a
+            // field-level error.
+            entity.HasIndex(project => new { project.OrganizationId, project.Name }).IsUnique();
             entity.Property(project => project.RepositoryUrl).IsRequired().HasMaxLength(2048);
             entity.Property(project => project.DefaultBranch).IsRequired().HasMaxLength(200);
             entity.Property(project => project.PipelinePath).IsRequired().HasMaxLength(512);

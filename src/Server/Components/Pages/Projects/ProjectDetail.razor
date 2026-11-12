@@ -1,0 +1,144 @@
+@page "/projects/{ProjectId:guid}"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+
+<PageTitle>@(_project?.Name ?? "Project") · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
+    @if (_project is null)
+    {
+        @* Foreign tenant id == missing id: the service reads through the tenant filter and the
+           response is a real 404 (also for detail pages, as the card requires). *@
+        <NotFoundPage />
+    }
+    else
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">@_project.Name</BbCardTitle>
+                @if (_session?.Organization is { } organization)
+                {
+                    <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+                }
+                <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+            </div>
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit</BbButton>
+                @if (_canDelete)
+                {
+                    <BbButton Href="@($"/projects/{_project.Id}/delete/confirm")" Variant="ButtonVariant.Destructive">Delete</BbButton>
+                }
+            </div>
+        </div>
+
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Repository</BbCardTitle>
+                <BbCardDescription>
+                    Git repository metadata. Cloning, credentials and build runs arrive in later phases.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                    <div class="bb:sm:col-span-3">
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository URL</dt>
+                        <dd class="bb:break-all">@_project.RepositoryUrl</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
+                        <dd>@_project.DefaultBranch</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                        <dd>@_project.PipelinePath</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credentials</dt>
+                        <dd>
+                            @if (_project.GitCredentialId is null)
+                            {
+                                <span class="bb:text-muted-foreground">Not configured</span>
+                            }
+                            else
+                            {
+                                <span>@_project.GitCredentialId</span>
+                            }
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
+                        <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Updated</dt>
+                        <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                    </div>
+                </dl>
+            </BbCardContent>
+        </BbCard>
+
+        @if (!_canDelete)
+        {
+            <p class="bb:text-sm bb:text-muted-foreground">
+                Deleting a project is reserved to organization Owners (PRD §3.1.2). Members can create
+                and edit projects.
+            </p>
+        }
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid ProjectId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private UserSessionInfo? _session;
+    private ProjectView? _project;
+    private bool _canDelete;
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        "created" => "The project was created.",
+        "updated" => "The project was updated.",
+        _ => null,
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Establish the circuit tenant before the tenant-filtered lookup.
+        _session = await UserSession.GetAsync();
+        _canDelete = _session?.CanManageActiveOrganization == true;
+
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is null && HttpContext is not null)
+        {
+            // A real 404 for a foreign or missing id. The status-code-pages middleware must not
+            // re-execute /not-found in this same request: the component renderer already owns the
+            // NavigationManager, and re-execution fails with "already initialized". The HTTP
+            // response is therefore a bodyless 404; NotFoundPage below covers circuit navigation.
+            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+            {
+                statusCodePages.Enabled = false;
+            }
+        }
+    }
+}

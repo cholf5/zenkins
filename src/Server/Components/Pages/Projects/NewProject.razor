@@ -1,0 +1,76 @@
+@page "/projects/new"
+@attribute [Authorize]
+@inject UserSession UserSession
+
+<PageTitle>New project · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1" tabindex="-1">New project</BbCardTitle>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+        }
+    </div>
+
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else if (_session is { HasOrganization: true })
+    {
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Project details</BbCardTitle>
+                <BbCardDescription>
+                    A project is the Git repository, the default branch to build and the pipeline file
+                    inside it. Cloning and builds are not part of v0.1.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <ProjectFormCard Action="/projects/create"
+                                 SubmitLabel="Create project"
+                                 CancelHref="/projects"
+                                 Name="@Name"
+                                 RepositoryUrl="@RepositoryUrl"
+                                 DefaultBranch="@(DefaultBranch ?? "main")"
+                                 PipelinePath="@(PipelinePath ?? ProjectValidation.DefaultPipelinePath)"
+                                 ErrorCode="@ErrorCode" />
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    private UserSessionInfo? _session;
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "name")]
+    private string? Name { get; set; }
+
+    [SupplyParameterFromQuery(Name = "repositoryUrl")]
+    private string? RepositoryUrl { get; set; }
+
+    [SupplyParameterFromQuery(Name = "defaultBranch")]
+    private string? DefaultBranch { get; set; } = "main";
+
+    [SupplyParameterFromQuery(Name = "pipelinePath")]
+    private string? PipelinePath { get; set; } = ProjectValidation.DefaultPipelinePath;
+
+    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Establishes the circuit tenant before any project data is read or written.
+        _session = await UserSession.GetAsync();
+    }
+}

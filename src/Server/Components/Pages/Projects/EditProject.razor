@@ -1,0 +1,118 @@
+@page "/projects/{ProjectId:guid}/edit"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+
+<PageTitle>Edit project · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1" tabindex="-1">Edit project</BbCardTitle>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+        }
+    </div>
+
+    @if (_project is null)
+    {
+        @* A foreign organization's id is indistinguishable from a missing one: the service reads
+           through the tenant-filtered context and this response is a real 404. *@
+        <NotFoundPage />
+    }
+    else
+    {
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">@_project.Name</BbCardTitle>
+                <BbCardDescription>
+                    Members and Owners may edit a project. The repository URL is re-validated on the
+                    server; only HTTPS and SSH git URLs are accepted.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <ProjectFormCard Action="@($"/projects/{_project.Id}/edit")"
+                                 SubmitLabel="Save changes"
+                                 CancelHref="@($"/projects/{_project.Id}")"
+                                 Name="@EffectiveName"
+                                 RepositoryUrl="@EffectiveRepositoryUrl"
+                                 DefaultBranch="@EffectiveDefaultBranch"
+                                 PipelinePath="@EffectivePipelinePath"
+                                 ErrorCode="@ErrorCode" />
+            </BbCardContent>
+        </BbCard>
+
+        <p class="bb:text-sm bb:text-muted-foreground">
+            <a href="/projects/@_project.Id" class="bb:font-medium bb:underline bb:underline-offset-4">Back to project</a>
+        </p>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid ProjectId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private UserSessionInfo? _session;
+    private ProjectView? _project;
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "name")]
+    private string? SubmittedName { get; set; }
+
+    [SupplyParameterFromQuery(Name = "repositoryUrl")]
+    private string? SubmittedRepositoryUrl { get; set; }
+
+    [SupplyParameterFromQuery(Name = "defaultBranch")]
+    private string? SubmittedDefaultBranch { get; set; }
+
+    [SupplyParameterFromQuery(Name = "pipelinePath")]
+    private string? SubmittedPipelinePath { get; set; }
+
+    // On a validation redirect the submitted values (not the stored ones) are echoed back, so the
+    // user fixes the field instead of retyping the form.
+    private string? EffectiveName => SubmittedName ?? _project?.Name;
+
+    private string? EffectiveRepositoryUrl => SubmittedRepositoryUrl ?? _project?.RepositoryUrl;
+
+    private string? EffectiveDefaultBranch => SubmittedDefaultBranch ?? _project?.DefaultBranch;
+
+    private string? EffectivePipelinePath => SubmittedPipelinePath ?? _project?.PipelinePath;
+
+    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Establish the circuit tenant before the tenant-filtered lookup.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is null && HttpContext is not null)
+        {
+            // A real 404 for a foreign or missing id. The status-code-pages middleware must not
+            // re-execute /not-found in this same request: the component renderer already owns the
+            // NavigationManager, and re-execution fails with "already initialized". The HTTP
+            // response is therefore a bodyless 404; NotFoundPage below covers circuit navigation.
+            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+            {
+                statusCodePages.Enabled = false;
+            }
+        }
+    }
+}

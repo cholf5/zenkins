@@ -1,0 +1,107 @@
+@page "/projects"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+
+<PageTitle>Projects · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+            <BbCardTitle As="h1" tabindex="-1">Projects</BbCardTitle>
+            @if (_session?.Organization is { } organization)
+            {
+                <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+            }
+        </div>
+        @if (_session is { HasOrganization: true })
+        {
+            <BbButton Href="/projects/new" Variant="ButtonVariant.Default">New project</BbButton>
+        }
+    </div>
+
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else
+    {
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Repositories</BbCardTitle>
+                <BbCardDescription>
+                    Projects of the active organization. Members may create and edit; deleting a project
+                    is reserved to Owners (PRD §3.1.2).
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_projects.Count == 0)
+                {
+                    <BbEmpty Title="No projects in this organization"
+                             Description="Create a project to point Zenkins at a Git repository and its pipeline.lua.">
+                        <Icon>
+                            <LucideIcon Name="folder-git-2" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                }
+                else
+                {
+                    <ul class="bb:divide-y">
+                        @foreach (var project in _projects)
+                        {
+                            <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
+                                <div class="bb:min-w-0">
+                                    <p class="bb:font-medium">
+                                        <a href="/projects/@project.Id" class="bb:underline bb:underline-offset-4">@project.Name</a>
+                                    </p>
+                                    <p class="bb:truncate bb:text-xs bb:text-muted-foreground">@project.RepositoryUrl</p>
+                                </div>
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    <BbBadge Variant="BadgeVariant.Outline">@project.DefaultBranch</BbBadge>
+                                    <span>@project.PipelinePath</span>
+                                    <span>Updated @project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    private UserSessionInfo? _session;
+    private IReadOnlyList<ProjectView> _projects = [];
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        "created" => "The project was created.",
+        "updated" => "The project was updated.",
+        "deleted" => "The project was deleted.",
+        _ => null,
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read. Never rely on the layout having done it first.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _projects = await ProjectsService.GetProjectsAsync();
+    }
+}

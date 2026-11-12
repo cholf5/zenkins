@@ -148,23 +148,51 @@ public sealed class OrganizationTestHost : IDisposable
             return organization.Id;
         });
 
-    public async Task AddProjectAsync(Guid organizationId, string name) =>
+    public async Task<Guid> AddProjectAsync(
+        Guid organizationId,
+        string name,
+        string repositoryUrl = "https://example.test/repo.git",
+        string defaultBranch = "main") =>
         await Host.InScopeAsync(async services =>
         {
             var systemDataScope = services.GetRequiredService<ISystemDataScope>();
             await using var context = await CreateContextAsync(services);
             using var scope = systemDataScope.BeginScope();
 
-            context.Projects.Add(new Project
+            var project = new Project
             {
                 OrganizationId = organizationId,
                 Name = name,
-                RepositoryUrl = $"https://example.test/{name}.git",
-                DefaultBranch = "main",
-            });
+                RepositoryUrl = repositoryUrl,
+                DefaultBranch = defaultBranch,
+            };
 
+            context.Projects.Add(project);
             await context.SaveChangesAsync();
-            return true;
+            return project.Id;
+        });
+
+    /// <summary>All projects of one organization, read across tenants for assertions.</summary>
+    public async Task<IReadOnlyList<Project>> ReadProjectsAsync(Guid organizationId) =>
+        await Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+
+            return (IReadOnlyList<Project>)await context.SystemQueryAsync<Project>(
+                project => project.OrganizationId == organizationId);
+        });
+
+    /// <summary>One project read across tenants (the assertion side of a cross-tenant probe).</summary>
+    public async Task<Project> ReadProjectAsync(Guid projectId) =>
+        await Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+
+            return (await context.SystemQueryAsync<Project>(project => project.Id == projectId)).Single();
         });
 
     /// <summary>

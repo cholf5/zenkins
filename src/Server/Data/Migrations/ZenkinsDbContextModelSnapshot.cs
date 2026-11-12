@@ -207,7 +207,8 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("OrganizationId");
+                    b.HasIndex("OrganizationId", "Name")
+                        .IsUnique();
 
                     b.ToTable("Projects");
                 });

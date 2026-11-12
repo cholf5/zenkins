@@ -1,0 +1,109 @@
+@page "/projects/{ProjectId:guid}/delete/confirm"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+
+<PageTitle>Delete project · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1" tabindex="-1">Delete project</BbCardTitle>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+        }
+    </div>
+
+    @if (_project is null)
+    {
+        <NotFoundPage />
+    }
+    else if (!_canDelete)
+    {
+        @* The form is not rendered for a Member, but the POST endpoint is the enforcement: a direct
+           POST is a 403 with no state change. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Owner access required</BbCardTitle>
+                <BbCardDescription>
+                    Deleting a project is part of project management, which PRD §3.1.2 reserves to
+                    organization Owners. Members can view, create and edit projects.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">Back to project</BbButton>
+            </BbCardContent>
+        </BbCard>
+    }
+    else
+    {
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Delete “@_project.Name”?</BbCardTitle>
+                <BbCardDescription>
+                    This permanently removes the project from this organization. It cannot be undone.
+                    Build runs and artifacts do not exist yet; when they do, this deletion will have to
+                    define its cascade semantics.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <div class="bb:space-y-4">
+                    <dl class="bb:grid bb:grid-cols-1 bb:gap-2 bb:text-sm">
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository</dt>
+                            <dd class="bb:break-all">@_project.RepositoryUrl</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                            <dd>@_project.PipelinePath</dd>
+                        </div>
+                    </dl>
+
+                    <form method="post" action="@($"/projects/{_project.Id}/delete")" data-zenkins-antiforgery class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                        <input type="hidden" name="Confirmed" value="true" />
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete project</BbButton>
+                        <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">Cancel</BbButton>
+                    </form>
+                </div>
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid ProjectId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private UserSessionInfo? _session;
+    private ProjectView? _project;
+    private bool _canDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Establish the circuit tenant before the tenant-filtered lookup.
+        _session = await UserSession.GetAsync();
+        _canDelete = _session?.CanManageActiveOrganization == true;
+
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is null && HttpContext is not null)
+        {
+            // A real 404 for a foreign or missing id. The status-code-pages middleware must not
+            // re-execute /not-found in this same request: the component renderer already owns the
+            // NavigationManager, and re-execution fails with "already initialized". The HTTP
+            // response is therefore a bodyless 404; NotFoundPage below covers circuit navigation.
+            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+            {
+                statusCodePages.Enabled = false;
+            }
+        }
+    }
+}
