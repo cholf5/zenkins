@@ -20,6 +20,11 @@ namespace Zenkins.Worker;
 /// <c>MaxConcurrency</c>, default 1) and <c>ZENKINS_CLAIM_SECONDS</c> (the poll interval between
 /// empty claims, default 2).
 /// </para>
+/// <para>
+/// F-008 adds: <c>ZENKINS_LOG_BUFFER_LINES</c> (the per-run bound of <em>unsent</em> log lines
+/// held while the upstream connection is down; drop-oldest beyond it, with an honest synthetic
+/// marker line reporting the loss; default 10 000).
+/// </para>
 /// </summary>
 public sealed record WorkerConfiguration(
     Uri ServerUrl,
@@ -31,7 +36,8 @@ public sealed record WorkerConfiguration(
     string WorkRoot,
     bool CleanupTemp,
     int MaxConcurrency,
-    TimeSpan ClaimPollInterval)
+    TimeSpan ClaimPollInterval,
+    int LogBufferLines)
 {
     public const string ServerUrlVariable = "ZENKINS_SERVER_URL";
     public const string RegistrationTokenVariable = "ZENKINS_REGISTRATION_TOKEN";
@@ -43,6 +49,7 @@ public sealed record WorkerConfiguration(
     public const string CleanupTempVariable = "ZENKINS_CLEANUP_TEMP";
     public const string WorkerConcurrencyVariable = "ZENKINS_WORKER_CONCURRENCY";
     public const string ClaimSecondsVariable = "ZENKINS_CLAIM_SECONDS";
+    public const string LogBufferLinesVariable = "ZENKINS_LOG_BUFFER_LINES";
 
     /// <summary>PRD §3.4.5: default heartbeat interval and maximum concurrent tasks of 1.</summary>
     public const int DefaultHeartbeatSeconds = 15;
@@ -53,6 +60,9 @@ public sealed record WorkerConfiguration(
     public const int DefaultMaxConcurrency = 1;
     public const double DefaultClaimSeconds = 2;
 
+    /// <summary>F-008 default: keep up to 10 000 unsent lines per run while reconnecting.</summary>
+    public const int DefaultLogBufferLines = 10_000;
+
     /// <summary>Sane bounds: a worker cannot run zero runs, and neither the worker nor the server
     /// benefits from a four-digit concurrency.</summary>
     public const int MinMaxConcurrency = 1;
@@ -61,6 +71,11 @@ public sealed record WorkerConfiguration(
     /// <summary>Claim polling below a tenth of a second is a hot loop against the server.</summary>
     public const double MinClaimSeconds = 0.1;
     public const double MaxClaimSeconds = 3600;
+
+    /// <summary>Sane bounds for the per-run unsent-line buffer: a one-line buffer would drop almost
+    /// everything on the first hiccup; a million lines is already an outlier-sized run.</summary>
+    public const int MinLogBufferLines = 1;
+    public const int MaxLogBufferLines = 1_000_000;
 
     private static readonly string DefaultDataDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -176,6 +191,21 @@ public sealed record WorkerConfiguration(
                 + $"{MaxClaimSeconds.ToString(CultureInfo.InvariantCulture)}.");
         }
 
+        var logBufferLinesText = environment.GetValueOrDefault(LogBufferLinesVariable)?.Trim();
+        int logBufferLines;
+        if (string.IsNullOrEmpty(logBufferLinesText))
+        {
+            logBufferLines = DefaultLogBufferLines;
+        }
+        else if (!int.TryParse(logBufferLinesText, NumberStyles.Integer, CultureInfo.InvariantCulture, out logBufferLines)
+            || logBufferLines < MinLogBufferLines
+            || logBufferLines > MaxLogBufferLines)
+        {
+            return WorkerConfigurationResult.Invalid(
+                $"configuration error: {LogBufferLinesVariable}='{logBufferLinesText}' is not a whole number "
+                + $"between {MinLogBufferLines} and {MaxLogBufferLines}.");
+        }
+
         return WorkerConfigurationResult.Valid(new WorkerConfiguration(
             serverUrl,
             string.IsNullOrEmpty(registrationToken) ? null : registrationToken,
@@ -186,7 +216,8 @@ public sealed record WorkerConfiguration(
             workRoot,
             cleanupTemp,
             maxConcurrency,
-            TimeSpan.FromSeconds(claimSeconds)));
+            TimeSpan.FromSeconds(claimSeconds),
+            logBufferLines));
     }
 
     /// <summary>Builds the registration payload the server expects (PRD §3.4.2 fields).</summary>

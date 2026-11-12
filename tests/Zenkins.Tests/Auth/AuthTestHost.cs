@@ -66,6 +66,13 @@ public sealed class AuthTestHost : IDisposable
     /// <summary>The running host's service provider (root scope).</summary>
     public IServiceProvider Services => _factory.Services;
 
+    /// <summary>
+    /// The in-memory <see cref="TestServer"/>: F-008's hub tests build SignalR connections whose
+    /// requests must reach this process (no real port exists), so they route the client through
+    /// this handler.
+    /// </summary>
+    public TestServer Server => _factory.Server;
+
     /// <summary>A new DI scope, for code that needs two scopes concurrently (the bootstrap race test).</summary>
     public AsyncServiceScope CreateScope() => _factory.Services.CreateAsyncScope();
 

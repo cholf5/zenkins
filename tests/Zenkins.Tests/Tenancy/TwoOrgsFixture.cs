@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Tenancy;
 
 // The worker project's namespace is Zenkins.Worker, which shadows the entity type name inside any
@@ -341,6 +342,27 @@ public sealed class TwoOrgsFixture : IDisposable
                 TriggerUserId = OrgBOwnerUserId,
                 RequiredTags = "dotnet",
                 CommandJson = """["dotnet","build"]""",
+            });
+
+        // F-008: one log line per organization's run, the row every log probe reads.
+        context.BuildLogs.AddRange(
+            new BuildLog
+            {
+                OrganizationId = OrgAId,
+                RunId = BuildRunAId,
+                Seq = 1,
+                Stream = LogStream.StdOut,
+                Message = "alpha-line",
+                Timestamp = DateTimeOffset.UtcNow,
+            },
+            new BuildLog
+            {
+                OrganizationId = OrgBId,
+                RunId = BuildRunBId,
+                Seq = 1,
+                Stream = LogStream.StdErr,
+                Message = "beta-line",
+                Timestamp = DateTimeOffset.UtcNow,
             });
 
         context.SaveChanges();

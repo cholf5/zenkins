@@ -6,6 +6,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- F-008: the worker's upstream log stream dials the server over SignalR. Client package
+         only - it must not (and does not) reference the ASP.NET Core shared framework; pinned by
+         WorkerRuntimeConfigTests. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Shared/Zenkins.Shared.csproj" />
   </ItemGroup>
 

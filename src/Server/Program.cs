@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
+using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Organizations;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
@@ -20,6 +21,7 @@ builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
 builder.Services.AddZenkinsWorkers();
 builder.Services.AddZenkinsRuns(builder.Configuration);
+builder.Services.AddZenkinsLogs(builder.Configuration);
 
 // EF logs every SQL command at Information; keep that out of the production log so a parameter
 // value can never be one config change away from being written down. Identity/registration logs
@@ -132,6 +134,12 @@ app.MapWorkerEndpoints();
 // Run trigger form (F-003's authenticated form shape) and the token-authenticated run claim and
 // reporting API (F-006); the background lease sweeper is registered by AddZenkinsRuns.
 app.MapRunEndpoints();
+
+// Log streaming hubs (F-008): the worker upstream (worker-token authenticated) and the browser
+// subscription hub (subscription-ticket authenticated). Both authenticate before any hub method
+// runs - an unauthenticated negotiate is a bare 401.
+app.MapHub<WorkerLogHub>("/hubs/worker-logs");
+app.MapHub<RunLogHub>("/hubs/run-logs");
 
 app.Run();
 

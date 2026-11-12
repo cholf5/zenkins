@@ -41,6 +41,15 @@
       10.0.x packages so a restore cannot silently cross a major version.
     -->
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
+    <!--
+      F-008: the SignalR CLIENT (Microsoft.AspNetCore.SignalR.Client) is a NuGet package on both
+      ends that need one: the Worker's upstream log stream and the Server's own in-process browser
+      panel. The hub side needs nothing new (ASP.NET Core shared framework). Pinned to the same
+      10.0.15 servicing band as EF Core. The client package deliberately does not reference the
+      ASP.NET Core shared framework, so the Worker stays ASP.NET-free (pinned by
+      WorkerRuntimeConfigTests).
+    -->
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.15" />
   </ItemGroup>
 
 </Project>

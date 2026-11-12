@@ -39,7 +39,41 @@ public static class RunEndpoints
         api.MapPost("/runs/{runId:guid}/accepted", AcceptAsync);
         api.MapPost("/runs/{runId:guid}/completed", CompleteAsync);
 
+        // Full-log download (F-008): cookie-authenticated like the pages; the tenant comes from the
+        // session (never the URL), so a foreign run id is a plain 404 that leaks no bytes.
+        endpoints.MapGet("/runs/{runId:guid}/log/download", DownloadLogAsync).RequireAuthorization();
+
         return endpoints;
+    }
+
+    private static async Task<IResult> DownloadLogAsync(
+        Guid runId,
+        RunService runs,
+        HttpContext httpContext)
+    {
+        // Foreign or unknown id: the same 404, no existence oracle, no bytes.
+        if (!await runs.RunExistsAsync(runId, httpContext.RequestAborted))
+        {
+            return Results.NotFound();
+        }
+
+        var fileName = $"zenkins-run-{runId.ToString("D")}-log.txt";
+        return Results.Stream(
+            async output =>
+            {
+                // The stream is written line by line from a streaming database read (bounded
+                // memory regardless of log size); NewLine is pinned so the file is identical
+                // on every platform.
+                await using var writer = new StreamWriter(output, leaveOpen: true) { NewLine = "\n" };
+                await foreach (var line in runs.StreamRunLogAsync(runId, httpContext.RequestAborted))
+                {
+                    await writer.WriteLineAsync(line.Message);
+                }
+
+                await writer.FlushAsync(httpContext.RequestAborted);
+            },
+            "text/plain; charset=utf-8",
+            fileName);
     }
 
     private static async Task<IResult> StartRunAsync(

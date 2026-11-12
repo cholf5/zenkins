@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @inject UserSession UserSession
 @inject RunService RunsService
+@inject RunLogAccess RunLogAccess
 
 <PageTitle>Run @(_run?.Id.ToString("N")[..8] ?? "") · Zenkins</PageTitle>
 
@@ -95,6 +96,10 @@
                 </dl>
             </BbCardContent>
         </BbCard>
+        @* The run's log (F-008): live while the run executes, full history once it is finished.
+           The ticket below is minted for this session and lets the panel's server-side
+           HubConnection authenticate to the browser hub (a circuit cannot replay the cookie). *@
+        <RunLogPanel RunId="@_run.Id" Ticket="@_accessTicket" />
     }
 </div>
 
@@ -106,6 +111,10 @@
     private HttpContext? HttpContext { get; set; }
 
     private RunView? _run;
+
+    /// <summary>The subscription ticket the log panel presents to the browser hub. Only minted for
+    /// a member session after the run itself was readable - the page is the only minter.</summary>
+    private string? _accessTicket;
 
     protected override async Task OnInitializedAsync()
     {
@@ -127,6 +136,13 @@
             {
                 statusCodePages.Enabled = false;
             }
+        }
+
+        // A readable run of the active organization: mint the panel's subscription ticket for this
+        // session. The hub re-validates membership at join time, so a stale ticket buys nothing.
+        if (_run is not null && session.Organization is { } organization)
+        {
+            _accessTicket = RunLogAccess.MintTicket(session.UserId, organization.OrganizationId);
         }
     }
 

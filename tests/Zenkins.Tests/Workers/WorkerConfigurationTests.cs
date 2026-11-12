@@ -53,6 +53,39 @@ public sealed class WorkerConfigurationTests
         Assert.Equal(1, configuration.MaxConcurrency);
         Assert.Equal(TimeSpan.FromSeconds(2), configuration.ClaimPollInterval);
         Assert.Equal(1, configuration.BuildRegistrationRequest().MaxConcurrency);
+
+        // F-008's default: 10 000 unsent lines per run while reconnecting.
+        Assert.Equal(10_000, configuration.LogBufferLines);
+    }
+
+    [Fact]
+    public void The_f008_log_buffer_knob_parses_from_the_environment()
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [WorkerConfiguration.LogBufferLinesVariable] = "250",
+        });
+
+        var configuration = AssertGetValue(result);
+        Assert.Equal(250, configuration.LogBufferLines);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1000001")]
+    [InlineData("plenty")]
+    public void An_out_of_range_log_buffer_is_a_configuration_error(string logBufferLines)
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [WorkerConfiguration.LogBufferLinesVariable] = logBufferLines,
+        });
+
+        Assert.Null(result.Configuration);
+        Assert.NotNull(result.Error);
+        Assert.Contains(WorkerConfiguration.LogBufferLinesVariable, result.Error, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Data;
@@ -86,6 +87,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
 
     /// <summary>Build runs (F-006): queued/running/finished executions of a project's command.</summary>
     public DbSet<BuildRun> BuildRuns => Set<BuildRun>();
+
+    /// <summary>Incrementally persisted output lines of build runs (F-008). Never queried without
+    /// a run id: the composite (RunId, Seq) primary key orders every read.</summary>
+    public DbSet<BuildLog> BuildLogs => Set<BuildLog>();
 
     /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
     public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
@@ -400,6 +405,32 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 + $"'{BuildRunStatus.Canceled}', '{BuildRunStatus.Lost}')"));
 
             entity.HasQueryFilter(run => run.OrganizationId == CurrentOrganizationId);
+        });
+
+        // F-008: log lines are tenant-owned like everything else (direct OrganizationId column, see
+        // BuildLog's doc for why the filter is a column and not a BuildRun join). The composite
+        // (RunId, Seq) primary key IS the reconnection-deduplication authority: the database, not
+        // a pre-flight query, absorbs a reconnecting worker's overlapping re-delivery.
+        modelBuilder.Entity<BuildLog>(entity =>
+        {
+            entity.HasKey(log => new { log.RunId, log.Seq });
+            entity.Property(log => log.Stream).IsRequired().HasMaxLength(16);
+
+            // No max length on purpose: a child process can emit arbitrarily long lines.
+            entity.Property(log => log.Message).IsRequired();
+            entity.Property(log => log.Timestamp).IsRequired();
+
+            entity.HasOne<Organization>().WithMany().HasForeignKey(log => log.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<BuildRun>().WithMany().HasForeignKey(log => log.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Belt and braces for the string stream, same shape as the run status check above.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_BuildLogs_Stream",
+                $"\"Stream\" IN ('{LogStream.StdOut}', '{LogStream.StdErr}')"));
+
+            entity.HasQueryFilter(log => log.OrganizationId == CurrentOrganizationId);
         });
     }
 

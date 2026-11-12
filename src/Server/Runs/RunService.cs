@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
+using System.Runtime.CompilerServices;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Workers;
+using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Runs;
@@ -141,6 +144,7 @@ public sealed class RunService(
     TenantContext tenantContext,
     ISystemDataScope systemDataScope,
     WorkerService workerService,
+    RunLogIngest runLogIngest,
     RunOptions options,
     ILogger<RunService> logger)
 {
@@ -267,6 +271,36 @@ public sealed class RunService(
             candidate => candidate.Id == runId,
             cancellationToken);
         return run is null ? null : (await ToViewsAsync(context, [run], cancellationToken))[0];
+    }
+
+    /// <summary>Whether the run exists in the active organization (download endpoint's 404 gate).</summary>
+    public async Task<bool> RunExistsAsync(Guid runId, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.BuildRuns.AnyAsync(run => run.Id == runId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Streams one run's persisted log ordered by <see cref="Entities.BuildLog.Seq"/> (F-008's
+    /// download). The database read is streamed - the caller writes each line as it arrives, so
+    /// memory stays bounded no matter how large the log grew. Lines never leave the active
+    /// organization: the query runs through the tenant filter, and callers gate the 404 beforehand.
+    /// </summary>
+    public async IAsyncEnumerable<LogLineMessage> StreamRunLogAsync(
+        Guid runId,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var rows = context.BuildLogs
+            .AsNoTracking()
+            .Where(log => log.RunId == runId)
+            .OrderBy(log => log.Seq)
+            .Select(log => new LogLineMessage(log.Seq, log.Stream, log.Message, log.Timestamp));
+
+        await foreach (var line in rows.AsAsyncEnumerable().WithCancellation(cancellationToken))
+        {
+            yield return line;
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -478,6 +512,11 @@ public sealed class RunService(
             run.ExitCode = exitCode;
             run.EndedAt = now;
             await context.SaveChangesAsync(cancellationToken);
+
+            // The run is terminal: flush the ingest tail and evict its buffer, so a run recorded
+            // as finished never leaves lines behind nor keeps server memory (F-008's completed
+            // path mirrors F-007's cleanup-before-report discipline on the server side).
+            await runLogIngest.CompleteRunAsync(run.Id);
 
             logger.LogInformation(
                 "Run completed. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Status={Status} ExitCode={ExitCode}",

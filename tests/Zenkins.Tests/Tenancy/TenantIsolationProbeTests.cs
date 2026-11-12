@@ -1,5 +1,6 @@
 using Xunit;
 using Zenkins.Server.Data;
+using Zenkins.Shared.LogStreaming;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Shared.Tenancy;
 
@@ -42,6 +43,10 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
     [Fact]
     public Task Build_runs_are_invisible_across_tenants() =>
         TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BuildRun>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Build_logs_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BuildLog>(_fixture, CancellationToken);
 
     [Fact]
     public Task Cross_tenant_membership_write_is_rejected_and_persists_nothing() =>
@@ -110,6 +115,25 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     [Fact]
+    public Task Cross_tenant_build_log_write_is_rejected_and_persists_nothing()
+    {
+        // The log's primary key is composite (RunId, Seq), so the smuggled row needs a fresh Seq
+        // per direction to keep the rejection purely a tenant-guard outcome, never a key clash.
+        var seq = 900;
+        return TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<BuildLog>(
+            _fixture,
+            () => new BuildLog
+            {
+                RunId = TwoOrgsFixture.BuildRunAId,
+                Seq = seq++,
+                Stream = LogStream.StdOut,
+                Message = "smuggled-line",
+                Timestamp = DateTimeOffset.UtcNow,
+            },
+            CancellationToken);
+    }
+
+    [Fact]
     public Task Find_after_a_tenant_switch_returns_null_for_memberships() =>
         TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<OrganizationMember>(
             _fixture,
@@ -148,6 +172,32 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             TwoOrgsFixture.BuildRunAId,
             TwoOrgsFixture.BuildRunBId,
             CancellationToken);
+
+    [Fact]
+    public async Task Find_after_a_tenant_switch_returns_null_for_build_logs()
+    {
+        // BuildLog's primary key is composite (RunId, Seq), so the harness's single-id Find probe
+        // does not apply; the same switch discipline is asserted against both key halves.
+        object[] keyOfA = [TwoOrgsFixture.BuildRunAId, 1L];
+        object[] keyOfB = [TwoOrgsFixture.BuildRunBId, 1L];
+
+        _fixture.UseOrganizationA();
+        await using var context = _fixture.CreateContext();
+
+        Assert.NotNull(await context.FindAsync<BuildLog>(keyOfA, CancellationToken));
+        Assert.Null(await context.FindAsync<BuildLog>(keyOfB, CancellationToken));
+
+        _fixture.UseOrganizationB();
+
+        // Find short-circuits in the change tracker, so only dropping the tracker makes these null.
+        Assert.Null(await context.FindAsync<BuildLog>(keyOfA, CancellationToken));
+        Assert.NotNull(await context.FindAsync<BuildLog>(keyOfB, CancellationToken));
+
+        _fixture.UseOrganizationA();
+
+        Assert.Null(await context.FindAsync<BuildLog>(keyOfB, CancellationToken));
+        Assert.NotNull(await context.FindAsync<BuildLog>(keyOfA, CancellationToken));
+    }
 
     [Fact]
     public void Every_tenant_owned_entity_is_covered_by_the_harness()

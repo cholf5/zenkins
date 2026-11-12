@@ -110,6 +110,39 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("BootstrapMarkers");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildLog", b =>
+                {
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("Seq")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Stream")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("RunId", "Seq");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.ToTable("BuildLogs", t =>
+                        {
+                            t.HasCheckConstraint("CK_BuildLogs_Stream", "\"Stream\" IN ('StdOut', 'StdErr')");
+                        });
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildRun", b =>
                 {
                     b.Property<Guid>("Id")
@@ -501,6 +534,21 @@ namespace Zenkins.Server.Data.Migrations
                     b.HasOne("Zenkins.Server.Data.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildLog", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.BuildRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

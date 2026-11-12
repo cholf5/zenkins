@@ -53,18 +53,26 @@ public sealed class WorkerRunner(
 
         Log($"run execution starts on {configuration.MaxConcurrency} loop(s); "
             + $"claiming every {configuration.ClaimPollInterval.TotalSeconds:0.#} second(s).");
+
+        // F-008: one shared upstream log-stream connection (worker-token authenticated, its own
+        // reconnect loop next to the heartbeat), owned by every run loop's drain tasks.
+        await using var logStream = new LogStreamClient(
+            configuration, workerToken, BackoffScheduler.Default(), log, errorLog);
+
         var heartbeat = HeartbeatLoopAsync(workerToken, shutdown);
+        var logStreamLoop = logStream.RunAsync(shutdown);
         var runLoops = Enumerable.Range(0, configuration.MaxConcurrency)
             .Select(_ => new WorkerRunLoop(
                 configuration,
                 api,
                 workerToken,
                 workDirectories,
+                logStream,
                 BackoffScheduler.Default(),
                 log,
                 errorLog).RunAsync(shutdown))
             .ToArray();
-        await Task.WhenAll([heartbeat, .. runLoops]);
+        await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops]);
 
         await SendFinalHeartbeatAsync(workerToken);
         Log("stopped cleanly.");

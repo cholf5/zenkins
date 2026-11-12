@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using Zenkins.Shared.LogStreaming;
 
 namespace Zenkins.Worker;
 
@@ -8,11 +9,15 @@ namespace Zenkins.Worker;
 /// and poll again; transport failures retry with the existing capped-exponential backoff) → report
 /// <c>accepted</c> (clears the lease) → prepare the run's work directory → execute the run's argv as
 /// a native process with <c>work/{run-id}/repository</c> as its cwd → stream stdout/stderr line by
-/// line into per-stream log files under the run's <c>temp/</c> (SignalR upstream is F-008; this
-/// card's only output handling is local) → delete <c>temp/</c> when configured (keeping
-/// <c>repository/</c> and <c>artifacts/</c>) → report <c>completed {'{'}exitCode{'}'}</c> (0 →
-/// Success, non-zero → Failed on the server). Cleanup precedes the report, so a run recorded as
-/// terminal has its temp already gone.
+/// line into per-stream log files under the run's <c>temp/</c> (F-007's local files, kept through
+/// the transition as a debugging aid) <b>and</b> upstream over SignalR (F-008): every line is
+/// emitted into the run's bounded <see cref="RunLogBuffer"/> with a per-run monotonic Seq and a
+/// drain task ships flush-sized batches to <c>/hubs/worker-logs</c> while the process runs →
+/// delete <c>temp/</c> when configured (keeping <c>repository/</c> and <c>artifacts/</c>) →
+/// report <c>completed {'{'}exitCode{'}'}</c> (0 → Success, non-zero → Failed on the server).
+/// Cleanup precedes the report, and the drain precedes it too: when the server records the
+/// terminal state, the run's temp is already gone and its captured lines are on their way to the
+/// database (the drain retries across reconnects; the (RunId, Seq) key absorbs any overlap).
 /// <para>
 /// <b>Concurrency.</b> The worker runs exactly <see cref="WorkerConfiguration.MaxConcurrency"/>
 /// instances of this loop, so it never executes more runs than it registered for; each loop's run
@@ -31,6 +36,7 @@ public sealed class WorkerRunLoop(
     WorkerApiClient api,
     string workerToken,
     WorkDirectoryService workDirectories,
+    LogStreamClient logStreams,
     BackoffScheduler backoff,
     TextWriter log,
     TextWriter errorLog)
@@ -42,7 +48,8 @@ public sealed class WorkerRunLoop(
     /// </summary>
     public const int InfrastructureFailureExitCode = 70;
 
-    /// <summary>The temp log files the run's captured streams land in (F-008 will stream these upstream).</summary>
+    /// <summary>The temp log files the run's captured streams land in (transition-period local
+    /// copies; the server's incremental persistence is authoritative since F-008).</summary>
     public const string StdOutLogFileName = "stdout.log";
     public const string StdErrorLogFileName = "stderr.log";
 
@@ -248,6 +255,14 @@ public sealed class WorkerRunLoop(
         await using var stdErrorWriter = new StreamWriter(
             Path.Combine(work.TempPath, StdErrorLogFileName), append: false) { AutoFlush = true };
 
+        // F-008: every line flows upstream with a per-run monotonic Seq while a drain task ships
+        // batches to the server; the temp files stay (transition-period debugging aid). The
+        // connectivity probe lets the buffer label overflow drops honestly (review fix F4):
+        // drops while connected are backpressure, not a reconnect gap.
+        var logBuffer = new RunLogBuffer(
+            claim.RunId, configuration.LogBufferLines, errorLog, isConnected: () => logStreams.IsConnected);
+        var pump = logBuffer.DrainAsync(logStreams, shutdown);
+
         using var runner = new ProcessRunner(
             new ProcessRunnerOptions
             {
@@ -263,6 +278,7 @@ public sealed class WorkerRunLoop(
             },
             line =>
             {
+                var stream = line.Stream == ProcessOutputStream.StdOut ? LogStream.StdOut : LogStream.StdErr;
                 if (line.Stream == ProcessOutputStream.StdOut)
                 {
                     stdOutWriter.WriteLine(line.Line);
@@ -271,29 +287,56 @@ public sealed class WorkerRunLoop(
                 {
                     stdErrorWriter.WriteLine(line.Line);
                 }
+
+                logBuffer.Emit(stream, line.Line);
             });
 
         try
         {
-            return await runner.RunAsync(shutdown);
+            var exitCode = await runner.RunAsync(shutdown);
+            return await FinishDrainAsync(logBuffer, pump, exitCode);
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
         {
             await log.WriteLineAsync(
                 $"Zenkins Worker: run {claim.RunId} was killed by shutdown (whole process tree); no completed report.");
+            logBuffer.CompleteInput();
+            await pump;
             return null;
         }
         catch (Exception failure)
         {
             // The process never produced an exit code (bad argv[0], unusable cwd, ...). Report the
-            // run failed so it does not hang in Running forever; the reason is in the logs.
-            await stdErrorWriter.WriteLineAsync(
-                $"zenkins-worker: the process could not be executed: {failure.Message}");
+            // run failed so it does not hang in Running forever; the reason is in the logs - and
+            // upstream too, so the server-side log shows why the run produced nothing.
+            var message = $"zenkins-worker: the process could not be executed: {failure.Message}";
+            await stdErrorWriter.WriteLineAsync(message);
+            logBuffer.Emit(LogStream.StdErr, message);
+            logBuffer.CompleteInput();
+            await pump;
             await errorLog.WriteLineAsync(
                 $"Zenkins Worker: run {claim.RunId} could not be executed ({failure.Message}). "
                 + $"Reporting exit code {InfrastructureFailureExitCode}.");
             return InfrastructureFailureExitCode;
         }
+    }
+
+    /// <summary>
+    /// Closes the run's input and, when the upstream ever came up in this process, waits for the
+    /// drain to hand every buffered line to the server before the completed report goes out (the
+    /// same cleanup-before-report discipline F-007 established for temp files). When the upstream
+    /// never connected at all, the pump keeps retrying in the background and the report proceeds
+    /// - a connection that may not exist must not starve the run's terminal transition.
+    /// </summary>
+    private async Task<int?> FinishDrainAsync(RunLogBuffer logBuffer, Task pump, int exitCode)
+    {
+        logBuffer.CompleteInput();
+        if (logStreams.HasEverConnected)
+        {
+            await pump;
+        }
+
+        return exitCode;
     }
 
     // -------------------------------------------------------------------

@@ -145,13 +145,18 @@ public sealed class WorkerRunLoopTests : IDisposable
             ?? throw new InvalidOperationException("The loop test configuration did not parse.");
 
         // A plain HttpClient on the in-memory server pipeline: the loop talks the real HTTP
-        // contract with its bearer token, exactly as the process-level worker does.
+        // contract with its bearer token, exactly as the process-level worker does. The log
+        // stream client is never started here (HasEverConnected stays false), so the loop's
+        // drain step cannot wait on a connection this test never opens.
         var api = new WorkerApiClient(host.Inner.Inner.Host.CreateClient());
+        var logStreams = new LogStreamClient(
+            configuration, workerToken, BackoffScheduler.Default(), Console.Out, Console.Error);
         var loop = new WorkerRunLoop(
             configuration,
             api,
             workerToken,
             new WorkDirectoryService(configuration.WorkRoot),
+            logStreams,
             new BackoffScheduler(TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(2)),
             Console.Out,
             Console.Error);

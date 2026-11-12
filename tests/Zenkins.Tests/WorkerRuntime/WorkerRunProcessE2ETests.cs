@@ -90,6 +90,17 @@ public sealed class WorkerRunProcessE2ETests
             Assert.Equal("Success", status1);
             Assert.Equal(0, exitCode1);
 
+            // F-008: the three lines were streamed upstream over SignalR and persisted
+            // incrementally - the database holds them in Seq order by the time the run is terminal.
+            var logRows = await WaitForLogRowsAsync(
+                databasePath,
+                run1,
+                expectedCount: 3,
+                cancellationToken);
+            Assert.Equal(
+                new[] { (1L, "StdOut", "first"), (2L, "StdOut", "second"), (3L, "StdOut", "third") },
+                logRows.Select(row => (row.Seq, row.Stream, row.Message)).ToArray());
+
             // The trio exists per run; temp is cleaned (ZENKINS_CLEANUP_TEMP default true), the
             // repository and artifacts directories stay.
             AssertWorkDirectoryTrio(work1, tempCleaned: true);
@@ -191,6 +202,67 @@ public sealed class WorkerRunProcessE2ETests
 
         throw new TimeoutException(
             $"The log file {path} never satisfied the predicate. Last content: {lastContent ?? "(file never appeared)"}");
+    }
+
+    /// <summary>
+    /// Polls the server's SQLite file for the run's persisted log rows (F-008) until the expected
+    /// count is present; the ingest flushes within 250 ms, so a short wait covers the tail.
+    /// </summary>
+    private static async Task<IReadOnlyList<(long Seq, string Stream, string Message)>> WaitForLogRowsAsync(
+        string databasePath,
+        Guid runId,
+        int expectedCount,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            var rows = await ReadLogRowsAsync(databasePath, runId, cancellationToken);
+            if (rows.Count >= expectedCount)
+            {
+                return rows;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        var last = await ReadLogRowsAsync(databasePath, runId, cancellationToken);
+        throw new TimeoutException(
+            $"Run {runId} never persisted {expectedCount} log rows (last seen: {last.Count}).");
+    }
+
+    private static async Task<IReadOnlyList<(long Seq, string Stream, string Message)>> ReadLogRowsAsync(
+        string databasePath,
+        Guid runId,
+        CancellationToken cancellationToken)
+    {
+        var lockRetryDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (true)
+        {
+            try
+            {
+                await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+                await connection.OpenAsync(cancellationToken);
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    "SELECT \"Seq\", \"Stream\", \"Message\" FROM \"BuildLogs\" WHERE \"RunId\" = $id ORDER BY \"Seq\"";
+                command.Parameters.AddWithValue("$id", runId.ToString().ToUpperInvariant());
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                var rows = new List<(long, string, string)>();
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+                }
+
+                return rows;
+            }
+            catch (SqliteException) when (DateTime.UtcNow < lockRetryDeadline)
+            {
+                // The server may hold a write lock; poll again.
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
     }
 
     /// <summary>Polls the server's SQLite file for the run's (status, exit code) until terminal.</summary>

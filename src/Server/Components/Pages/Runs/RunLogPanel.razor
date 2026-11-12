@@ -1,0 +1,225 @@
+@implements IAsyncDisposable
+@inject NavigationManager Navigation
+@inject ILogger<RunLogPanel> Logger
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.Extensions.Logging
+@using Zenkins.Server.LogStreaming
+@using Zenkins.Shared.LogStreaming
+
+@* The run's live log (card F-008). The page mints a subscription ticket for the signed-in session
+   and passes it in; this component connects the server-side HubConnection to the browser hub in
+   the same process, joins the run's group, and appends lines as they arrive. Stderr lines are
+   visually distinguished by color. Pause / search / per-step views are Phase 5. *@
+<div id="run-log" class="bb:space-y-3">
+    <BbCard>
+        <BbCardHeader>
+            <div class="bb:flex bb:items-center bb:justify-between bb:gap-3">
+                <div>
+                    <BbCardTitle As="h2">Log</BbCardTitle>
+                    <BbCardDescription>
+                        Streamed from the worker while the run executes; stderr is shown in red.
+                    </BbCardDescription>
+                </div>
+                <a id="run-log-download"
+                   class="bb:text-sm bb:font-medium bb:text-primary bb:hover:underline"
+                   href="@DownloadUrl">Download full log</a>
+            </div>
+        </BbCardHeader>
+        <BbCardContent>
+            @if (_connectionError is not null)
+            {
+                <p id="run-log-error" role="alert" class="bb:text-sm bb:text-destructive">
+                    @_connectionError
+                </p>
+            }
+            @if (_connectionClosed)
+            {
+                @* WithAutomaticReconnect gives up after its bounded retry budget; without a
+                   manual restart the panel would stay frozen on whatever it had (review fix F6). *@
+                <div class="bb:flex bb:items-center bb:gap-3">
+                    <BbButton Variant="ButtonVariant.Default" Size="ButtonSize.Small" OnClick="ReconnectAsync">
+                        Reconnect
+                    </BbButton>
+                    <span class="bb:text-sm bb:text-muted-foreground">Reattach the live log stream.</span>
+                </div>
+            }
+            @if (_lines.Count == 0)
+            {
+                <p id="run-log-empty" class="bb:text-sm bb:text-muted-foreground">
+                    @(_connecting ? "Connecting to the log stream…" : "No output was captured for this run.")
+                </p>
+            }
+            else
+            {
+                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var line in _lines)
+{
+    <span @key="line.Seq" class="@(IsStdErr(line) ? "bb:text-red-500" : null)">@line.Message
+</span>
+}</code></pre>
+            }
+        </BbCardContent>
+    </BbCard>
+</div>
+
+@code {
+    [Parameter]
+    public Guid RunId { get; set; }
+
+    /// <summary>The subscription ticket minted by the page for this session. Null (or stale) means
+    /// the panel renders without connecting.</summary>
+    [Parameter]
+    public string? Ticket { get; set; }
+
+    private readonly RunLogViewModel _viewModel = new();
+    private HubConnection? _connection;
+    private bool _connecting;
+    private bool _connectionClosed;
+    private string? _connectionError;
+
+    private IReadOnlyList<LogLineMessage> _lines = [];
+
+    private string DownloadUrl => $"/runs/{RunId}/log/download";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!RendererInfo.IsInteractive)
+        {
+            // The prerender pass has no circuit: render the shell only, connect in the circuit phase.
+            return;
+        }
+
+        if (string.IsNullOrEmpty(Ticket))
+        {
+            _connectionError = "The log stream is not available for this session.";
+            return;
+        }
+
+        _connecting = true;
+        _connection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("hubs/run-logs"), options =>
+            {
+                options.AccessTokenProvider = () => Task.FromResult<string?>(Ticket);
+            })
+            .WithAutomaticReconnect()
+            .Build();
+
+        _connection.On<IReadOnlyList<LogLineMessage>>(nameof(IRunLogClient.HistoryLines), lines =>
+        {
+            _viewModel.Add(lines);
+            return InvokeAsync(LinesChanged);
+        });
+        _connection.On<IReadOnlyList<LogLineMessage>>(nameof(IRunLogClient.ReceiveLines), lines =>
+        {
+            _viewModel.Add(lines);
+            return InvokeAsync(LinesChanged);
+        });
+
+        _connection.Reconnected += OnReconnectedAsync;
+        _connection.Closed += OnClosedAsync;
+
+        try
+        {
+            await _connection.StartAsync();
+            await _connection.InvokeAsync(nameof(RunLogHub.JoinRunAsync), RunId, CancellationToken.None);
+        }
+        catch (Exception failure)
+        {
+            _connectionClosed = true;
+            _connectionError = $"The log stream could not be reached ({failure.Message}).";
+        }
+        finally
+        {
+            _connecting = false;
+            await InvokeAsync(LinesChanged);
+        }
+    }
+
+    /// <summary>
+    /// After an automatic reconnect the run must be joined again (groups are per connection).
+    /// The re-join is awaited and its failure is logged and surfaced (review fix F6) - the old
+    /// fire-and-forget join could fail silently and leave the panel frozen on a group it is no
+    /// longer in. Re-joining re-streams the history; the Seq-deduplicating view model absorbs
+    /// the overlap.
+    /// </summary>
+    private Task OnReconnectedAsync(string? _) => InvokeAsync(async () =>
+    {
+        try
+        {
+            await _connection!.InvokeAsync(nameof(RunLogHub.JoinRunAsync), RunId, CancellationToken.None);
+        }
+        catch (Exception failure)
+        {
+            Logger.LogError(
+                failure, "Re-joining the log group of run {RunId} after a reconnect failed.", RunId);
+            _connectionError =
+                $"The log stream reconnected but the run could not be re-joined ({failure.Message}).";
+            StateHasChanged();
+        }
+    });
+
+    /// <summary>
+    /// The connection closed for good: WithAutomaticReconnect exhausted its retry budget (or the
+    /// server closed it terminally). Show what happened and offer the manual restart instead of
+    /// freezing silently (review fix F6).
+    /// </summary>
+    private Task OnClosedAsync(Exception? error) => InvokeAsync(() =>
+    {
+        _connectionClosed = true;
+        _connectionError = error is null
+            ? "The log stream connection was closed."
+            : $"The log stream connection closed ({error.Message}).";
+        StateHasChanged();
+        return Task.CompletedTask;
+    });
+
+    /// <summary>The manual restart for the closed-connection state: start fresh and re-join.</summary>
+    private async Task ReconnectAsync()
+    {
+        if (_connection is null || _connecting)
+        {
+            return;
+        }
+
+        _connecting = true;
+        _connectionClosed = false;
+        _connectionError = null;
+        StateHasChanged();
+        try
+        {
+            await _connection.StartAsync();
+            await _connection.InvokeAsync(nameof(RunLogHub.JoinRunAsync), RunId, CancellationToken.None);
+        }
+        catch (Exception failure)
+        {
+            _connectionClosed = true;
+            _connectionError = $"The log stream could not be reached ({failure.Message}).";
+        }
+        finally
+        {
+            _connecting = false;
+            await InvokeAsync(LinesChanged);
+        }
+    }
+
+    private Task LinesChanged()
+    {
+        _lines = _viewModel.Snapshot();
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private static bool IsStdErr(LogLineMessage line) =>
+        string.Equals(line.Stream, LogStream.StdErr, StringComparison.Ordinal);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_connection is not null)
+        {
+            // Unsubscribe first: disposing raises Closed, and no handler may touch the UI state
+            // of a component that is going away.
+            _connection.Reconnected -= OnReconnectedAsync;
+            _connection.Closed -= OnClosedAsync;
+            await _connection.DisposeAsync();
+        }
+    }
+}
