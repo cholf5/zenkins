@@ -38,6 +38,29 @@ public sealed class ProjectCrudTests
     }
 
     [Fact]
+    public async Task Owner_delete_requires_only_the_antiforgery_token()
+    {
+        using var host = await OrganizationTestHost.CreateAsync();
+        using var client = await host.SignInAsync(OrganizationTestHost.OwnerEmail);
+        var projectId = await CreateProjectAsync(client, "confirmation-app");
+
+        // The confirmation page is the confirmation; there is no extra "Confirmed" field to forge.
+        var page = await AuthTestHost.GetStringAsync(client, $"/projects/{projectId}");
+        var token = OrganizationTestHost.ExtractAntiforgeryMetaToken(page);
+        using var response = await client.PostAsync(
+            $"/projects/{projectId}/delete",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["__RequestVerificationToken"] = token,
+            }),
+            CancellationToken);
+
+        MembershipAuthorizationProbes.AssertRedirect(response, "/projects?notice=deleted");
+        Assert.Empty(await host.ReadProjectsAsync(
+            await host.ReadOrganizationIdAsync(Zenkins.Server.Auth.BootstrapService.StarterOrganizationName)));
+    }
+
+    [Fact]
     public async Task New_project_form_prefills_main_and_the_pipeline_default()
     {
         using var host = await OrganizationTestHost.CreateAsync();

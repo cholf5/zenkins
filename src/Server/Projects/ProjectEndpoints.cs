@@ -107,7 +107,6 @@ public static class ProjectEndpoints
             return Results.Unauthorized();
         }
 
-        _ = form;
         var result = await projects.DeleteAsync(userId, projectId, httpContext.RequestAborted);
         return result.Status switch
         {
@@ -151,13 +150,12 @@ public static class ProjectEndpoints
         httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
     /// <summary>
-    /// Present so the delete POST is form-bound and therefore covered by <c>UseAntiforgery</c>. It
-    /// carries no project id: the route is the only target.
+    /// Empty on purpose: the parameter exists so the delete POST is form-bound and therefore covered
+    /// by <c>UseAntiforgery</c>. The confirmation page is the confirmation; the only request payload
+    /// required is the antiforgery token.
     /// </summary>
     public sealed class DeleteProjectForm
     {
-        /// <summary>Optional explicit confirmation flag; the confirmation page submits it.</summary>
-        public string? Confirmed { get; set; }
     }
 
     /// <summary>

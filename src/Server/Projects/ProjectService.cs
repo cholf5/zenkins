@@ -96,7 +96,11 @@ public sealed class ProjectService(
     ITenantContext tenantContext,
     ILogger<ProjectService> logger)
 {
-    /// <summary>Projects of the active organization, ordered by name (in memory: SQLite cannot order DateTimeOffset).</summary>
+    /// <summary>
+    /// Projects of the active organization, ordered case-insensitively by name (then id) in memory.
+    /// The order is a product choice, not a provider limitation: no SQL ordering is needed for a list
+    /// this small.
+    /// </summary>
     public async Task<IReadOnlyList<ProjectView>> GetProjectsAsync(CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);

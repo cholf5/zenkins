@@ -60,7 +60,6 @@
                     </dl>
 
                     <form method="post" action="@($"/projects/{_project.Id}/delete")" data-zenkins-antiforgery class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                        <input type="hidden" name="Confirmed" value="true" />
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete project</BbButton>
                         <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">Cancel</BbButton>
                     </form>
