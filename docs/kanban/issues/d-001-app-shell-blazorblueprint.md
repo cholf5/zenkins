@@ -4,7 +4,7 @@ title: Blazor Server app shell on BlazorBlueprint v4
 type: feature
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-12
 updated: 2026-11-12
 blocked: none
@@ -222,7 +222,7 @@ PASS   nav / 200   PASS   nav /projects 200   PASS   nav /workers 200   PASS   n
 PASS   direct /not-found 200
 /app.css 200   /js/theme-persistence.js 200   /styles/theme.css 200
 /_content/BlazorBlueprint.Components/blazorblueprint.css 200   /_framework/blazor.web.js 200
-PASS   unknown html url            404 bytes=21357   "Page not found": 2   shell sidebar: 1
+PASS   unknown html url            404 (body size varies per render: 21312-21357)   "Page not found": 2   shell sidebar: 1
 PASS   unknown url, Accept */*     404 bytes=0
 PASS   missing asset               404 bytes=0
 PASS   missing package asset       404 bytes=0
@@ -345,7 +345,8 @@ The `writes=0` cases are the "never rewrite a matching preference" rule; `writes
 
 - `theme-persistence.js` duplicates the contract the package already ships in `_content/BlazorBlueprint.Components/js/theme-init.js` (`bb-theme` key, `isDarkMode` flag, `.dark` on `<html>`). Zenkins needs a *server-readable* store as well, so a bridge is unavoidable, but the duplication should be revisited if the package exposes a cookie or header hook.
 - No reconnection UI: I-001 deleted `blazor-error-ui` / `ReconnectModal`, so a dropped circuit shows a frozen shell. The package ships `bb-reconnect-*` styles; wiring them is a separate card.
+- The canonical value literals (`dark`/`light`) exist in C# and JS; only the cookie *name* is emitted from C#. Pin the two values in a test (or emit them as data attributes) before either side is edited.
 - `BlazorBlueprint.Icons.Lucide` is pinned at `2.0.2` while the comment in `Directory.Packages.props` mentions a `2.0.0` floor; reconcile the comment when the icon package next moves.
-- Blocked `localStorage` *and* a theme cookie: the bridge cannot seed `bb-theme`, so `ThemeService` falls back to `ThemeOptions.DefaultDarkMode` (light) and can still contradict a server-rendered dark class, and the class observer then rewrites the cookie. `DetectSystemPreference = false` removed the OS-preference path into this hole; closing the rest needs a seeding hook (or cookie-aware options) the package does not expose yet.
+- Blocked `localStorage` *and* a theme cookie (including the OS-dark first visit in that state): the bridge cannot seed `bb-theme`, so `ThemeService` falls back to `ThemeOptions.DefaultDarkMode` (light) and can still contradict a server-rendered dark class, and the class observer then rewrites the cookie. `DetectSystemPreference = false` removed the OS-preference path into this hole; closing the rest needs a seeding hook (or cookie-aware options) the package does not expose yet.
 
 **Not automatically covered by curl:** the click path through `BbDarkModeToggle` (it needs a Blazor circuit), the post-hydration interaction between the seeded `bb-theme` and `ThemeService`, and the mobile `BbSheet` drawer after JS sets `IsMobile`. The cookie contract, the seeded `bb-theme` and the server-rendered class are verified.
