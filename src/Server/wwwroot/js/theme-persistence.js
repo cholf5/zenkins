@@ -1,23 +1,47 @@
 /**
- * Bridges BlazorBlueprint's localStorage theme state and a server-readable cookie.
+ * Resolves the theme before the first paint and keeps the three stores in agreement.
  *
  * The server renders <html class="dark"> from the `zenkins-theme` cookie, so a saved theme
- * needs no client-side script to avoid a flash. This script keeps the two stores in sync:
- * on load it seeds `bb-theme` (what ThemeService reads) from the cookie, and a MutationObserver
- * writes the cookie back whenever the active theme changes.
+ * needs no client-side script to avoid a flash. This script covers what the server cannot see:
+ *
+ *   1. a cookie exists — the server already rendered the matching class; mirror it into
+ *      BlazorBlueprint's `bb-theme` entry so ThemeService's first interactive render agrees.
+ *   2. only a legacy `bb-theme` entry exists — adopt it and write the cookie.
+ *   3. neither exists — resolve the OS preference here, then set the class, write the cookie
+ *      and seed `bb-theme`. Without this the server renders light, `theme.js` picks dark from
+ *      `prefers-color-scheme`, and the whole page flips after hydration.
+ *
+ * After the first run the cookie always exists, so case 3 happens once per browser rather than
+ * on every visit, and the cascade of authority stays cookie → localStorage → OS preference.
  *
  * Loaded as a classic, blocking script in <head>: no Node.js, no build step, no inline script.
+ * The cookie name is emitted by App.razor from `ThemePreference.CookieName`, so it is not
+ * repeated here.
  */
 (function () {
     'use strict';
 
-    var COOKIE_NAME = 'zenkins-theme';
+    // Without the data attribute there is no reliable cookie name to use. Stay inert rather than
+    // guess one that could silently drift from the C# constant; App.razor always emits it.
+    var script = document.currentScript;
+    var COOKIE_NAME = script ? script.getAttribute('data-theme-cookie') : null;
+    if (!COOKIE_NAME) {
+        return;
+    }
+
     var STORAGE_KEY = 'bb-theme';
     var ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
+    var root = document.documentElement;
 
     function readCookie() {
-        var match = document.cookie.match(/(?:^|;\s*)zenkins-theme=(dark|light)(?:;|$)/);
-        return match ? match[1] : null;
+        var parts = document.cookie ? document.cookie.split(';') : [];
+        for (var i = 0; i < parts.length; i++) {
+            var pair = parts[i].trim().split('=');
+            if (pair[0] === COOKIE_NAME && (pair[1] === 'dark' || pair[1] === 'light')) {
+                return pair[1];
+            }
+        }
+        return null;
     }
 
     function writeCookie(isDark) {
@@ -25,40 +49,60 @@
             '; path=/; max-age=' + ONE_YEAR_SECONDS + '; SameSite=Lax';
     }
 
-    var saved = readCookie();
-    if (!saved) {
-        // First run after introducing the cookie, or a browser that kept localStorage but lost
-        // the cookie: adopt the existing BlazorBlueprint choice before the first paint.
+    function readStoredTheme() {
         try {
-            var legacy = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-            if (legacy && typeof legacy.isDarkMode === 'boolean') {
-                saved = legacy.isDarkMode ? 'dark' : 'light';
-                writeCookie(legacy.isDarkMode);
-            }
+            var raw = localStorage.getItem(STORAGE_KEY);
+            var state = raw ? JSON.parse(raw) : null;
+            return state && typeof state.isDarkMode === 'boolean' ? state : null;
         } catch (e) {
-            // Ignore a malformed legacy value; the cookie stays the source of truth.
+            // Blocked or malformed localStorage. Fall through to the OS preference.
+            return null;
         }
     }
 
-    if (saved) {
-        // The server already rendered the matching class. Mirror the value into the format
-        // ThemeService expects so its first interactive render does not disagree with the DOM.
+    function seedStoredTheme(isDark) {
         try {
             var raw = localStorage.getItem(STORAGE_KEY);
-            var state = raw ? JSON.parse(raw) : {};
+            var state = raw ? JSON.parse(raw) : null;
             if (!state || typeof state !== 'object') {
                 state = {};
             }
-            state.isDarkMode = saved === 'dark';
+            // Preserve base colour, radius and design fields ThemeService may have saved.
+            state.isDarkMode = isDark;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         } catch (e) {
             // localStorage can be blocked or full; the cookie still drives the next page load.
         }
-
-        document.documentElement.classList.toggle('dark', saved === 'dark');
     }
 
+    function prefersDark() {
+        // Deterministic light when the media query is missing or throws (older engines, kiosks,
+        // privacy modes) instead of leaving the class undecided.
+        try {
+            return typeof window !== 'undefined' &&
+                typeof window.matchMedia === 'function' &&
+                window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    var saved = readCookie();
+    if (!saved) {
+        var stored = readStoredTheme();
+        if (stored) {
+            saved = stored.isDarkMode ? 'dark' : 'light';
+        }
+    }
+
+    var isDark = saved ? saved === 'dark' : prefersDark();
+
+    root.classList.toggle('dark', isDark);
+    writeCookie(isDark);
+    seedStoredTheme(isDark);
+
+    // Keep the cookie in sync when ThemeService changes the theme later in this session.
     new MutationObserver(function () {
-        writeCookie(document.documentElement.classList.contains('dark'));
-    }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        writeCookie(root.classList.contains('dark'));
+    }).observe(root, { attributes: true, attributeFilter: ['class'] });
 })();

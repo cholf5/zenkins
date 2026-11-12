@@ -1,16 +1,15 @@
 /*
  * Zenkins theme overrides.
  *
- * Loaded before the BlazorBlueprint stylesheet in App.razor. The package ships a compiled
- * shadcn/Tailwind theme; this file only adjusts project-wide tokens, it does not replace
- * the shadcn defaults. Add colour tokens from ui.shadcn.com or tweakcn.com here if the
- * product later needs a distinct palette.
+ * Loaded before the BlazorBlueprint stylesheet in App.razor. The package emits its tokens and
+ * utilities inside cascade layers, and these rules are unlayered, so they win regardless of
+ * stylesheet order — no `:root:root` doubling is needed.
  *
- * `:root:root` is intentional: the package defines the same variables on :root, and the
- * doubled selector keeps these overrides winning even though this file loads first.
+ * Keep this file to layout tokens the project owns. Do not set `--radius` or any other value
+ * ThemeService writes inline on <html>: an inline style beats this file, so such a rule would be
+ * a no-op. Use ThemeOptions / ThemeService for those instead.
  */
-:root:root {
-    --radius: 0.5rem;
+:root {
     --sidebar-width: 15rem;
     --sidebar-width-mobile: 18rem;
 }

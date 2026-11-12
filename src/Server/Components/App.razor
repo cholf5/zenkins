@@ -14,8 +14,9 @@
     <link rel="stylesheet" href="_content/BlazorBlueprint.Components/blazorblueprint.css" />
     <link rel="stylesheet" href="app.css" />
 
-    <!-- Classic, blocking: mirrors the theme cookie into BlazorBlueprint's localStorage state. -->
-    <script src="js/theme-persistence.js"></script>
+    <!-- Classic, blocking: resolves and persists the theme before the first paint. The cookie
+         name is emitted from ThemePreference.CookieName so C# and JS cannot drift apart. -->
+    <script src="js/theme-persistence.js" data-theme-cookie="@ThemePreference.CookieName"></script>
 
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>

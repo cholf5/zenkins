@@ -2,10 +2,13 @@
 
 <BbPortalHost />
 
+@* HeightClass is appended verbatim to the provider's own utility classes, which are all prefixed
+   with the package's `bb:` variant, and the package CSS ships only the prefixed `h-full` utility.
+   The unprefixed `h-full` would therefore resolve to no rule at all. *@
 <BbSidebarProvider HeightClass="bb:h-full" CookieKey="zenkins-sidebar-state">
     <BbSidebar Collapsible="true">
         <BbSidebarHeader>
-            <a href="/" class="bb:flex bb:items-center bb:gap-2 bb:px-2 bb:py-2 bb:font-semibold bb:tracking-tight">
+            <a href="/" class="bb:flex bb:items-center bb:gap-2 bb:rounded-md bb:px-2 bb:py-2 bb:font-semibold bb:tracking-tight bb:focus-visible:outline-none bb:focus-visible:ring-2 bb:focus-visible:ring-ring bb:focus-visible:ring-offset-2">
                 <span class="bb:flex bb:h-8 bb:w-8 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:text-primary-foreground">
                     <LucideIcon Name="zap" Class="bb:h-4 bb:w-4" />
                 </span>
@@ -29,12 +32,12 @@
     <BbSidebarInset>
         <BbAppBar Sticky="false" SafeArea="false">
             <LeadingContent>
-                <BbSidebarTrigger />
+                <BbSidebarTrigger aria-label="Toggle navigation" />
             </LeadingContent>
 
             <TitleContent>
                 <div class="bb:flex bb:min-w-0 bb:items-center bb:gap-2">
-                    <a href="/" class="bb:truncate bb:font-semibold bb:tracking-tight">Zenkins</a>
+                    <a href="/" class="bb:truncate bb:rounded-md bb:font-semibold bb:tracking-tight bb:focus-visible:outline-none bb:focus-visible:ring-2 bb:focus-visible:ring-ring bb:focus-visible:ring-offset-2">Zenkins</a>
 
                     <BbSeparator Orientation="SeparatorOrientation.Vertical" Class="bb:h-6" />
 
@@ -42,7 +45,9 @@
                         <BbDropdownMenuTrigger AsChild>
                             <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" Class="bb:gap-2">
                                 <BbAvatar Size="AvatarSize.Small">
-                                    <BbAvatarFallback>AC</BbAvatarFallback>
+                                    <BbAvatarFallback>
+                                        <LucideIcon Name="building-2" Class="bb:h-4 bb:w-4" />
+                                    </BbAvatarFallback>
                                 </BbAvatar>
                                 <span class="bb:max-w-60 bb:truncate">No organization</span>
                                 <LucideIcon Name="chevrons-up-down" Class="bb:h-4 bb:w-4 bb:opacity-60" />
@@ -64,7 +69,9 @@
                     <BbDropdownMenuTrigger AsChild>
                         <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Icon" aria-label="Open user menu">
                             <BbAvatar Size="AvatarSize.Small">
-                                <BbAvatarFallback>ZK</BbAvatarFallback>
+                                <BbAvatarFallback>
+                                    <LucideIcon Name="user" Class="bb:h-4 bb:w-4" />
+                                </BbAvatarFallback>
                             </BbAvatar>
                         </BbButton>
                     </BbDropdownMenuTrigger>

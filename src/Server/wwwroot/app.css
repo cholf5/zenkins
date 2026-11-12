@@ -1,17 +1,12 @@
-/* Zenkins application styles.
-   Component styling comes from _content/BlazorBlueprint.Components/blazorblueprint.css;
-   keep this file to document-level concerns only. */
+/* Zenkins document-level styles.
+   Everything component- and theme-related comes from
+   _content/BlazorBlueprint.Components/blazorblueprint.css (including body font, colours and the
+   margin reset), so nothing here may restate or override those themable values. */
 
+/* The shell fills the viewport: BbSidebarProvider is given the package's `bb:h-full` height class. */
 html,
 body {
   height: 100%;
-}
-
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: var(--background);
-  color: var(--foreground);
 }
 
 html {
@@ -20,12 +15,4 @@ html {
 
 html.dark {
   color-scheme: dark;
-}
-
-/* Blazor's validation summary and error UI are framework-owned; keep focus visible on
-   custom anchors that are not BlazorBlueprint buttons. */
-a:focus-visible,
-button:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
 }
