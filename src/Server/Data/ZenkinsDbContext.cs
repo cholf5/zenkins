@@ -89,10 +89,11 @@ public sealed class ZenkinsDbContext : DbContext
         return base.Set<TEntity>(name);
     }
 
-    // The non-generic Find/FindAsync resolve through the entity finder and bypass Set<T>(), so they
-    // need the sampler explicitly. (EF Core 10 implements Find<T>/FindAsync<T> on top of Set<T>(),
-    // so those are covered by the overrides above; do not rely on that as it is an implementation
-    // detail, hence the explicit overrides below.)
+    // The non-generic Find/FindAsync resolve through EF's entity finder and bypass Set<T>(), so they
+    // need the sampler explicitly. (In EF Core 10 the generic Find<T>/FindAsync<T> do go through
+    // Set<T>() - pinned by Generic_find_is_the_first_tracker_access_after_a_switch - but that is an
+    // implementation detail, so the non-generic overloads carry their own guard rather than relying
+    // on it.)
     public override object? Find(Type entityType, params object?[]? keyValues)
     {
         DropTrackerIfTenantChanged();
@@ -220,7 +221,9 @@ public sealed class ZenkinsDbContext : DbContext
         // loud. Tracked-but-unmodified entries clear silently because nothing is lost.
         if (ChangeTracker.HasChanges())
         {
-            throw new TenantIsolationException("Cannot switch the active organization with unsaved changes.");
+            throw new TenantIsolationException(
+                "Cannot switch the active organization with unsaved changes. "
+                + "Finish the save, or discard the edits with ChangeTracker.Clear() and continue on a new context.");
         }
 
         ChangeTracker.Clear();

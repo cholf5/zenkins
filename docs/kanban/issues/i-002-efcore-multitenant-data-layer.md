@@ -4,7 +4,7 @@ title: EF Core data layer with enforced tenant isolation
 type: feature
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-12
 updated: 2026-11-12
 blocked: none
@@ -40,7 +40,8 @@ Isolation design:
 
 - [x] `dotnet ef migrations add Initial` produces a migration; `dotnet ef database update` applies it to SQLite.
 - [x] The migration set is provider-agnostic: one `Initial` migration (generated against Npgsql) applies to SQLite and produces the expected PostgreSQL schema in the idempotent script (`uuid`, `timestamp with time zone`, `character varying`).
-- [ ] The same migration applies to a **live** PostgreSQL instance (provider selected by connection string / config).
+- [~] The same migration applies to a **live** PostgreSQL instance (provider selected by connection string / config).
+  **Deferred to first deployment** (not open work: the migration set and its Npgsql script are verified).
   - Not verified: no PostgreSQL server, client or Docker exists in this environment (PRD §8.9 rules out Docker as an infrastructure dependency). Proof once one exists: `Database__Provider=Postgres ConnectionStrings__Default="Host=...;Database=...;Username=...;Password=..." dotnet ef database update --project src/Server`.
   - **Reviewer decision:** this AC is deferred to first deployment; merge of I-002 is accepted without a follow-up card, on the strength of the idempotent-script schema parity.
 - [x] Every tenant-scoped entity has a global query filter; a query with no `Where` clause returns only the active tenant's rows.
@@ -279,6 +280,22 @@ Handoffs and known gaps (no follow-up card):
 - **Same-organization re-select does not bump the revision.** Pinned in TC-001:
   assigning the same id twice leaves `TenantRevision` unchanged, so a no-op re-select cannot clear the
   tracker or trip the dirty-tracker guard.
+
+### 2026-11-12 - lead review round 4 (doc accuracy + generic-Find probe)
+
+- **The round-3 reviewer note that the generic overloads delegate to the non-generic `Find(Type, ...)`
+  was empirically wrong.** Removing the sampler from `Find(Type, ...)` and re-running the probe left
+  `Find<Project>` returning `null`, i.e. in EF Core 10 the generic overload really does resolve through
+  `Set<T>()` and was already covered. The card and the code comment keep that claim; the comment notes it
+  is an implementation detail, so the non-generic overloads carry their own guard instead of relying on it.
+- **New probe `Generic_find_is_the_first_tracker_access_after_a_switch_and_still_returns_null`** pins that
+  routing assumption: a future EF change in delegation direction now fails loudly instead of silently
+  losing coverage.
+- **Dirty-tracker message extended** with the recovery path: "Finish the save, or discard the edits with
+  `ChangeTracker.Clear()` and continue on a new context." The behaviour (every later data access on that
+  instance keeps throwing until the caller discards) is intentional and recorded here.
+- **Deferred AC marked as deferred** rather than unchecked-open, so later audits do not count I-002 as
+  incomplete; the live-PostgreSQL apply stays a first-deployment step.
 - **Per-request tenant context is pinned:** the registration test now also asserts that two DI scopes get
   different `ITenantContext` instances (a singleton tenant context is the worst isolation bug available).
 - **Honesty about what is not guarded:** `ChangeTracker.Entries()`, `Entry()` and `Local` still expose

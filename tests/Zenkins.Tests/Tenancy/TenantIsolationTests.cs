@@ -270,6 +270,25 @@ public sealed class TenantIsolationTests : IDisposable
     }
 
     [Fact]
+    public void Generic_find_is_the_first_tracker_access_after_a_switch_and_still_returns_null()
+    {
+        var (organizationA, organizationB) = SeedTwoOrganizations();
+        _tenantContext.OrganizationId = organizationA;
+
+        using var context = CreateContext();
+        var projectOfA = context.Projects.Single();
+
+        _tenantContext.OrganizationId = organizationB;
+
+        // Deliberately the first access on this context after the switch: no Set<T>() call has run,
+        // so the tracker still holds tenant A's project. Find<T> must not return it. This pins the
+        // EF Core 10 behaviour that the generic overload goes through Set<T>(); if a future EF
+        // version changes that, this test fails instead of silently losing coverage.
+        Assert.Null(context.Find<Project>(projectOfA.Id));
+        Assert.Equal(organizationB, Assert.Single(context.Projects.ToList()).OrganizationId);
+    }
+
+    [Fact]
     public void Switching_tenant_with_unsaved_changes_throws_instead_of_discarding_them()
     {
         var (organizationA, organizationB) = SeedTwoOrganizations();
@@ -284,7 +303,7 @@ public sealed class TenantIsolationTests : IDisposable
             _ = context.Projects.ToList();
         });
 
-        Assert.Equal("Cannot switch the active organization with unsaved changes.", exception.Message);
+        Assert.StartsWith("Cannot switch the active organization with unsaved changes.", exception.Message);
         Assert.Equal(organizationB, _tenantContext.OrganizationId);
     }
 
