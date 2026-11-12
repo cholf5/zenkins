@@ -4,7 +4,9 @@
 
 A lightweight, cross-platform, self-hosted CI server. Built with C# / .NET 10, Blazor Server, and Lua pipelines — no Java, no Docker required.
 
-> Status: **pre-alpha / scaffolding**. Nothing is runnable yet. Work is tracked in [`docs/kanban/board.md`](docs/kanban/board.md).
+> Status: **pre-alpha**. The Server runs: first-run Owner bootstrap, cookie sign-in, Organizations
+> and members, and an organization-scoped project list. Pipelines, workers, runs and secrets are not
+> implemented yet. Work is tracked in [`docs/kanban/board.md`](docs/kanban/board.md).
 
 ## Why another CI server
 
@@ -28,23 +30,37 @@ Browser → Blazor Server UI → ASP.NET Core Server → (Auth · Scheduler · S
 
 The Server never executes builds. Workers connect outbound to the Server, pull jobs, execute native processes, and stream logs back.
 
-## Documentation
-
 - [Product requirements (v1.0)](docs/prd.md) — the spec of record
+- [Development setup](docs/development.md) — clone, build, run, configure, troubleshoot
 - [Roadmap](docs/kanban/roadmap.md) — milestones and long-term direction
 - [Kanban board](docs/kanban/board.md) — what is being worked on now
 
 ## Getting started
 
-Not yet available. The first milestone (`v0.1`) delivers a deployable Server with login, Organizations, and Projects.
+The only prerequisite is the .NET 10 SDK: no Java, no Docker, no Node.js and no database server for
+the default (SQLite) path.
+
+```bash
+git clone <repository-url> zenkins && cd zenkins
+dotnet build -c Release
+dotnet run --project src/Server
+```
+
+Then open <http://localhost:5067> and register: the first account becomes the Owner of a starter
+organization and lands on the dashboard. Later accounts start without an organization until an Owner
+adds them as a member.
+
+Full instructions — verified prerequisites, PostgreSQL, configuration, repository layout and
+troubleshooting — are in [`docs/development.md`](docs/development.md).
 
 ## Repository layout
 
 ```text
 docs/
   prd.md                 # product requirements
+  development.md         # developer setup guide
   kanban/                # roadmap, board, issue cards, templates
-src/                     # .NET projects (created by I-001)
+src/                     # .NET projects (Server, Shared, Worker)
 ```
 
 ## License
