@@ -4,7 +4,7 @@ title: Organization CRUD, members, switcher
 type: feature
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-12
 updated: 2026-11-12
 blocked: none
