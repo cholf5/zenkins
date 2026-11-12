@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [DOC-001](issues/doc-001-developer-setup-guide.md) | Developer setup guide | P2 | S | — | I-001 |
 
 ## Done
 
@@ -24,3 +23,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-001](issues/f-001-identity-auth-bootstrap.md) | Identity auth + first-run Owner bootstrap | P1 | 2026-11-12 |
 | [F-002](issues/f-002-organization-membership.md) | Organization CRUD, members, switcher | P1 | 2026-11-12 |
 | [F-003](issues/f-003-project-crud.md) | Project CRUD | P1 | 2026-11-12 |
+| [DOC-001](issues/doc-001-developer-setup-guide.md) | Developer setup guide | P2 | 2026-11-12 |
