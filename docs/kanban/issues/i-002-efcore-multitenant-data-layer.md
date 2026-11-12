@@ -41,7 +41,8 @@ Isolation design:
 - [x] `dotnet ef migrations add Initial` produces a migration; `dotnet ef database update` applies it to SQLite.
 - [x] The migration set is provider-agnostic: one `Initial` migration (generated against Npgsql) applies to SQLite and produces the expected PostgreSQL schema in the idempotent script (`uuid`, `timestamp with time zone`, `character varying`).
 - [ ] The same migration applies to a **live** PostgreSQL instance (provider selected by connection string / config).
-  - Not verified: no PostgreSQL server, client or Docker exists in this environment (PRD §8.9 rules out Docker as an infrastructure dependency). Proof once one exists: `Database__Provider=Postgres ConnectionStrings__Default="Host=...;Database=...;Username=...;Password=..." dotnet ef database update --project src/Server`. No follow-up card is needed.
+  - Not verified: no PostgreSQL server, client or Docker exists in this environment (PRD §8.9 rules out Docker as an infrastructure dependency). Proof once one exists: `Database__Provider=Postgres ConnectionStrings__Default="Host=...;Database=...;Username=...;Password=..." dotnet ef database update --project src/Server`.
+  - **Reviewer decision:** this AC is deferred to first deployment; merge of I-002 is accepted without a follow-up card, on the strength of the idempotent-script schema parity.
 - [x] Every tenant-scoped entity has a global query filter; a query with no `Where` clause returns only the active tenant's rows.
 - [x] `SaveChanges` throws when a tenant-scoped entity carries a foreign `OrganizationId`.
 - [x] `OrganizationMember` enforces a unique `(OrganizationId, UserId)` index.
@@ -87,9 +88,10 @@ Steps:
 Expected:
 - Throws; nothing persisted.
 
-Result: **PASS** — `TenantIsolationTests.Cross_tenant_insert_throws_and_persists_nothing`; a second
-context confirms only the two seeded rows exist. A companion test also rejects a forged `Attach` update
-of another tenant's row (`Cross_tenant_update_throws_even_when_the_caller_fakes_the_original_value`).
+Result: **PASS** — `TenantIsolationTests.Cross_tenant_insert_throws_and_persists_nothing`; a fresh
+context under tenant A sees exactly one project (the seeded `alpha-app`), so the foreign row was never
+persisted. A companion test also rejects a forged `Attach` update of another tenant's row
+(`Cross_tenant_update_throws_even_when_the_caller_fakes_the_original_value`).
 
 ### TC-003: Duplicate membership rejected
 
@@ -187,7 +189,8 @@ Six blocking findings from review, all fixed:
    tenants' rows inside one.
 3. **Tenant switch leaked tracked rows.** `TenantContext.OrganizationId` now raises an internal change
    event; `ZenkinsDbContext` subscribes in its constructor (and unsubscribes in `Dispose`/`DisposeAsync`)
-   and calls `ChangeTracker.Clear()`. Probe: load A's project, switch to B, `FindAsync(A's id)` is null and
+   and calls `ChangeTracker.Clear()`. **Superseded in round 2:** the event/subscription/downcast was
+   replaced by the cast-free `ITenantContext.TenantRevision` counter. Probe: load A's project, switch to B, `FindAsync(A's id)` is null and
    `Projects.ToList()` is B's. Red proof: with the clear disabled this test fails.
 4. **The "one context per request" claim was false for Blazor circuits.** The context is still registered
    scoped via `AddDbContext`, and `AddDbContextFactory<ZenkinsDbContext, ZenkinsDbContextFactory>(...,
@@ -228,9 +231,9 @@ Handoffs and known gaps (no follow-up card):
 
 - **B1: tracker-clear protection no longer depends on the concrete tenant type.** `ITenantContext` now
   exposes a monotonic `TenantRevision`; `TenantContext` increments it on every real change. `ZenkinsDbContext`
-  samples it in the constructor, drops the change tracker whenever it moves (`Set<T>()` overrides catch the
-  read path before `Find`/`Include` can short-circuit, and `SaveChanges` checks it first too), and the
-  event/subscription/downcast is gone. `ZenkinsDbContextFactory` no longer has a dispose-time unsubscribe
+  samples it in the constructor, drops the change tracker whenever it moves (`Set<T>()` and the
+  non-generic `Find`/`FindAsync` overrides sample before `Find`/`Include` can short-circuit, and
+  `SaveChanges` checks first too), and the event/subscription/downcast is gone. `ZenkinsDbContextFactory` no longer has a dispose-time unsubscribe
   obligation, though callers still own disposal. Probe:
   `Find_after_a_tenant_switch_does_not_leak_through_a_decorated_tenant_context` wraps the real context in a
   forwarding `ITenantContext` decorator (standing in for F-002) and asserts `FindAsync` returns null after
@@ -238,7 +241,9 @@ Handoffs and known gaps (no follow-up card):
 - **N2: a tenant can actually be selected.** `TenantContext` is registered scoped as itself, and
   `ITenantContext` is mapped onto that same instance, so F-001 can inject the concrete type to switch and
   everyone else reads the interface. Test asserts both resolve to the same scoped instance and that a
-  factory context follows a switch made through the concrete type.
+  factory context follows a switch made through the concrete type. The `Assert.IsType<TenantContext>`
+  expectation is expected to change in F-002, when a decorator is registered instead of the concrete type
+  (the switch test already exercises the decorated shape).
 - **N3:** `base.OnModelCreating(modelBuilder)` is now called first, so F-001 re-basing on Identity cannot
   silently drop the Identity configuration.
 - **N5:** TC-003 test renamed `Duplicate_membership_is_rejected_by_the_unique_index_sqlite`, because SQLite
@@ -256,6 +261,30 @@ Handoffs and known gaps (no follow-up card):
   "table Organizations already exists".
 - **N6:** the two (now three) red-proof assertion lines are pasted into Verification so the strongest
   evidence survives the machine.
+
+### 2026-11-12 - review round 3 (B2 + notes)
+
+- **B2: `DbContext.Find` reaches the tracker without the sampler.** EF Core 10 implements the generic
+  `Find<T>`/`FindAsync<T>` on top of `Set<T>()` (so they were already covered), but the non-generic
+  `Find(Type, ...)`/`FindAsync(Type, ...)` resolve through the entity finder and bypass `Set<T>()`.
+  Both non-generic overloads now call `DropTrackerIfTenantChanged()` first. The decorated-context probe
+  asserts the non-generic `Find`/`FindAsync` **before** any `Set<T>()` access, otherwise the tracker would
+  already be cleared by the generic path. Red proof: removing the sampler from `Find(Type, ...)` makes
+  `Assert.Null(context.Find(typeof(Project), projectOfA.Id))` return the previous tenant's project.
+- **Dirty tracker fails loudly.** `DropTrackerIfTenantChanged` throws
+  `TenantIsolationException("Cannot switch the active organization with unsaved changes.")` when the
+  revision moved while `ChangeTracker.HasChanges()` is true. Tracked-but-unmodified entries still clear
+  silently, so the switch probes stay green. Pinned by
+  `Switching_tenant_with_unsaved_changes_throws_instead_of_discarding_them`.
+- **Same-organization re-select does not bump the revision.** Pinned in TC-001:
+  assigning the same id twice leaves `TenantRevision` unchanged, so a no-op re-select cannot clear the
+  tracker or trip the dirty-tracker guard.
+- **Per-request tenant context is pinned:** the registration test now also asserts that two DI scopes get
+  different `ITenantContext` instances (a singleton tenant context is the worst isolation bug available).
+- **Honesty about what is not guarded:** `ChangeTracker.Entries()`, `Entry()` and `Local` still expose
+  whatever is tracked. The binding rule remains one context per tenant and one context per operation; the
+  revision clear is defence in depth for the residual case, not a substitute for that rule. This is stated
+  in the `ZenkinsDbContext` class doc and here.
 
 ## Bugs
 
@@ -275,7 +304,7 @@ Handoffs and known gaps (no follow-up card):
   5. `Database__Provider=Postgres ConnectionStrings__Default="..." dotnet ef migrations script --idempotent --project src/Server --output /tmp/initial-postgres.sql`
 - Results (full output in `/tmp/zenkins-logs/I-002/`):
   - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build-final.log`
-  - `dotnet test` -> **PASS**, 13 passed / 0 failed / 0 skipped (2 pre-existing guards + 11 tenancy/data tests) -> `test-final.log`
+  - `dotnet test` -> **PASS**, 14 passed / 0 failed / 0 skipped (2 pre-existing guards + 12 tenancy/data tests) -> `test-final.log`
   - `dotnet ef database update` (SQLite, temp db) -> **PASS**, `Applying migration '<Initial>'` -> `ef-database-update-sqlite.log`
   - `sqlite3 <temp>.schema` -> **PASS**: three tables, `IX_OrganizationMembers_OrganizationId_UserId UNIQUE`,
     `CK_OrganizationMembers_Role`, foreign keys, `uuid`/`timestamp with time zone` columns, history row;
@@ -295,5 +324,9 @@ Handoffs and known gaps (no follow-up card):
     `Find_after_a_tenant_switch_does_not_leak_through_a_decorated_tenant_context` fails with:
     `Assert.Null() Failure: Value is not null` / `Actual: Project { … Name = "alpha-app", … }`
     -> `red-proof-tenant-revision.log`
+  - Red proof 4: sampler removed from the non-generic `Find(Type, ...)` override ->
+    `Find_after_a_tenant_switch_does_not_leak_through_a_decorated_tenant_context` fails with:
+    `Assert.Null() Failure: Value is not null` / `Actual: Project { … Name = "alpha-app", … }`
+    -> `red-proof-find-override.log`
   - PostgreSQL instance apply -> **NOT RUN**: `pg_isready`, `psql`, `docker` not found and port 5432 closed
     -> `postgres-availability.log`. Not claimed as verified.

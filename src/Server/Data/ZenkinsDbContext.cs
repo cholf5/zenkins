@@ -18,9 +18,13 @@ namespace Zenkins.Server.Data;
 /// </para>
 /// <para>
 /// <b>Tenant switches:</b> the change tracker is dropped whenever <see cref="ITenantContext.TenantRevision"/>
-/// moves, because <c>Find</c>/<c>Include</c> short-circuit on tracked rows without consulting the
-/// query filter. This is deliberately cast-free so a decorator or replacement
-/// <see cref="ITenantContext"/> (F-002) keeps the protection.
+/// moves (and the switch is rejected outright if there are unsaved changes), because
+/// <c>Find</c>/<c>Include</c> short-circuit on tracked rows without consulting the query filter. This is deliberately cast-free so a decorator or replacement
+/// <see cref="ITenantContext"/> (F-002) keeps the protection. The check runs on <c>Set&lt;T&gt;()</c>,
+/// <c>DbContext.Find</c>/<c>FindAsync</c> and <c>SaveChanges</c>; <c>ChangeTracker.Entries()</c>,
+/// <c>Entry()</c> and <c>Local</c> are <b>not</b> guarded. The binding rule therefore stays
+/// "one context per tenant, one context per operation"; the revision clear is defence in depth for
+/// the residual case, not a licence to share a context across tenants.
 /// </para>
 /// <para>
 /// <b>Lifetime:</b> register the context per operation, never as a long-lived object. UI components
@@ -83,6 +87,31 @@ public sealed class ZenkinsDbContext : DbContext
     {
         DropTrackerIfTenantChanged();
         return base.Set<TEntity>(name);
+    }
+
+    // The non-generic Find/FindAsync resolve through the entity finder and bypass Set<T>(), so they
+    // need the sampler explicitly. (EF Core 10 implements Find<T>/FindAsync<T> on top of Set<T>(),
+    // so those are covered by the overrides above; do not rely on that as it is an implementation
+    // detail, hence the explicit overrides below.)
+    public override object? Find(Type entityType, params object?[]? keyValues)
+    {
+        DropTrackerIfTenantChanged();
+        return base.Find(entityType, keyValues);
+    }
+
+    public override ValueTask<object?> FindAsync(Type entityType, params object?[]? keyValues)
+    {
+        DropTrackerIfTenantChanged();
+        return base.FindAsync(entityType, keyValues, CancellationToken.None);
+    }
+
+    public override ValueTask<object?> FindAsync(
+        Type entityType,
+        object?[]? keyValues,
+        CancellationToken cancellationToken)
+    {
+        DropTrackerIfTenantChanged();
+        return base.FindAsync(entityType, keyValues, cancellationToken);
     }
 
     /// <summary>
@@ -177,6 +206,7 @@ public sealed class ZenkinsDbContext : DbContext
     /// Rows tracked under the previous tenant must never be reachable through Find/Include, which
     /// bypass the query filter. Sampling <see cref="ITenantContext.TenantRevision"/> here keeps this
     /// working for any <see cref="ITenantContext"/> implementation, not just <see cref="TenantContext"/>.
+    /// A switch with pending work is rejected instead of silently discarding it.
     /// </summary>
     private void DropTrackerIfTenantChanged()
     {
@@ -184,6 +214,13 @@ public sealed class ZenkinsDbContext : DbContext
         if (revision == _observedTenantRevision)
         {
             return;
+        }
+
+        // Switching tenants mid-unit-of-work would either leak rows or silently discard work; make it
+        // loud. Tracked-but-unmodified entries clear silently because nothing is lost.
+        if (ChangeTracker.HasChanges())
+        {
+            throw new TenantIsolationException("Cannot switch the active organization with unsaved changes.");
         }
 
         ChangeTracker.Clear();

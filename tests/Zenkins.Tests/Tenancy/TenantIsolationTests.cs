@@ -40,6 +40,11 @@ public sealed class TenantIsolationTests : IDisposable
         var projectOfA = Assert.Single(projectsOfA);
         Assert.Equal(organizationA, projectOfA.OrganizationId);
 
+        // Re-selecting the same organization is not a tenant switch and must not bump the revision.
+        var revisionBeforeReselect = _tenantContext.TenantRevision;
+        _tenantContext.OrganizationId = organizationA;
+        Assert.Equal(revisionBeforeReselect, _tenantContext.TenantRevision);
+
         // Re-point the active tenant without rebuilding the context or the model. A filter that
         // captured ITenantContext at model-build time would still return organization A's project.
         _tenantContext.OrganizationId = organizationB;
@@ -255,8 +260,32 @@ public sealed class TenantIsolationTests : IDisposable
 
         _tenantContext.OrganizationId = organizationB;
 
+        // The non-generic overloads bypass Set<T>(), so they pin the sampler themselves. They must be
+        // asserted before any Set<T>() access, otherwise the tracker would already be cleared.
+        Assert.Null(context.Find(typeof(Project), projectOfA.Id));
+        Assert.Null(await context.FindAsync(typeof(Project), [projectOfA.Id], CancellationToken));
+        Assert.Null(context.Find<Project>(projectOfA.Id));
         Assert.Null(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
         Assert.Equal(organizationB, Assert.Single(context.Projects.ToList()).OrganizationId);
+    }
+
+    [Fact]
+    public void Switching_tenant_with_unsaved_changes_throws_instead_of_discarding_them()
+    {
+        var (organizationA, organizationB) = SeedTwoOrganizations();
+        _tenantContext.OrganizationId = organizationA;
+
+        using var context = CreateContext();
+        context.Projects.Single().Name = "pending rename";
+
+        var exception = Assert.Throws<TenantIsolationException>(() =>
+        {
+            _tenantContext.OrganizationId = organizationB;
+            _ = context.Projects.ToList();
+        });
+
+        Assert.Equal("Cannot switch the active organization with unsaved changes.", exception.Message);
+        Assert.Equal(organizationB, _tenantContext.OrganizationId);
     }
 
     [Fact]
@@ -304,6 +333,11 @@ public sealed class TenantIsolationTests : IDisposable
         // through the concrete type would not affect anything that consumes ITenantContext.
         var concreteTenant = firstRequest.ServiceProvider.GetRequiredService<TenantContext>();
         Assert.Same(concreteTenant, firstRequest.ServiceProvider.GetRequiredService<ITenantContext>());
+
+        // A singleton tenant context would leak one request's organization into every other request.
+        Assert.NotSame(
+            firstRequest.ServiceProvider.GetRequiredService<ITenantContext>(),
+            secondRequest.ServiceProvider.GetRequiredService<ITenantContext>());
 
         Assert.Equal(DatabaseProvider.Sqlite, provider.GetRequiredService<ZenkinsDataOptions>().Provider);
     }
