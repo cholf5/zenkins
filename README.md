@@ -8,8 +8,8 @@ A lightweight, cross-platform, self-hosted CI server. Built with C# / .NET 10, B
 > and members, organization switching, and projects scoped to the active organization (create/edit as
 > a Member, delete reserved to an Owner). Workers can register with an Owner-minted registration
 > token and keep heartbeats (F-004/F-005). Runs can be triggered from a project page, queued,
-> claimed by workers and executed in isolated per-run work directories (F-006/F-007); log streaming
-> and secrets are not implemented yet. Work is tracked in
+> claimed by workers, executed in isolated per-run work directories (F-006/F-007) and watched live
+> with incrementally persisted logs (F-008); secrets are not implemented yet. Work is tracked in
 > [`docs/kanban/board.md`](docs/kanban/board.md).
 
 ## Why another CI server
