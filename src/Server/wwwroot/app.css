@@ -1,0 +1,10 @@
+/* Zenkins — placeholder stylesheet.
+   The real UI styling arrives with the app shell card (D-001). */
+html {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 2rem;
+}

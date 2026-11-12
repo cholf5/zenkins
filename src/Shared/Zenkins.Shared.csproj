@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Contracts and platform-agnostic abstractions shared by Server and Worker.
+    Must NOT reference Microsoft.AspNetCore.* — see docs/kanban/issues/i-001-solution-scaffold.md.
+  -->
+
+</Project>

@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Server/Zenkins.Server.csproj" />
+    <Project Path="src/Shared/Zenkins.Shared.csproj" />
+    <Project Path="src/Worker/Zenkins.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Zenkins.Tests/Zenkins.Tests.csproj" />
+  </Folder>
+</Solution>
