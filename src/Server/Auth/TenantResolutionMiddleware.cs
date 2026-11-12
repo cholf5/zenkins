@@ -4,18 +4,19 @@ using Zenkins.Server.Data.Tenancy;
 namespace Zenkins.Server.Auth;
 
 /// <summary>
-/// Selects the request's tenant from the authenticated user's organization memberships (F-001).
-/// Runs after authentication and before the Blazor endpoint renders, so every tenant-filtered read
-/// in a static SSR request already sees the right organization.
+/// Selects the request's tenant from the organization state persisted for the authenticated user
+/// (F-002). Runs after authentication and before the Blazor endpoint renders, so every
+/// tenant-filtered read in a static SSR request already sees the right organization.
 /// <para>
-/// Interactive circuits have their own DI scope and do not pass through this middleware after the
-/// initial request; <see cref="UserSession"/> establishes their tenant when the shell resolves the
-/// signed-in user, sharing <see cref="UserOrganizationDirectory"/> with this middleware.
+/// The active organization comes from <see cref="UserOrganizationDirectory.ResolveAsync"/>: the
+/// server-side selection if the membership still exists, otherwise a valid membership, otherwise no
+/// organization. It is never derived from a route value, header, query string or cookie - the switch
+/// endpoint is the only thing that writes the selection and it rejects non-members.
 /// </para>
 /// <para>
-/// The organization is derived from the principal - never from a route value, header or query
-/// string - so a caller cannot choose someone else's tenant. F-002 replaces the "default
-/// organization" rule with an explicit selection, keeping the same guarantee.
+/// Interactive circuits have their own DI scope and do not pass through this middleware after the
+/// initial request; <see cref="UserSession"/> establishes their tenant when the shell (or a page)
+/// resolves the signed-in user, sharing <see cref="UserOrganizationDirectory"/> with this middleware.
 /// </para>
 /// </summary>
 public sealed class TenantResolutionMiddleware(RequestDelegate next)
@@ -30,8 +31,8 @@ public sealed class TenantResolutionMiddleware(RequestDelegate next)
             var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (!string.IsNullOrEmpty(userId))
             {
-                var organization = await directory.FindDefaultForUserAsync(userId, context.RequestAborted);
-                tenantContext.OrganizationId = organization?.OrganizationId;
+                var organizations = await directory.ResolveAsync(userId, context.RequestAborted);
+                tenantContext.OrganizationId = organizations.Active?.OrganizationId;
             }
         }
 

@@ -6,12 +6,14 @@ using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
+using Zenkins.Server.Organizations;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddZenkinsData(builder.Configuration, builder.Environment.ContentRootPath);
 builder.Services.AddZenkinsIdentity();
+builder.Services.AddZenkinsOrganizations();
 
 // EF logs every SQL command at Information; keep that out of the production log so a parameter
 // value can never be one config change away from being written down. Identity/registration logs
@@ -107,6 +109,10 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// Real POST endpoints for switching and Owner-only management (F-002). Form-bound, so the existing
+// UseAntiforgery validates every call.
+app.MapOrganizationEndpoints();
 
 app.Run();
 

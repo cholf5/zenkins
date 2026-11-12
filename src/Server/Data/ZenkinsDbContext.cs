@@ -158,6 +158,15 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         modelBuilder.Entity<User>(entity =>
         {
             entity.Property(user => user.CreatedAt).IsRequired();
+
+            // F-002's server-side organization selection. The FK is only an integrity net: the
+            // resolver still re-validates the selection against OrganizationMember on every request,
+            // because "member of that organization" cannot be expressed as a foreign key. SetNull
+            // keeps an account alive if an organization is ever deleted.
+            entity.HasOne<Organization>()
+                .WithMany()
+                .HasForeignKey(user => user.ActiveOrganizationId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<BootstrapMarker>(entity =>

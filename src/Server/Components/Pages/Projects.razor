@@ -1,28 +1,83 @@
 @page "/projects"
 @attribute [Authorize]
+@inject UserSession UserSession
+@inject IDbContextFactory<ZenkinsDbContext> ContextFactory
 
 <PageTitle>Projects · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
         <BbCardTitle As="h1" tabindex="-1">Projects</BbCardTitle>
-        <BbBadge Variant="BadgeVariant.Secondary">Shell preview</BbBadge>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+        }
     </div>
 
-    <BbCard>
-        <BbCardHeader>
-            <BbCardTitle As="h2">Repositories</BbCardTitle>
-            <BbCardDescription>
-                Each project pairs a Git repository with a default branch and a pipeline file.
-            </BbCardDescription>
-        </BbCardHeader>
-        <BbCardContent>
-            <BbEmpty Title="No projects yet"
-                     Description="Project creation arrives in a later card. This page is a navigation target for the shell.">
-                <Icon>
-                    <LucideIcon Name="folder-git-2" Class="bb:h-12 bb:w-12" />
-                </Icon>
-            </BbEmpty>
-        </BbCardContent>
-    </BbCard>
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else
+    {
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Repositories</BbCardTitle>
+                <BbCardDescription>
+                    Projects of the active organization. Create, edit and delete arrive with F-003; this
+                    read-only list exists so switching organizations is visibly scoped.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_projects.Count == 0)
+                {
+                    <BbEmpty Title="No projects in this organization"
+                             Description="Switch to another organization from the header, or create a project once project management lands.">
+                        <Icon>
+                            <LucideIcon Name="folder-git-2" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                }
+                else
+                {
+                    <ul class="bb:divide-y">
+                        @foreach (var project in _projects)
+                        {
+                            <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-2 bb:py-3">
+                                <div class="bb:min-w-0">
+                                    <p class="bb:font-medium">@project.Name</p>
+                                    <p class="bb:truncate bb:text-xs bb:text-muted-foreground">@project.RepositoryUrl</p>
+                                </div>
+                                <div class="bb:flex bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    <BbBadge Variant="BadgeVariant.Outline">@project.DefaultBranch</BbBadge>
+                                    <span>@project.PipelinePath</span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+    }
 </div>
+
+@code {
+    private UserSessionInfo? _session;
+    private IReadOnlyList<Project> _projects = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolve the session (which selects the circuit tenant) before reading
+        // tenant-owned rows, and do not rely on the layout having done it first.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        await using var context = await ContextFactory.CreateDbContextAsync();
+        _projects = await context.Projects
+            .OrderBy(project => project.Name)
+            .ToListAsync();
+    }
+}

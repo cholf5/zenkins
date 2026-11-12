@@ -1,5 +1,6 @@
 @inherits LayoutComponentBase
 @inject UserSession UserSession
+@inject NavigationManager Navigation
 
 <BbPortalHost />
 
@@ -42,7 +43,12 @@
 
                     <BbSeparator Orientation="SeparatorOrientation.Vertical" Class="bb:h-6" />
 
-                    @* F-001 shows the current organization; F-002 turns this into the real switcher. *@
+                    @* F-002: real switcher. It lists exactly the memberships UserSession resolved
+                       from the database and switches with a real POST; the endpoint re-validates the
+                       membership, so an organization the user does not belong to cannot be selected
+                       even by editing the form. The visually-hidden summary also announces the list
+                       to assistive technology (the menu content itself only exists while open). *@
+                    <span class="bb:sr-only">Organizations: @MembershipSummary</span>
                     <BbDropdownMenu>
                         <BbDropdownMenuTrigger AsChild>
                             <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" Class="bb:gap-2">
@@ -57,14 +63,31 @@
                         </BbDropdownMenuTrigger>
                         <BbDropdownMenuContent>
                             <BbDropdownMenuLabel>Organization</BbDropdownMenuLabel>
-                            @if (_session?.Organization is { } organization)
+                            @if (_session is { Organizations.Count: > 0 })
                             {
-                                <BbDropdownMenuItem Disabled="true">
-                                    <span class="bb:font-medium">@organization.Name</span>
-                                    <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@organization.Role</span>
-                                </BbDropdownMenuItem>
+                                @foreach (var organization in _session.Organizations)
+                                {
+                                    <form method="post" action="/organizations/switch" data-zenkins-antiforgery class="bb:block">
+                                        <input type="hidden" name="OrganizationId" value="@organization.OrganizationId" />
+                                        <input type="hidden" name="ReturnUrl" value="@_returnUrl" />
+                                        <button type="submit"
+                                                class="bb:flex bb:w-full bb:items-center bb:justify-between bb:gap-2 bb:rounded-sm bb:px-2 bb:py-1.5 bb:text-sm bb:hover:bg-accent bb:hover:text-accent-foreground"
+                                                aria-current="@(organization.OrganizationId == _session.Organization?.OrganizationId ? "true" : null)">
+                                            <span class="bb:flex bb:min-w-0 bb:items-center bb:gap-2">
+                                                <LucideIcon Name="@(organization.OrganizationId == _session.Organization?.OrganizationId ? "check" : "building-2")" Class="bb:h-4 bb:w-4 bb:shrink-0 bb:opacity-70" />
+                                                <span class="bb:truncate">@organization.Name</span>
+                                            </span>
+                                            <span class="bb:text-xs bb:text-muted-foreground">@organization.Role</span>
+                                        </button>
+                                    </form>
+                                }
+
                                 <BbDropdownMenuSeparator />
-                                <BbDropdownMenuItem Disabled="true">Switching organizations arrives with the next release</BbDropdownMenuItem>
+                                <BbDropdownMenuItem Href="/organizations/members">Members</BbDropdownMenuItem>
+                                @if (_session.CanManageActiveOrganization)
+                                {
+                                    <BbDropdownMenuItem Href="/organizations/settings">Organization settings</BbDropdownMenuItem>
+                                }
                             }
                             else
                             {
@@ -127,7 +150,15 @@
 @code {
     private UserSessionInfo? _session;
 
+    // Where the switcher returns to after a successful switch. A site-relative path only; the
+    // endpoint sanitizes it again (and ignores it if it is not a local path).
+    private string _returnUrl = "/";
+
     private string OrganizationLabel => _session?.Organization?.Name ?? "No organization";
+
+    private string MembershipSummary => _session is { Organizations.Count: > 0 }
+        ? string.Join(", ", _session.Organizations.Select(organization => organization.Name))
+        : "none";
 
     // Also what the HTTP smoke test asserts to prove the shell knows who is signed in: the user
     // menu itself is icon-only and its content only renders once the (interactive) menu opens.
@@ -140,5 +171,6 @@
         // Also selects the circuit's tenant (UserSession sets TenantContext), which is how
         // interactive components get a tenant without an HTTP request scope.
         _session = await UserSession.GetAsync();
+        _returnUrl = "/" + Navigation.ToBaseRelativePath(Navigation.Uri);
     }
 }
