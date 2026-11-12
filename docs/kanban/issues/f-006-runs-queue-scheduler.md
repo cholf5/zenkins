@@ -4,7 +4,7 @@ title: Build runs, queue and scheduler (atomic claim/lease)
 type: feature
 priority: P1
 size: L
-status: review
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
