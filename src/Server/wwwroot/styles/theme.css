@@ -5,11 +5,15 @@
  * utilities inside cascade layers, and these rules are unlayered, so they win regardless of
  * stylesheet order — no `:root:root` doubling is needed.
  *
- * Keep this file to layout tokens the project owns. Do not set `--radius` or any other value
- * ThemeService writes inline on <html>: an inline style beats this file, so such a rule would be
- * a no-op. Use ThemeOptions / ThemeService for those instead.
+ * `--radius` is a first-paint default, not a theme choice: the package uses
+ * `border-radius: var(--radius)` with no fallback and ThemeService only writes the variable
+ * inline on <html> after hydration, so without this rule the first frame has square corners and
+ * the UI pops to rounded later. Keep the value equal to ThemeOptions.DefaultRadius (0.5); the
+ * inline `--radius` ThemeService writes afterwards wins over this rule, which is what should
+ * happen — it carries the user's chosen radius.
  */
 :root {
+    --radius: 0.5rem;
     --sidebar-width: 15rem;
     --sidebar-width-mobile: 18rem;
 }

@@ -5,6 +5,14 @@ namespace Zenkins.Server.Components.Theme;
 /// (see <c>wwwroot/js/theme-persistence.js</c>) so the initial HTML can be rendered with the
 /// correct <c>.dark</c> class instead of flashing the wrong theme until Blazor starts.
 /// </summary>
+/// <remarks>
+/// The contract is exact: only the canonical <see cref="DarkValue"/> / <see cref="LightValue"/>
+/// strings are accepted, compared with <see cref="StringComparison.Ordinal"/>. Any other value
+/// (<c>Dark</c>, <c>DARK</c>, garbage) means "no preference", exactly as the pre-paint script
+/// treats it, so both sides fall back to the same resolver instead of disagreeing about the
+/// first paint. Do not relax this to a case-insensitive compare without doing the same in
+/// <c>theme-persistence.js</c>.
+/// </remarks>
 public static class ThemePreference
 {
     public const string CookieName = "zenkins-theme";
@@ -15,5 +23,5 @@ public static class ThemePreference
         string.Equals(
             httpContext?.Request.Cookies[CookieName],
             DarkValue,
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.Ordinal);
 }

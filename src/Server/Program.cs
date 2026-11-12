@@ -7,7 +7,14 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddZenkinsData(builder.Configuration, builder.Environment.ContentRootPath);
-builder.Services.AddBlazorBlueprintComponents();
+builder.Services.AddBlazorBlueprintComponents(configureTheme: theme =>
+{
+    // The pre-paint bridge in wwwroot/js/theme-persistence.js resolves the theme from the cookie,
+    // the legacy `bb-theme` entry or the OS preference and seeds `bb-theme`, so ThemeService always
+    // has a value to read. Letting it also consult the OS preference would let it disagree with the
+    // server-rendered class when localStorage is unavailable (and then rewrite the cookie).
+    theme.DetectSystemPreference = false;
+});
 
 builder.Services
     .AddRazorComponents()
