@@ -71,7 +71,10 @@ namespace Zenkins.Server.Data.Migrations
                     b.HasIndex("OrganizationId", "UserId")
                         .IsUnique();
 
-                    b.ToTable("OrganizationMembers");
+                    b.ToTable("OrganizationMembers", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrganizationMembers_Role", "\"Role\" IN ('Owner', 'Member')");
+                        });
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Project", b =>

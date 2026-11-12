@@ -1,30 +1,34 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Design;
-using Microsoft.Extensions.Configuration;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Data;
 
 /// <summary>
-/// Lets <c>dotnet ef</c> (migrations, script generation) construct the context without booting the
-/// web host. Configuration comes from the Server's <c>appsettings.json</c> next to the design-time
-/// assembly plus environment variables, so gates pass
-/// <c>Database__Provider=Postgres ConnectionStrings__Default="..."</c> without editing files.
-/// No tenant is selected at design time; filters are never evaluated while only the model is read.
+/// Creates one short-lived context per operation. Register as scoped: the factory and the factory's
+/// <see cref="ITenantContext"/> then come from the same request/circuit scope, while each
+/// <see cref="CreateDbContext"/> call gets a clean change tracker.
+/// <para>
+/// Use this from UI components and page handlers (Blazor Server keeps a circuit alive for hours, so
+/// an injected <see cref="ZenkinsDbContext"/> would be one long-lived context) and anywhere a unit of
+/// work should not share tracking state with its caller.
+/// </para>
 /// </summary>
-public sealed class ZenkinsDbContextFactory : IDesignTimeDbContextFactory<ZenkinsDbContext>
+public sealed class ZenkinsDbContextFactory : IDbContextFactory<ZenkinsDbContext>
 {
-    public ZenkinsDbContext CreateDbContext(string[] args)
+    private readonly DbContextOptions<ZenkinsDbContext> _options;
+    private readonly ITenantContext _tenantContext;
+    private readonly ISystemDataScope _systemDataScope;
+
+    public ZenkinsDbContextFactory(
+        DbContextOptions<ZenkinsDbContext> options,
+        ITenantContext tenantContext,
+        ISystemDataScope systemDataScope)
     {
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: true)
-            .AddEnvironmentVariables()
-            .Build();
-
-        var options = ZenkinsDataOptions.FromConfiguration(configuration, AppContext.BaseDirectory);
-        var builder = new DbContextOptionsBuilder<ZenkinsDbContext>().UseZenkinsDatabase(options);
-
-        return new ZenkinsDbContext(builder.Options, new TenantContext(), new SystemDataScope());
+        _options = options;
+        _tenantContext = tenantContext;
+        _systemDataScope = systemDataScope;
     }
+
+    public ZenkinsDbContext CreateDbContext() => new(_options, _tenantContext, _systemDataScope);
 }

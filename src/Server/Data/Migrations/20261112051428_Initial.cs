@@ -38,6 +38,7 @@ namespace Zenkins.Server.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_OrganizationMembers", x => x.Id);
+                    table.CheckConstraint("CK_OrganizationMembers_Role", "\"Role\" IN ('Owner', 'Member')");
                     table.ForeignKey(
                         name: "FK_OrganizationMembers_Organizations_OrganizationId",
                         column: x => x.OrganizationId,

@@ -39,12 +39,13 @@ Isolation design:
 ## Acceptance Criteria
 
 - [x] `dotnet ef migrations add Initial` produces a migration; `dotnet ef database update` applies it to SQLite.
-- [ ] The same migration applies to PostgreSQL (provider selected by connection string / config).
-  - Partially verified: the idempotent Npgsql script contains the expected PostgreSQL schema (`uuid`, `timestamp with time zone`, `character varying`), but no PostgreSQL instance or client is available in this environment, so "applies to a live instance" is **not** proven yet. See Verification.
+- [x] The migration set is provider-agnostic: one `Initial` migration (generated against Npgsql) applies to SQLite and produces the expected PostgreSQL schema in the idempotent script (`uuid`, `timestamp with time zone`, `character varying`).
+- [ ] The same migration applies to a **live** PostgreSQL instance (provider selected by connection string / config).
+  - Not verified: no PostgreSQL server, client or Docker exists in this environment (PRD §8.9 rules out Docker as an infrastructure dependency). Proof once one exists: `Database__Provider=Postgres ConnectionStrings__Default="Host=...;Database=...;Username=...;Password=..." dotnet ef database update --project src/Server`. No follow-up card is needed.
 - [x] Every tenant-scoped entity has a global query filter; a query with no `Where` clause returns only the active tenant's rows.
 - [x] `SaveChanges` throws when a tenant-scoped entity carries a foreign `OrganizationId`.
 - [x] `OrganizationMember` enforces a unique `(OrganizationId, UserId)` index.
-- [x] The context is registered scoped and resolves the tenant per request, not per process.
+- [x] The context is registered scoped (per HTTP request / per operation, never per process) and resolves the tenant through the scoped `ITenantContext`. Interactive Blazor circuits are long-lived, so UI code must not inject the context; it uses the scoped `IDbContextFactory<ZenkinsDbContext>` and creates one context per operation.
 
 ## Subtasks
 
@@ -55,9 +56,9 @@ Isolation design:
 - [x] Implement `ITenantOwned`, `ITenantContext`, filter injection, and the `SaveChanges` guard.
 - [x] Provider selection in `Program.cs` from configuration.
 - [ ] Create the initial migration; verify against SQLite and PostgreSQL.
-  - Migration created and applied to SQLite; PostgreSQL verified by schema parity of the idempotent Npgsql script only.
+  - Migration created and applied to SQLite; PostgreSQL verified by schema parity of the idempotent Npgsql script only. Regenerated after the `CK_OrganizationMembers_Role` check constraint was added.
 - [x] Wire a design-time `IDbContextFactory` for `dotnet ef`.
-  - Implemented as `IDesignTimeDbContextFactory<ZenkinsDbContext>` (the hook `dotnet ef` actually uses).
+  - Implemented as `ZenkinsDesignTimeDbContextFactory : IDesignTimeDbContextFactory<ZenkinsDbContext>` (the hook `dotnet ef` actually uses). It loads `appsettings.json`, `appsettings.{ASPNETCORE_ENVIRONMENT ?? "Production"}.json`, user secrets and environment variables, and resolves its content root from `ZENKINS_CONTENT_ROOT` or the directory holding the server `.csproj`.
 
 ## Dependencies
 
@@ -143,8 +144,10 @@ Implementation notes:
   not reachable through `ITenantContext`. `TenantContext` itself is mutable so F-001's auth pipeline (and
   these tests) can set the selected organization; it is never read from a route/query parameter here.
 - **Provider selection is configuration, not `#if`.** `Database:Provider` (`Sqlite` default, `Postgres`) +
-  `ConnectionStrings:Default`; SQLite defaults to `<content root>/App_Data/zenkins.db` (git-ignored,
-  directory created on demand). `ZenkinsDbContext` is registered scoped via `AddDbContext`, the tenant
+  `ConnectionStrings:Default`; the runtime SQLite default is `<runtime content root>/App_Data/zenkins.db`
+  (`src/Server/App_Data` under `dotnet run`, git-ignored, directory created on demand), while the
+  design-time factory resolves the content root from `ZENKINS_CONTENT_ROOT` or the server project
+  directory - never `AppContext.BaseDirectory`, which would put the design-time database under `bin/`. `ZenkinsDbContext` is registered scoped via `AddDbContext`, the tenant
   context and system scope are scoped too, and a scoped-registration test proves two request scopes get
   different context instances. `ZenkinsDbContextFactory : IDesignTimeDbContextFactory<ZenkinsDbContext>`
   reads `appsettings.json` + environment variables so `dotnet ef` works without the web host and gates can
@@ -169,6 +172,58 @@ Implementation notes:
   ConnectionStrings__Default="Host=...;Database=...;Username=...;Password=..." dotnet ef database update
   --project src/Server`.
 
+### 2026-11-12 - review round 1 (FAIL -> fixes)
+
+Six blocking findings from review, all fixed:
+
+1. **`Organization` was outside isolation.** It stays readable unfiltered (the switcher needs it before a
+   tenant exists), but `SaveChanges` now guards it explicitly: `Modified`/`Deleted` require
+   `organization.Id == activeOrganizationId` unless a system scope is active, so tenant A can no longer
+   delete organization B and cascade away its projects and members. The guard is by identity, no DB
+   round-trip. Probe: cross-tenant delete and rename are rejected and the row survives with its project.
+2. **`SystemQuery<T>()` guarded construction, not execution.** Removed. `SystemQueryAsync<T>(predicate, ct)`
+   checks `ISystemDataScope.IsActive` and materialises inside the call, so an `IQueryable` cannot be
+   captured inside the scope and enumerated after it ends. Probe: it throws with no scope and returns both
+   tenants' rows inside one.
+3. **Tenant switch leaked tracked rows.** `TenantContext.OrganizationId` now raises an internal change
+   event; `ZenkinsDbContext` subscribes in its constructor (and unsubscribes in `Dispose`/`DisposeAsync`)
+   and calls `ChangeTracker.Clear()`. Probe: load A's project, switch to B, `FindAsync(A's id)` is null and
+   `Projects.ToList()` is B's. Red proof: with the clear disabled this test fails.
+4. **The "one context per request" claim was false for Blazor circuits.** The context is still registered
+   scoped via `AddDbContext`, and `AddDbContextFactory<ZenkinsDbContext, ZenkinsDbContextFactory>(...,
+   ServiceLifetime.Scoped)` now also registers a scoped `IDbContextFactory<ZenkinsDbContext>`. Rule (in
+   code and card): components and page handlers create a context per operation through the factory; they
+   never inject `ZenkinsDbContext`. The AC wording was corrected to "per HTTP request / per operation,
+   never per process". Probe: a factory context created on A, then a new one after switching to B, each
+   see their own tenant.
+5. **`UpdatedAt` never changed.** `SaveChanges` now stamps `CreatedAt` on insert and `UpdatedAt` on
+   insert/modify (UTC) for every entity that has those properties. F-003 (project management) consumes
+   these values and must not stamp them again.
+6. **Design-time could target a different database than runtime.** The design-time factory now loads
+   `appsettings.json`, `appsettings.{ASPNETCORE_ENVIRONMENT ?? "Production"}.json`, user secrets and
+   environment variables, and resolves its content root from `ZENKINS_CONTENT_ROOT` or the directory
+   holding the server `.csproj` instead of `AppContext.BaseDirectory`, so the design-time default SQLite
+   file is `src/Server/App_Data/zenkins.db`. Recorded in the card.
+
+Cheap notes also done: `ExecuteUpdate`/`ExecuteDelete` bypass warning in the context class comment;
+`ISystemDataScope` docs now say "create a child DI scope" (not root provider, which would race);
+`TenantContext.OrganizationId` setter is `internal` plus `InternalsVisibleTo("Zenkins.Tests")`;
+`CK_OrganizationMembers_Role` check constraint so a bad `Role` value cannot break member listing;
+TC-003 now asserts the SQLite unique-index violation and its `(OrganizationId, UserId)` columns instead of
+any `DbUpdateException`; `Cross_tenant_insert_...` verifies "nothing persisted" through tenant A's own
+filtered `Projects` view. Migration regenerated for the check constraint (still generated against Npgsql).
+
+Handoffs and known gaps (no follow-up card):
+
+- **F-001**: `Program.cs` does not call `Migrate()` yet, so F-001 owns the startup migration hook. The
+  bootstrap insert must run under `ISystemDataScope` with an explicit `OrganizationId` (the first owner
+  membership is created before any tenant is selected) and must add the User foreign key to
+  `OrganizationMember`.
+- **F-002**: the organization switcher enumerates memberships before a tenant is selected, when the
+  filtered `OrganizationMembers` set is empty; that read needs the system scope (or a dedicated guarded
+  method) by design.
+- **F-003**: consumes `CreatedAt`/`UpdatedAt` as stamped by the data layer; do not duplicate the stamping.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -181,23 +236,24 @@ Implementation notes:
 - How to run/verify:
   1. `dotnet build -c Release`
   2. `dotnet test`
-  3. `dotnet ef migrations list --project src/Server`
-  4. `ConnectionStrings__Default="Data Source=/tmp/zenkins-gate.db" dotnet ef database update --project src/Server`
+  3. `ConnectionStrings__Default="Data Source=/tmp/zenkins-gate.db" dotnet ef database update --project src/Server`
      then `sqlite3 /tmp/zenkins-gate.db ".schema"` and delete the temp file
-  5. `Database__Provider=Postgres ConnectionStrings__Default="Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins" dotnet ef migrations script --idempotent --project src/Server --output /tmp/initial-postgres.sql`
-  6. `Database__Provider=Postgres ConnectionStrings__Default="..." dotnet ef migrations has-pending-model-changes --project src/Server`
+  4. `Database__Provider=Postgres ConnectionStrings__Default="Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins" dotnet ef migrations has-pending-model-changes --project src/Server`
+  5. `Database__Provider=Postgres ConnectionStrings__Default="..." dotnet ef migrations script --idempotent --project src/Server --output /tmp/initial-postgres.sql`
 - Results (full output in `/tmp/zenkins-logs/I-002/`):
-  - `dotnet build -c Release` → **PASS**, 0 warnings / 0 errors → `build-final.log`
-  - `dotnet test` → **PASS**, 8 passed / 0 failed / 0 skipped (2 pre-existing guards + 6 tenancy/data tests) → `test-final.log`
-  - `dotnet ef migrations list --project src/Server` → **PASS**, `20261112050628_Initial (Pending)` → `ef-migrations-list.log`
-  - `dotnet ef database update` (SQLite, temp db) → **PASS**, `Applying migration '20261112050628_Initial'` → `ef-database-update-sqlite.log`
-  - `sqlite3 <temp>.schema` → **PASS**: `Organizations`, `OrganizationMembers`, `Projects`,
-    `IX_OrganizationMembers_OrganizationId_UserId UNIQUE`, foreign keys, `uuid`/`timestamp with time zone`
-    columns, history row `20261112050628_Initial|10.0.15`; temp db deleted afterwards → `sqlite-schema.log`
-  - `dotnet ef migrations script --idempotent` with `Database__Provider=Postgres` → **PASS**, script contains
-    `uuid`, `timestamp with time zone`, `character varying(n)` and the unique index → `ef-script-postgres.log`,
-    `initial-postgres.sql`
-  - `dotnet ef migrations has-pending-model-changes` (Postgres) → **PASS**, "No changes have been made to
-    the model since the last migration." → `ef-pending-model-changes-postgres.log`
-  - PostgreSQL instance apply → **NOT RUN**: `pg_isready`, `psql`, `docker` not found and port 5432 closed
-    → `postgres-availability.log`. Not claimed as verified.
+  - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build-final.log`
+  - `dotnet test` -> **PASS**, 12 passed / 0 failed / 0 skipped (2 pre-existing guards + 10 tenancy/data tests) -> `test-final.log`
+  - `dotnet ef database update` (SQLite, temp db) -> **PASS**, `Applying migration '<Initial>'` -> `ef-database-update-sqlite.log`
+  - `sqlite3 <temp>.schema` -> **PASS**: three tables, `IX_OrganizationMembers_OrganizationId_UserId UNIQUE`,
+    `CK_OrganizationMembers_Role`, foreign keys, `uuid`/`timestamp with time zone` columns, history row;
+    temp db deleted -> `sqlite-schema.log`
+  - `dotnet ef migrations has-pending-model-changes` (Postgres) -> **PASS**, no pending changes -> `ef-pending-model-changes-postgres.log`
+  - `dotnet ef migrations script --idempotent` (Postgres) -> **PASS**, `uuid`/`timestamp with time zone`/
+    `character varying` plus the unique index and check constraint -> `ef-script-postgres.log`, `initial-postgres.sql`
+  - Red proof 1: organization guard branch removed -> `Cross_tenant_organization_delete_and_update_are_rejected`
+    fails with "No exception was thrown" -> `red-proof-organization-guard.log`
+  - Red proof 2: `ChangeTracker.Clear()` in the tenant-change handler disabled ->
+    `Find_after_a_tenant_switch_does_not_return_the_previous_tenants_row` fails with the old row still
+    returned -> `red-proof-tracker-clear.log`
+  - PostgreSQL instance apply -> **NOT RUN**: `pg_isready`, `psql`, `docker` not found and port 5432 closed
+    -> `postgres-availability.log`. Not claimed as verified.

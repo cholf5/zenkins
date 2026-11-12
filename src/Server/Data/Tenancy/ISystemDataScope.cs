@@ -14,9 +14,10 @@ namespace Zenkins.Server.Data.Tenancy;
 /// (and therefore in the diff) and lets the data layer refuse cross-tenant reads unless a scope
 /// is active.</item>
 /// </list>
-/// Obtain it only from the root provider (background services) and wrap the smallest possible
-/// unit of work in <see cref="BeginScope"/>. It is intentionally <b>not</b> reachable through
-/// <see cref="Zenkins.Shared.Tenancy.ITenantContext"/>.
+/// Obtain it as a scoped service and wrap the smallest possible unit of work in
+/// <see cref="BeginScope"/>. Background services resolve it from a freshly created child DI scope
+/// (never from a shared singleton, whose non-atomic counter would race between workers). It is
+/// intentionally <b>not</b> reachable through <see cref="Zenkins.Shared.Tenancy.ITenantContext"/>.
 /// </para>
 /// </summary>
 public interface ISystemDataScope

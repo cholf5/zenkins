@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -5,6 +6,7 @@ using Xunit;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Tests.Tenancy;
 
@@ -22,6 +24,8 @@ public sealed class TenantIsolationTests : IDisposable
 
     private readonly TenantContext _tenantContext = new();
     private readonly SystemDataScope _systemDataScope = new();
+
+    private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
 
     [Fact]
     public void Query_filter_returns_only_the_active_tenant_and_follows_a_tenant_switch()
@@ -43,7 +47,7 @@ public sealed class TenantIsolationTests : IDisposable
         var projectsOfB = context.Projects.ToList();
         var projectOfB = Assert.Single(projectsOfB);
         Assert.Equal(organizationB, projectOfB.OrganizationId);
-        Assert.NotEqual(projectsOfA[0].Id, projectOfB.Id);
+        Assert.NotEqual(projectOfA.Id, projectOfB.Id);
     }
 
     [Fact]
@@ -65,14 +69,11 @@ public sealed class TenantIsolationTests : IDisposable
             Assert.Throws<TenantIsolationException>(() => context.SaveChanges());
         }
 
+        // Verified through the tenant's own filtered view, not through the system escape hatch.
         using var verification = CreateContext();
-        using (_systemDataScope.BeginScope())
-        {
-            Assert.Equal(2, verification.SystemQuery<Project>().Count());
-            Assert.DoesNotContain(
-                verification.SystemQuery<Project>().ToList(),
-                project => project.Name == "smuggled");
-        }
+        var project = Assert.Single(verification.Projects.ToList());
+        Assert.Equal("alpha-app", project.Name);
+        Assert.Equal(organizationA, project.OrganizationId);
     }
 
     [Fact]
@@ -115,7 +116,37 @@ public sealed class TenantIsolationTests : IDisposable
     }
 
     [Fact]
-    public void Duplicate_membership_for_the_same_organization_and_user_is_rejected()
+    public async Task Cross_tenant_organization_delete_and_update_are_rejected()
+    {
+        var (organizationA, organizationB) = SeedTwoOrganizations();
+        _tenantContext.OrganizationId = organizationA;
+
+        using (var context = CreateContext())
+        {
+            // Organizations stay readable without a tenant (needed by the switcher), so the write
+            // guard is the only thing standing between tenant A and the cascade delete of tenant B.
+            context.Organizations.Remove(context.Organizations.Single(o => o.Id == organizationB));
+            Assert.Throws<TenantIsolationException>(() => context.SaveChanges());
+        }
+
+        using (var context = CreateContext())
+        {
+            context.Organizations.Single(o => o.Id == organizationB).Name = "renamed across tenants";
+            Assert.Throws<TenantIsolationException>(() => context.SaveChanges());
+        }
+
+        using var verification = CreateContext();
+        Assert.Equal("Beta", verification.Organizations.Single(o => o.Id == organizationB).Name);
+        using (_systemDataScope.BeginScope())
+        {
+            var survivingProjects = await verification.SystemQueryAsync<Project>(
+                project => project.OrganizationId == organizationB, CancellationToken);
+            Assert.Single(survivingProjects);
+        }
+    }
+
+    [Fact]
+    public void Duplicate_membership_is_rejected_by_the_unique_index()
     {
         var (organizationA, _) = SeedTwoOrganizations();
         _tenantContext.OrganizationId = organizationA;
@@ -136,50 +167,104 @@ public sealed class TenantIsolationTests : IDisposable
                 Role = OrganizationRole.Member,
             });
 
-            Assert.Throws<DbUpdateException>(() => context.SaveChanges());
+            var exception = Assert.Throws<DbUpdateException>(() => context.SaveChanges());
+
+            // Assert the specific unique index, not just "some DbUpdateException": once F-001 adds
+            // the User foreign key, a generic assertion would keep passing for the wrong reason.
+            var sqlite = Assert.IsType<SqliteException>(exception.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains(
+                "UNIQUE constraint failed: OrganizationMembers.OrganizationId, OrganizationMembers.UserId",
+                sqlite.Message,
+                StringComparison.Ordinal);
         }
 
         using var verification = CreateContext();
-        using (_systemDataScope.BeginScope())
-        {
-            var membership = Assert.Single(verification.SystemQuery<OrganizationMember>().ToList());
-            Assert.Equal("alice", membership.UserId);
-            Assert.Equal(OrganizationRole.Owner, membership.Role);
-        }
+        var membership = Assert.Single(verification.OrganizationMembers.ToList());
+        Assert.Equal("alice", membership.UserId);
+        Assert.Equal(OrganizationRole.Owner, membership.Role);
     }
 
     [Fact]
-    public void Insert_without_tenant_stamps_the_active_organization()
+    public void Insert_stamps_the_active_organization_and_the_timestamps()
     {
         var (organizationA, organizationB) = SeedTwoOrganizations();
         _tenantContext.OrganizationId = organizationA;
 
+        var stale = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
         using var context = CreateContext();
         var project = new Project
         {
             Name = "gamma-app",
             RepositoryUrl = RepositoryUrl,
             DefaultBranch = "main",
+            CreatedAt = stale,
+            UpdatedAt = stale,
         };
 
+        var insertStarted = DateTimeOffset.UtcNow;
         context.Projects.Add(project);
         context.SaveChanges();
 
         Assert.Equal(organizationA, project.OrganizationId);
         Assert.NotEqual(organizationB, project.OrganizationId);
         Assert.Equal("pipeline.lua", project.PipelinePath);
+        Assert.InRange(project.CreatedAt, insertStarted, DateTimeOffset.UtcNow);
+        Assert.InRange(project.UpdatedAt, insertStarted, DateTimeOffset.UtcNow);
+
+        var createdAtAfterInsert = project.CreatedAt;
+        var updateStarted = DateTimeOffset.UtcNow;
+        project.Name = "gamma-app-renamed";
+        context.SaveChanges();
+
+        Assert.Equal(createdAtAfterInsert, project.CreatedAt);
+        Assert.InRange(project.UpdatedAt, updateStarted, DateTimeOffset.UtcNow);
     }
 
     [Fact]
-    public void Data_layer_registration_is_scoped_and_reads_the_provider_from_configuration()
+    public async Task Find_after_a_tenant_switch_does_not_return_the_previous_tenants_row()
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [ZenkinsDataOptions.ProviderConfigurationKey] = "Sqlite",
-                [ZenkinsDataOptions.ConnectionStringConfigurationKey] = $"Data Source={_databasePath}",
-            })
-            .Build();
+        var (organizationA, organizationB) = SeedTwoOrganizations();
+        _tenantContext.OrganizationId = organizationA;
+
+        using var context = CreateContext();
+        var projectOfA = context.Projects.Single();
+
+        // Loaded and tracked under organization A.
+        Assert.NotNull(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
+
+        _tenantContext.OrganizationId = organizationB;
+
+        // Find short-circuits in the change tracker, so only dropping the tracker makes this null.
+        Assert.Null(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
+
+        var projectOfB = Assert.Single(context.Projects.ToList());
+        Assert.Equal(organizationB, projectOfB.OrganizationId);
+    }
+
+    [Fact]
+    public async Task System_query_requires_an_active_scope_and_returns_all_tenants_inside_it()
+    {
+        var (organizationA, organizationB) = SeedTwoOrganizations();
+        _tenantContext.OrganizationId = organizationA;
+        using var context = CreateContext();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => context.SystemQueryAsync<Project>(_ => true, CancellationToken));
+
+        using (_systemDataScope.BeginScope())
+        {
+            var all = await context.SystemQueryAsync<Project>(_ => true, CancellationToken);
+            Assert.Equal(2, all.Count);
+            Assert.Contains(all, project => project.OrganizationId == organizationA);
+            Assert.Contains(all, project => project.OrganizationId == organizationB);
+        }
+    }
+
+    [Fact]
+    public void Data_layer_registration_is_scoped_and_exposes_a_scoped_context_factory()
+    {
+        var configuration = CreateConfiguration();
 
         var services = new ServiceCollection();
         services.AddLogging();
@@ -190,12 +275,54 @@ public sealed class TenantIsolationTests : IDisposable
         using var secondRequest = provider.CreateScope();
 
         var firstContext = firstRequest.ServiceProvider.GetRequiredService<ZenkinsDbContext>();
-        var secondContext = secondRequest.ServiceProvider.GetRequiredService<ZenkinsDbContext>();
-
         Assert.Same(firstContext, firstRequest.ServiceProvider.GetRequiredService<ZenkinsDbContext>());
-        Assert.NotSame(firstContext, secondContext);
+        Assert.NotSame(firstContext, secondRequest.ServiceProvider.GetRequiredService<ZenkinsDbContext>());
+
+        var factory = firstRequest.ServiceProvider.GetRequiredService<IDbContextFactory<ZenkinsDbContext>>();
+        using var operationContext = factory.CreateDbContext();
+        using var secondOperationContext = factory.CreateDbContext();
+        Assert.NotSame(operationContext, secondOperationContext);
+
         Assert.Equal(DatabaseProvider.Sqlite, provider.GetRequiredService<ZenkinsDataOptions>().Provider);
     }
+
+    [Fact]
+    public void Factory_created_contexts_follow_the_current_tenant()
+    {
+        var (organizationA, organizationB) = SeedTwoOrganizations();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddZenkinsData(CreateConfiguration(), Path.GetTempPath());
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var tenantContext = (TenantContext)scope.ServiceProvider.GetRequiredService<ITenantContext>();
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ZenkinsDbContext>>();
+
+        tenantContext.OrganizationId = organizationA;
+        using (var context = factory.CreateDbContext())
+        {
+            Assert.Equal(organizationA, Assert.Single(context.Projects.ToList()).OrganizationId);
+        }
+
+        // A new per-operation context must see the new tenant, not a cached model or stale tracker.
+        tenantContext.OrganizationId = organizationB;
+        using (var context = factory.CreateDbContext())
+        {
+            Assert.Equal(organizationB, Assert.Single(context.Projects.ToList()).OrganizationId);
+        }
+    }
+
+    private IConfiguration CreateConfiguration() =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [ZenkinsDataOptions.ProviderConfigurationKey] = "Sqlite",
+                [ZenkinsDataOptions.ConnectionStringConfigurationKey] = $"Data Source={_databasePath}",
+            })
+            .Build();
 
     private (Guid OrganizationA, Guid OrganizationB) SeedTwoOrganizations()
     {

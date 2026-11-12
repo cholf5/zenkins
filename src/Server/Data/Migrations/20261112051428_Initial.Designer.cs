@@ -12,7 +12,7 @@ using Zenkins.Server.Data;
 namespace Zenkins.Server.Data.Migrations
 {
     [DbContext(typeof(ZenkinsDbContext))]
-    [Migration("20261112050628_Initial")]
+    [Migration("20261112051428_Initial")]
     partial class Initial
     {
         /// <inheritdoc />
@@ -74,7 +74,10 @@ namespace Zenkins.Server.Data.Migrations
                     b.HasIndex("OrganizationId", "UserId")
                         .IsUnique();
 
-                    b.ToTable("OrganizationMembers");
+                    b.ToTable("OrganizationMembers", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrganizationMembers_Role", "\"Role\" IN ('Owner', 'Member')");
+                        });
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Project", b =>

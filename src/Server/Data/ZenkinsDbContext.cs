@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Zenkins.Server.Data.Entities;
@@ -9,11 +10,23 @@ namespace Zenkins.Server.Data;
 /// <summary>
 /// The only EF Core context in the product. Tenant isolation is enforced here, not by callers:
 /// query filters hide other organizations' rows and <c>SaveChanges</c> refuses cross-tenant writes.
+/// <para>
+/// <b>Bypasses this context cannot guard:</b> <c>ExecuteUpdate</c>/<c>ExecuteDelete</c> never call
+/// <c>SaveChanges</c> (the query filter only constrains their <c>WHERE</c>, not their <c>SET</c>), and
+/// raw SQL does not go through the model at all. Do not use either on tenant-owned entities outside
+/// an <see cref="ISystemDataScope"/> scope; add a guarded method here if one is ever needed.
+/// </para>
+/// <para>
+/// <b>Lifetime:</b> register the context per operation, never as a long-lived object. UI components
+/// must not inject <see cref="ZenkinsDbContext"/> (an interactive Blazor circuit lives for hours);
+/// they use <see cref="IDbContextFactory{TContext}"/> and create one context per operation.
+/// </para>
 /// </summary>
 public sealed class ZenkinsDbContext : DbContext
 {
     private readonly ITenantContext _tenantContext;
     private readonly ISystemDataScope _systemDataScope;
+    private TenantContext? _mutableTenantContext;
 
     public ZenkinsDbContext(
         DbContextOptions<ZenkinsDbContext> options,
@@ -23,6 +36,15 @@ public sealed class ZenkinsDbContext : DbContext
     {
         _tenantContext = tenantContext;
         _systemDataScope = systemDataScope;
+
+        // A tracked entity from the previous tenant would survive a tenant switch and could be
+        // returned by Find/Include without ever touching the query filter. Dropping the tracker on
+        // every switch makes "one context, one tenant" impossible to violate by accident.
+        if (tenantContext is TenantContext mutableTenantContext)
+        {
+            _mutableTenantContext = mutableTenantContext;
+            mutableTenantContext.OrganizationIdChanged += OnOrganizationIdChanged;
+        }
     }
 
     /// <summary>
@@ -33,6 +55,11 @@ public sealed class ZenkinsDbContext : DbContext
     /// </summary>
     public Guid CurrentOrganizationId => _tenantContext.OrganizationId ?? Guid.Empty;
 
+    /// <summary>
+    /// Deliberately unfiltered: an organization must be readable while the tenant is still being
+    /// selected (the organization switcher runs before a tenant exists). Writes are still guarded
+    /// in <c>SaveChanges</c>: only the active organization may be modified or deleted.
+    /// </summary>
     public DbSet<Organization> Organizations => Set<Organization>();
 
     public DbSet<OrganizationMember> OrganizationMembers => Set<OrganizationMember>();
@@ -40,20 +67,27 @@ public sealed class ZenkinsDbContext : DbContext
     public DbSet<Project> Projects => Set<Project>();
 
     /// <summary>
-    /// Cross-tenant read path. Only usable while an <see cref="ISystemDataScope"/> scope is active;
-    /// see <see cref="ISystemDataScope"/> for why an unguarded <c>IgnoreQueryFilters()</c> is not an
-    /// acceptable escape hatch.
+    /// Cross-tenant read path for system operations. The scope is checked when the query is
+    /// <em>executed</em> and the rows are materialised before this method returns, because an
+    /// <c>IQueryable</c> could be captured inside the scope and enumerated after it ended.
     /// </summary>
-    public IQueryable<TEntity> SystemQuery<TEntity>()
+    public Task<List<TEntity>> SystemQueryAsync<TEntity>(
+        Expression<Func<TEntity, bool>> predicate,
+        CancellationToken cancellationToken = default)
         where TEntity : class
     {
+        ArgumentNullException.ThrowIfNull(predicate);
+
         if (!_systemDataScope.IsActive)
         {
             throw new InvalidOperationException(
                 $"Cross-tenant access to '{typeof(TEntity).Name}' requires an active {nameof(ISystemDataScope)} scope.");
         }
 
-        return Set<TEntity>().IgnoreQueryFilters();
+        return Set<TEntity>()
+            .IgnoreQueryFilters()
+            .Where(predicate)
+            .ToListAsync(cancellationToken);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -72,6 +106,12 @@ public sealed class ZenkinsDbContext : DbContext
             entity.HasIndex(member => new { member.OrganizationId, member.UserId }).IsUnique();
             entity.HasOne<Organization>().WithMany().HasForeignKey(member => member.OrganizationId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Belt and braces for the string conversion above: a row written by raw SQL with an
+            // unknown role value would otherwise make every member listing throw.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_OrganizationMembers_Role",
+                $"\"Role\" IN ('{nameof(OrganizationRole.Owner)}', '{nameof(OrganizationRole.Member)}')"));
 
             // NOTE: no foreign key to a users table on purpose - I-002 does not model User.
             // F-001 adds the Identity table and must add that foreign key here.
@@ -110,12 +150,48 @@ public sealed class ZenkinsDbContext : DbContext
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
+    public override void Dispose()
+    {
+        UnsubscribeFromTenantChanges();
+        base.Dispose();
+    }
+
+    public override ValueTask DisposeAsync()
+    {
+        UnsubscribeFromTenantChanges();
+        return base.DisposeAsync();
+    }
+
+    private void OnOrganizationIdChanged(object? sender, EventArgs e)
+    {
+        // Rows tracked under the previous tenant must never be reachable through Find/Include.
+        ChangeTracker.Clear();
+    }
+
+    private void UnsubscribeFromTenantChanges()
+    {
+        if (_mutableTenantContext is not null)
+        {
+            _mutableTenantContext.OrganizationIdChanged -= OnOrganizationIdChanged;
+            _mutableTenantContext = null;
+        }
+    }
+
     private void EnforceTenantBoundary()
     {
         var activeOrganizationId = _tenantContext.OrganizationId;
+        var now = DateTimeOffset.UtcNow;
 
         foreach (var entry in ChangeTracker.Entries())
         {
+            StampTimestamps(entry, now);
+
+            if (entry.Entity is Organization organization)
+            {
+                EnsureOrganizationWriteStaysInScope(entry, organization, activeOrganizationId);
+                continue;
+            }
+
             if (entry.Entity is not ITenantOwned owned)
             {
                 continue;
@@ -174,6 +250,56 @@ public sealed class ZenkinsDbContext : DbContext
                     EnsureRowBelongsToActiveOrganization(entry, owned, activeOrganizationId.Value);
                     break;
             }
+        }
+    }
+
+    /// <summary>
+    /// The tenant root is outside the query filters (it must be readable before a tenant exists), so
+    /// its writes are guarded by identity instead: touching another organization is a cross-tenant
+    /// write even though the row itself does not carry an <c>OrganizationId</c>.
+    /// </summary>
+    private void EnsureOrganizationWriteStaysInScope(
+        EntityEntry entry,
+        Organization organization,
+        Guid? activeOrganizationId)
+    {
+        if (entry.State is not (EntityState.Modified or EntityState.Deleted))
+        {
+            return;
+        }
+
+        if (_systemDataScope.IsActive)
+        {
+            return;
+        }
+
+        if (activeOrganizationId is null || organization.Id != activeOrganizationId.Value)
+        {
+            throw new TenantIsolationException(
+                $"Cannot change or delete organization '{organization.Id}': the active organization is "
+                + $"'{activeOrganizationId?.ToString() ?? "<none>"}'.");
+        }
+    }
+
+    /// <summary>
+    /// Single owner of the audit timestamps. F-003 (project management) reads these values and must
+    /// not stamp them again.
+    /// </summary>
+    private static void StampTimestamps(EntityEntry entry, DateTimeOffset now)
+    {
+        if (entry.State is not (EntityState.Added or EntityState.Modified))
+        {
+            return;
+        }
+
+        if (entry.State == EntityState.Added && entry.Metadata.FindProperty("CreatedAt") is not null)
+        {
+            entry.Property("CreatedAt").CurrentValue = now;
+        }
+
+        if (entry.Metadata.FindProperty("UpdatedAt") is not null)
+        {
+            entry.Property("UpdatedAt").CurrentValue = now;
         }
     }
 

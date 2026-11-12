@@ -10,7 +10,8 @@ public static class DataServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the provider selected by <c>Database:Provider</c> / <c>ConnectionStrings:Default</c>,
-    /// the scoped tenant context and the context itself.
+    /// the scoped tenant context and system scope, the scoped context, and a scoped factory for
+    /// per-operation contexts.
     /// </summary>
     public static IServiceCollection AddZenkinsData(
         this IServiceCollection services,
@@ -24,10 +25,16 @@ public static class DataServiceCollectionExtensions
         services.AddScoped<ITenantContext, TenantContext>();
         services.AddScoped<ISystemDataScope, SystemDataScope>();
 
-        // AddDbContext registers ZenkinsDbContext scoped by default; it also resolves the tenant
-        // context per request, so two concurrent requests never share an organization.
+        // The context is scoped: one per HTTP request / DI scope, never per process. Interactive
+        // Blazor circuits resolve the scope once per circuit, so components must NOT inject the
+        // context; they take IDbContextFactory<ZenkinsDbContext> and create one context per operation.
         services.AddDbContext<ZenkinsDbContext>((serviceProvider, builder) =>
             builder.UseZenkinsDatabase(serviceProvider.GetRequiredService<ZenkinsDataOptions>()));
+
+        services.AddDbContextFactory<ZenkinsDbContext, ZenkinsDbContextFactory>(
+            (serviceProvider, builder) =>
+                builder.UseZenkinsDatabase(serviceProvider.GetRequiredService<ZenkinsDataOptions>()),
+            ServiceLifetime.Scoped);
 
         return services;
     }
