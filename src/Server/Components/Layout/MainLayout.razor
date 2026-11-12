@@ -1,0 +1,86 @@
+@inherits LayoutComponentBase
+
+<BbPortalHost />
+
+<BbSidebarProvider HeightClass="bb:h-full" CookieKey="zenkins-sidebar-state">
+    <BbSidebar Collapsible="true">
+        <BbSidebarHeader>
+            <a href="/" class="bb:flex bb:items-center bb:gap-2 bb:px-2 bb:py-2 bb:font-semibold bb:tracking-tight">
+                <span class="bb:flex bb:h-8 bb:w-8 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:text-primary-foreground">
+                    <LucideIcon Name="zap" Class="bb:h-4 bb:w-4" />
+                </span>
+                <span class="bb:group-data-[collapsible=icon]:hidden">Zenkins</span>
+            </a>
+        </BbSidebarHeader>
+
+        <BbSidebarContent>
+            <NavMenu />
+        </BbSidebarContent>
+
+        <BbSidebarFooter>
+            <div class="bb:px-2 bb:py-1 bb:text-xs bb:text-muted-foreground bb:group-data-[collapsible=icon]:hidden">
+                CI server · shell preview
+            </div>
+        </BbSidebarFooter>
+
+        <BbSidebarRail />
+    </BbSidebar>
+
+    <BbSidebarInset>
+        <BbAppBar Sticky="false" SafeArea="false">
+            <LeadingContent>
+                <BbSidebarTrigger />
+            </LeadingContent>
+
+            <TitleContent>
+                <div class="bb:flex bb:min-w-0 bb:items-center bb:gap-2">
+                    <a href="/" class="bb:truncate bb:font-semibold bb:tracking-tight">Zenkins</a>
+
+                    <BbSeparator Orientation="SeparatorOrientation.Vertical" Class="bb:h-6" />
+
+                    <BbDropdownMenu>
+                        <BbDropdownMenuTrigger AsChild>
+                            <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" Class="bb:gap-2">
+                                <BbAvatar Size="AvatarSize.Small">
+                                    <BbAvatarFallback>AC</BbAvatarFallback>
+                                </BbAvatar>
+                                <span class="bb:max-w-60 bb:truncate">No organization</span>
+                                <LucideIcon Name="chevrons-up-down" Class="bb:h-4 bb:w-4 bb:opacity-60" />
+                            </BbButton>
+                        </BbDropdownMenuTrigger>
+                        <BbDropdownMenuContent>
+                            <BbDropdownMenuLabel>Organization</BbDropdownMenuLabel>
+                            <BbDropdownMenuItem Disabled="true">No organization selected</BbDropdownMenuItem>
+                            <BbDropdownMenuSeparator />
+                            <BbDropdownMenuItem Disabled="true">Switching arrives with F-001</BbDropdownMenuItem>
+                        </BbDropdownMenuContent>
+                    </BbDropdownMenu>
+                </div>
+            </TitleContent>
+
+            <Actions>
+                <BbDarkModeToggle />
+                <BbDropdownMenu>
+                    <BbDropdownMenuTrigger AsChild>
+                        <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Icon" aria-label="Open user menu">
+                            <BbAvatar Size="AvatarSize.Small">
+                                <BbAvatarFallback>ZK</BbAvatarFallback>
+                            </BbAvatar>
+                        </BbButton>
+                    </BbDropdownMenuTrigger>
+                    <BbDropdownMenuContent>
+                        <BbDropdownMenuLabel>Not signed in</BbDropdownMenuLabel>
+                        <BbDropdownMenuItem Disabled="true">Authentication arrives with F-001</BbDropdownMenuItem>
+                    </BbDropdownMenuContent>
+                </BbDropdownMenu>
+            </Actions>
+        </BbAppBar>
+
+        <BbScrollArea FillContainer="true"
+                      Orientation="ScrollAreaOrientation.Vertical"
+                      Type="ScrollAreaType.Auto"
+                      ViewportClass="bb:p-4">
+            @Body
+        </BbScrollArea>
+    </BbSidebarInset>
+</BbSidebarProvider>

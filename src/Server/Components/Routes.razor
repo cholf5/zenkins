@@ -1,5 +1,41 @@
+@using Zenkins.Server.Components.Pages
+
 <Router AppAssembly="typeof(Program).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" />
+        <ErrorBoundary @ref="_errorBoundary">
+            <ChildContent>
+                <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+                <FocusOnNavigate RouteData="routeData" Selector="h1" />
+            </ChildContent>
+            <ErrorContent Context="exception">
+                <LayoutView Layout="typeof(MainLayout)">
+                    <PageTitle>Something went wrong · Zenkins</PageTitle>
+                    <div class="bb:mx-auto bb:w-full bb:max-w-2xl">
+                        <BbCard>
+                            <BbCardHeader>
+                                <BbCardTitle As="h1">Something went wrong</BbCardTitle>
+                                <BbCardDescription>
+                                    The page failed to render. Your data has not been changed.
+                                </BbCardDescription>
+                            </BbCardHeader>
+                            <BbCardContent>
+                                <BbButton OnClick="Recover" Variant="ButtonVariant.Default">Try again</BbButton>
+                            </BbCardContent>
+                        </BbCard>
+                    </div>
+                </LayoutView>
+            </ErrorContent>
+        </ErrorBoundary>
     </Found>
+    <NotFound>
+        <LayoutView Layout="typeof(MainLayout)">
+            <NotFoundPage />
+        </LayoutView>
+    </NotFound>
 </Router>
+
+@code {
+    private ErrorBoundary? _errorBoundary;
+
+    private void Recover() => _errorBoundary?.Recover();
+}

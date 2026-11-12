@@ -1,16 +1,27 @@
+@inject IHttpContextAccessor HttpContextAccessor
+
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="@(ThemePreference.IsDark(HttpContextAccessor.HttpContext) ? "dark" : null)">
 
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+
+    <!-- Project theme tokens load before the package so they can override its defaults. -->
+    <link rel="stylesheet" href="styles/theme.css" />
+    <!-- Pre-built BlazorBlueprint CSS shipped as a static web asset by the NuGet package. -->
+    <link rel="stylesheet" href="_content/BlazorBlueprint.Components/blazorblueprint.css" />
     <link rel="stylesheet" href="app.css" />
-    <HeadOutlet />
+
+    <!-- Classic, blocking: mirrors the theme cookie into BlazorBlueprint's localStorage state. -->
+    <script src="js/theme-persistence.js"></script>
+
+    <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 
 <body>
-    <Routes />
+    <Routes @rendermode="InteractiveServer" />
     <script src="_framework/blazor.web.js"></script>
 </body>
 

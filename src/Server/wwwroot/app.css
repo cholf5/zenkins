@@ -1,10 +1,31 @@
-/* Zenkins — placeholder stylesheet.
-   The real UI styling arrives with the app shell card (D-001). */
-html {
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color-scheme: light dark;
+/* Zenkins application styles.
+   Component styling comes from _content/BlazorBlueprint.Components/blazorblueprint.css;
+   keep this file to document-level concerns only. */
+
+html,
+body {
+  height: 100%;
 }
 
 body {
-  margin: 2rem;
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+/* Blazor's validation summary and error UI are framework-owned; keep focus visible on
+   custom anchors that are not BlazorBlueprint buttons. */
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }

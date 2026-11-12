@@ -1,7 +1,27 @@
 @page "/"
 
-<PageTitle>Zenkins</PageTitle>
+<PageTitle>Dashboard · Zenkins</PageTitle>
 
-<h1>Zenkins</h1>
+<div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1">Dashboard</BbCardTitle>
+        <BbBadge Variant="BadgeVariant.Secondary">Shell preview</BbBadge>
+    </div>
 
-<p>Server is running. The application shell arrives with card D-001.</p>
+    <BbCard>
+        <BbCardHeader>
+            <BbCardTitle>Build activity</BbCardTitle>
+            <BbCardDescription>
+                Recent builds, running jobs, the queue and worker status will appear here.
+            </BbCardDescription>
+        </BbCardHeader>
+        <BbCardContent>
+            <BbEmpty Title="No builds yet"
+                     Description="Connect a worker and create a project to see build activity on this dashboard.">
+                <Icon>
+                    <LucideIcon Name="activity" Class="bb:h-12 bb:w-12" />
+                </Icon>
+            </BbEmpty>
+        </BbCardContent>
+    </BbCard>
+</div>

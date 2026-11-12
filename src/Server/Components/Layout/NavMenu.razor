@@ -1,0 +1,33 @@
+@using Microsoft.AspNetCore.Components.Routing
+
+<BbSidebarGroup>
+    <BbSidebarGroupLabel>Workspace</BbSidebarGroupLabel>
+    <BbSidebarGroupContent>
+        <BbSidebarMenu>
+            <BbSidebarMenuItem>
+                <BbSidebarMenuButton Href="/" Match="NavLinkMatch.All" Tooltip="Dashboard">
+                    <LucideIcon Name="layout-dashboard" Class="bb:h-4 bb:w-4" />
+                    <span>Dashboard</span>
+                </BbSidebarMenuButton>
+            </BbSidebarMenuItem>
+            <BbSidebarMenuItem>
+                <BbSidebarMenuButton Href="/projects" Tooltip="Projects">
+                    <LucideIcon Name="folder-git-2" Class="bb:h-4 bb:w-4" />
+                    <span>Projects</span>
+                </BbSidebarMenuButton>
+            </BbSidebarMenuItem>
+            <BbSidebarMenuItem>
+                <BbSidebarMenuButton Href="/workers" Tooltip="Workers">
+                    <LucideIcon Name="server" Class="bb:h-4 bb:w-4" />
+                    <span>Workers</span>
+                </BbSidebarMenuButton>
+            </BbSidebarMenuItem>
+            <BbSidebarMenuItem>
+                <BbSidebarMenuButton Href="/secrets" Tooltip="Secrets">
+                    <LucideIcon Name="key-round" Class="bb:h-4 bb:w-4" />
+                    <span>Secrets</span>
+                </BbSidebarMenuButton>
+            </BbSidebarMenuItem>
+        </BbSidebarMenu>
+    </BbSidebarGroupContent>
+</BbSidebarGroup>

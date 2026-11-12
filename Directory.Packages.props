@@ -20,6 +20,15 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.15" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
+    <!--
+      BlazorBlueprint 4.2.0 ships compiled CSS as a static web asset, so the UI needs no
+      Node.js or Tailwind CLI at build or run time. Primitives and Icons.Lucide are used
+      directly by the shell (BbPortalHost, LucideIcon), so they are pinned to the versions
+      BlazorBlueprint.Components 4.2.0 resolves rather than left floating transitively.
+    -->
+    <PackageVersion Include="BlazorBlueprint.Components" Version="4.2.0" />
+    <PackageVersion Include="BlazorBlueprint.Icons.Lucide" Version="2.0.2" />
+    <PackageVersion Include="BlazorBlueprint.Primitives" Version="4.2.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.3" />
   </ItemGroup>
 
