@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Zenkins.Server.Data.Entities;
@@ -36,8 +37,14 @@ namespace Zenkins.Server.Data;
 /// organization before any tenant exists. Only modify/delete are constrained to the active
 /// organization (or a system scope).
 /// </para>
+/// <para>
+/// <b>Identity:</b> F-001 re-bases the model on <see cref="IdentityUserContext{TUser}"/> (users,
+/// claims, logins and tokens - deliberately <b>not</b> Identity roles, because PRD §3.1.2 defines
+/// Owner/Member per organization). The Identity entities are not tenant-owned, but
+/// <see cref="OrganizationMember.UserId"/> carries a real foreign key to <c>AspNetUsers</c>.
+/// </para>
 /// </summary>
-public sealed class ZenkinsDbContext : DbContext
+public sealed class ZenkinsDbContext : IdentityUserContext<User>
 {
     private readonly ITenantContext _tenantContext;
     private readonly ISystemDataScope _systemDataScope;
@@ -72,6 +79,9 @@ public sealed class ZenkinsDbContext : DbContext
     public DbSet<OrganizationMember> OrganizationMembers => Set<OrganizationMember>();
 
     public DbSet<Project> Projects => Set<Project>();
+
+    /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
+    public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
 
     // Every query starts by resolving a DbSet, so this is the one place that catches a tenant switch
     // before Find/Include can short-circuit on rows tracked under the previous tenant.
@@ -141,9 +151,24 @@ public sealed class ZenkinsDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        // F-001 re-bases this model on Identity; a missing base call would compile but silently drop
-        // the Identity entity configuration.
+        // Identity configuration first (F-001 re-bases this model on IdentityUserContext); a missing
+        // base call would compile but silently drop the Identity entity configuration.
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.Property(user => user.CreatedAt).IsRequired();
+        });
+
+        modelBuilder.Entity<BootstrapMarker>(entity =>
+        {
+            // The fixed primary key is the race guard: the database, not a count check, decides the
+            // winner of two concurrent first registrations.
+            entity.HasKey(marker => marker.Id);
+            entity.Property(marker => marker.Id).HasMaxLength(32);
+            entity.Property(marker => marker.UserId).IsRequired().HasMaxLength(450);
+            entity.Property(marker => marker.CompletedAt).IsRequired();
+        });
 
         modelBuilder.Entity<Organization>(entity =>
         {
@@ -160,14 +185,16 @@ public sealed class ZenkinsDbContext : DbContext
             entity.HasOne<Organization>().WithMany().HasForeignKey(member => member.OrganizationId)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            // F-001: the membership's user id is now a real foreign key to the Identity users table.
+            // Deleting an account removes its memberships; it never touches the organization.
+            entity.HasOne(member => member.User).WithMany().HasForeignKey(member => member.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
             // Belt and braces for the string conversion above: a row written by raw SQL with an
             // unknown role value would otherwise make every member listing throw.
             entity.ToTable(table => table.HasCheckConstraint(
                 "CK_OrganizationMembers_Role",
                 $"\"Role\" IN ('{nameof(OrganizationRole.Owner)}', '{nameof(OrganizationRole.Member)}')"));
-
-            // NOTE: no foreign key to a users table on purpose - I-002 does not model User.
-            // F-001 adds the Identity table and must add that foreign key here.
 
             entity.HasQueryFilter(member => member.OrganizationId == CurrentOrganizationId);
         });

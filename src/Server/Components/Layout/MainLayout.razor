@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@inject UserSession UserSession
 
 <BbPortalHost />
 
@@ -41,6 +42,7 @@
 
                     <BbSeparator Orientation="SeparatorOrientation.Vertical" Class="bb:h-6" />
 
+                    @* F-001 shows the current organization; F-002 turns this into the real switcher. *@
                     <BbDropdownMenu>
                         <BbDropdownMenuTrigger AsChild>
                             <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" Class="bb:gap-2">
@@ -49,15 +51,27 @@
                                         <LucideIcon Name="building-2" Class="bb:h-4 bb:w-4" />
                                     </BbAvatarFallback>
                                 </BbAvatar>
-                                <span class="bb:max-w-60 bb:truncate">No organization</span>
+                                <span class="bb:max-w-60 bb:truncate">@OrganizationLabel</span>
                                 <LucideIcon Name="chevrons-up-down" Class="bb:h-4 bb:w-4 bb:opacity-60" />
                             </BbButton>
                         </BbDropdownMenuTrigger>
                         <BbDropdownMenuContent>
                             <BbDropdownMenuLabel>Organization</BbDropdownMenuLabel>
-                            <BbDropdownMenuItem Disabled="true">No organization selected</BbDropdownMenuItem>
-                            <BbDropdownMenuSeparator />
-                            <BbDropdownMenuItem Disabled="true">Switching arrives with F-001</BbDropdownMenuItem>
+                            @if (_session?.Organization is { } organization)
+                            {
+                                <BbDropdownMenuItem Disabled="true">
+                                    <span class="bb:font-medium">@organization.Name</span>
+                                    <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@organization.Role</span>
+                                </BbDropdownMenuItem>
+                                <BbDropdownMenuSeparator />
+                                <BbDropdownMenuItem Disabled="true">Switching organizations arrives with the next release</BbDropdownMenuItem>
+                            }
+                            else
+                            {
+                                <BbDropdownMenuItem Disabled="true">No organization selected</BbDropdownMenuItem>
+                                <BbDropdownMenuSeparator />
+                                <BbDropdownMenuItem Href="/no-organization">What to do next</BbDropdownMenuItem>
+                            }
                         </BbDropdownMenuContent>
                     </BbDropdownMenu>
                 </div>
@@ -67,7 +81,7 @@
                 <BbDarkModeToggle />
                 <BbDropdownMenu>
                     <BbDropdownMenuTrigger AsChild>
-                        <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Icon" aria-label="Open user menu">
+                        <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Icon" aria-label="@UserMenuLabel">
                             <BbAvatar Size="AvatarSize.Small">
                                 <BbAvatarFallback>
                                     <LucideIcon Name="user" Class="bb:h-4 bb:w-4" />
@@ -76,8 +90,20 @@
                         </BbButton>
                     </BbDropdownMenuTrigger>
                     <BbDropdownMenuContent>
-                        <BbDropdownMenuLabel>Not signed in</BbDropdownMenuLabel>
-                        <BbDropdownMenuItem Disabled="true">Authentication arrives with F-001</BbDropdownMenuItem>
+                        @if (_session is null)
+                        {
+                            <BbDropdownMenuLabel>Not signed in</BbDropdownMenuLabel>
+                            <BbDropdownMenuItem Href="/account/login">Sign in</BbDropdownMenuItem>
+                        }
+                        else
+                        {
+                            <BbDropdownMenuLabel>@(_session.Email ?? "Signed in")</BbDropdownMenuLabel>
+                            <BbDropdownMenuItem Disabled="true">@(_session.Organization is null ? "No organization" : _session.Organization.Role.ToString())</BbDropdownMenuItem>
+                            <BbDropdownMenuSeparator />
+                            @* A normal link to the static-SSR sign-out page; the cookie is cleared by a
+                               POST form there, not by this navigation. *@
+                            <BbDropdownMenuItem Href="/account/logout">Sign out</BbDropdownMenuItem>
+                        }
                     </BbDropdownMenuContent>
                 </BbDropdownMenu>
             </Actions>
@@ -87,7 +113,32 @@
                       Orientation="ScrollAreaOrientation.Vertical"
                       Type="ScrollAreaType.Auto"
                       ViewportClass="bb:p-4">
+            @if (_session is { HasOrganization: false })
+            {
+                <div class="bb:mb-4">
+                    <NoOrganizationNotice />
+                </div>
+            }
             @Body
         </BbScrollArea>
     </BbSidebarInset>
 </BbSidebarProvider>
+
+@code {
+    private UserSessionInfo? _session;
+
+    private string OrganizationLabel => _session?.Organization?.Name ?? "No organization";
+
+    // Also what the HTTP smoke test asserts to prove the shell knows who is signed in: the user
+    // menu itself is icon-only and its content only renders once the (interactive) menu opens.
+    private string UserMenuLabel => _session?.Email is { } email
+        ? $"Open user menu for {email}"
+        : "Open user menu";
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Also selects the circuit's tenant (UserSession sets TenantContext), which is how
+        // interactive components get a tenant without an HTTP request scope.
+        _session = await UserSession.GetAsync();
+    }
+}

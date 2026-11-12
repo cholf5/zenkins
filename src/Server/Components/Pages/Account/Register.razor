@@ -1,0 +1,155 @@
+@page "/account/register"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Identity
+@inject RegistrationService Registration
+@inject BootstrapService Bootstrap
+@inject UserManager<User> UserManager
+@inject SignInManager<User> SignInManager
+@inject NavigationManager Navigation
+
+<PageTitle>Register · Zenkins</PageTitle>
+
+<div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
+    <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
+        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">Create an account</h1>
+        <p class="bb:text-sm bb:text-muted-foreground">
+            @if (_isFirstRun)
+            {
+                <span>This deployment has no users yet: the first account becomes the <strong>Owner</strong> of the starter organization.</span>
+            }
+            else
+            {
+                <span>Your account starts without an organization. An Owner has to add you as a member before you can work with projects.</span>
+            }
+        </p>
+    </div>
+
+    <div class="bb:p-6 bb:pt-0">
+        <EditForm Model="Input!" FormName="@FormName" OnValidSubmit="RegisterAsync" class="bb:space-y-4">
+            <DataAnnotationsValidator />
+
+            @if (_errors.Count > 0)
+            {
+                <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                    @foreach (var error in _errors)
+                    {
+                        <p>@error</p>
+                    }
+                </div>
+            }
+
+            <div class="bb:space-y-2">
+                <label for="register-email" class="bb:text-sm bb:font-medium">Email</label>
+                <InputText id="register-email"
+                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                           @bind-Value="Input!.Email"
+                           autocomplete="username"
+                           autofocus />
+                <ValidationMessage For="() => Input!.Email" class="validation-message" />
+            </div>
+
+            <div class="bb:space-y-2">
+                <label for="register-password" class="bb:text-sm bb:font-medium">Password</label>
+                <InputText id="register-password"
+                           type="password"
+                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                           @bind-Value="Input!.Password"
+                           autocomplete="new-password" />
+                <p class="bb:text-xs bb:text-muted-foreground">
+                    At least 12 characters, with upper and lower case letters, a digit and a symbol.
+                </p>
+                <ValidationMessage For="() => Input!.Password" class="validation-message" />
+            </div>
+
+            <div class="bb:space-y-2">
+                <label for="register-password-confirm" class="bb:text-sm bb:font-medium">Confirm password</label>
+                <InputText id="register-password-confirm"
+                           type="password"
+                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                           @bind-Value="Input!.ConfirmPassword"
+                           autocomplete="new-password" />
+                <ValidationMessage For="() => Input!.ConfirmPassword" class="validation-message" />
+            </div>
+
+            <button type="submit"
+                    class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                Create account
+            </button>
+        </EditForm>
+
+        <p class="bb:mt-4 bb:text-center bb:text-sm bb:text-muted-foreground">
+            Already have an account?
+            <a href="/account/login" class="bb:font-medium bb:underline bb:underline-offset-4">Sign in</a>
+        </p>
+    </div>
+</div>
+
+@code {
+    private const string FormName = "register";
+
+    private readonly List<string> _errors = [];
+    private bool _isFirstRun;
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromForm(FormName = FormName)]
+    private RegisterInput? Input { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // A plain GET renders the empty form; a form post supplies the model itself.
+        Input ??= new();
+
+        // Informational only (the bootstrap itself is decided by the database marker inside the
+        // registration transaction); a stale hint must never influence authorization.
+        _isFirstRun = !await Bootstrap.HasCompletedAsync();
+    }
+
+    private async Task RegisterAsync()
+    {
+        _errors.Clear();
+
+        var input = Input!;
+        var result = await Registration.RegisterAsync(input.Email, input.Password);
+        if (!result.Succeeded)
+        {
+            _errors.AddRange(result.Errors);
+            return;
+        }
+
+        // The account exists; sign it in so registration ends at the destination, not on a second form.
+        var user = await UserManager.FindByNameAsync(input.Email.Trim());
+        if (user is null)
+        {
+            _errors.Add("The account was created but could not be loaded. Try signing in.");
+            return;
+        }
+
+        await SignInManager.SignInAsync(user, isPersistent: false);
+
+        Navigation.NavigateTo(result.Bootstrap == BootstrapOutcome.Created
+            ? ReturnUrlSanitizer.Sanitize(ReturnUrl)
+            : "/no-organization");
+    }
+
+    /// <summary>The registration form fields. Identity additionally enforces the password policy.</summary>
+    public sealed class RegisterInput
+    {
+        [Required(ErrorMessage = "Enter your email address.")]
+        [EmailAddress(ErrorMessage = "Enter a valid email address.")]
+        [StringLength(256)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Choose a password.")]
+        [StringLength(128, MinimumLength = 12, ErrorMessage = "Use at least 12 characters.")]
+        public string Password { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Repeat the password.")]
+        [Compare(nameof(Password), ErrorMessage = "The passwords do not match.")]
+        public string ConfirmPassword { get; set; } = string.Empty;
+    }
+}

@@ -1,0 +1,80 @@
+@page "/account/logout"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using Microsoft.AspNetCore.Identity
+@inject SignInManager<User> SignInManager
+@inject NavigationManager Navigation
+
+<PageTitle>Sign out · Zenkins</PageTitle>
+
+<div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
+    <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
+        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">Sign out</h1>
+        <p class="bb:text-sm bb:text-muted-foreground">
+            @if (IsSignedIn)
+            {
+                <span>Signing out clears the Zenkins authentication cookie on this browser.</span>
+            }
+            else
+            {
+                <span>You are not signed in. Sign in to continue.</span>
+            }
+        </p>
+    </div>
+
+    <div class="bb:p-6 bb:pt-0">
+        @if (IsSignedIn)
+        {
+            @* A POST form, never a GET link: a sign-out that a third-party page can trigger with an
+               <img> tag is a logout-CSRF. The antiforgery token is validated by UseAntiforgery. *@
+            <EditForm Model="Input!" FormName="@FormName" OnValidSubmit="SignOutAsync" class="bb:space-y-4">
+                <DataAnnotationsValidator />
+                <input type="hidden" name="Input.Confirm" value="true" />
+                <button type="submit"
+                        class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                    Sign out
+                </button>
+            </EditForm>
+        }
+        else
+        {
+            <a href="/account/login"
+               class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                Go to sign in
+            </a>
+        }
+    </div>
+</div>
+
+@code {
+    private const string FormName = "logout";
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = FormName)]
+    private LogoutInput? Input { get; set; }
+
+    protected override void OnInitialized()
+    {
+        // A plain GET renders the confirmation form; a form post supplies the model itself.
+        Input ??= new();
+    }
+
+    private bool IsSignedIn => HttpContext?.User.Identity?.IsAuthenticated == true;
+
+    private async Task SignOutAsync()
+    {
+        await SignInManager.SignOutAsync();
+
+        // Static SSR: this becomes a 302 and the Set-Cookie that expires the auth cookie.
+        Navigation.NavigateTo("/account/login?signedOut=true");
+    }
+
+    /// <summary>The confirmation form; it has no user-editable fields beyond the antiforgery token.</summary>
+    public sealed class LogoutInput
+    {
+        public bool Confirm { get; set; }
+    }
+}

@@ -1,27 +1,59 @@
 @page "/"
+@attribute [Authorize]
+@inject UserSession UserSession
 
 <PageTitle>Dashboard · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
         <BbCardTitle As="h1" tabindex="-1">Dashboard</BbCardTitle>
-        <BbBadge Variant="BadgeVariant.Secondary">Shell preview</BbBadge>
+        @if (_session?.HasOrganization == true)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@_session.Organization!.Name</BbBadge>
+        }
     </div>
 
-    <BbCard>
-        <BbCardHeader>
-            <BbCardTitle As="h2">Build activity</BbCardTitle>
-            <BbCardDescription>
-                Recent builds, running jobs, the queue and worker status will appear here.
-            </BbCardDescription>
-        </BbCardHeader>
-        <BbCardContent>
-            <BbEmpty Title="No builds yet"
-                     Description="Connect a worker and create a project to see build activity on this dashboard.">
-                <Icon>
-                    <LucideIcon Name="activity" Class="bb:h-12 bb:w-12" />
-                </Icon>
-            </BbEmpty>
-        </BbCardContent>
-    </BbCard>
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Finish setting up your account</BbCardTitle>
+                <BbCardDescription>
+                    The dashboard stays empty until this account belongs to an organization.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <BbButton Href="/no-organization" Variant="ButtonVariant.Default">See the next step</BbButton>
+            </BbCardContent>
+        </BbCard>
+    }
+    else
+    {
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Build activity</BbCardTitle>
+                <BbCardDescription>
+                    Recent builds, running jobs, the queue and worker status will appear here.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <BbEmpty Title="No builds yet"
+                         Description="Connect a worker and create a project to see build activity on this dashboard.">
+                    <Icon>
+                        <LucideIcon Name="activity" Class="bb:h-12 bb:w-12" />
+                    </Icon>
+                </BbEmpty>
+            </BbCardContent>
+        </BbCard>
+    }
 </div>
+
+@code {
+    private UserSessionInfo? _session;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await UserSession.GetAsync();
+    }
+}

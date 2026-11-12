@@ -15,6 +15,7 @@
     <PackageReference Include="BlazorBlueprint.Components" />
     <PackageReference Include="BlazorBlueprint.Icons.Lucide" />
     <PackageReference Include="BlazorBlueprint.Primitives" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />

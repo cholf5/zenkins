@@ -1,10 +1,18 @@
+@using Microsoft.AspNetCore.Components.Routing
 @using Zenkins.Server.Components.Pages
 
 <Router AppAssembly="typeof(Program).Assembly">
     <Found Context="routeData">
         <ErrorBoundary @ref="_errorBoundary">
             <ChildContent>
-                <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+                @* Pages carry [Authorize]; anonymous requests are sent to /account/login with a
+                   ReturnUrl by the fallback below. Account pages carry no [Authorize] and are
+                   additionally excluded from interactive routing (see App.razor). *@
+                <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
+                    <NotAuthorized>
+                        <RedirectToLogin />
+                    </NotAuthorized>
+                </AuthorizeRouteView>
                 <FocusOnNavigate RouteData="routeData" Selector="h1" />
             </ChildContent>
             <ErrorContent Context="exception">

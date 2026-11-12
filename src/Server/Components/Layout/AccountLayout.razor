@@ -1,0 +1,20 @@
+@* Account pages are static SSR (they must be able to set/clear the auth cookie), so this layout is
+   deliberately plain HTML/CSS with no interactive components and no app shell. *@
+@inherits LayoutComponentBase
+
+<div class="bb:flex bb:min-h-screen bb:items-center bb:justify-center bb:p-4">
+    <div class="bb:w-full bb:max-w-md bb:space-y-6">
+        <div class="bb:flex bb:items-center bb:justify-center bb:gap-2">
+            <span class="bb:flex bb:h-9 bb:w-9 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:text-primary-foreground">
+                <LucideIcon Name="zap" Class="bb:h-5 bb:w-5" />
+            </span>
+            <span class="bb:text-lg bb:font-semibold bb:tracking-tight">Zenkins</span>
+        </div>
+
+        @Body
+
+        <p class="bb:text-center bb:text-xs bb:text-muted-foreground">
+            Zenkins CI · self-hosted build server
+        </p>
+    </div>
+</div>

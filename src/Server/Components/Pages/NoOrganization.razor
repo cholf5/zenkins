@@ -1,0 +1,61 @@
+@page "/no-organization"
+@attribute [Authorize]
+@inject UserSession UserSession
+
+<PageTitle>No organization · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1" tabindex="-1">No organization</BbCardTitle>
+    </div>
+
+    @if (_session is { HasOrganization: true })
+    {
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">You are already a member of @_session.Organization!.Name</BbCardTitle>
+                <BbCardDescription>
+                    This page is only shown to accounts that are not attached to an organization yet.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <BbButton Href="/" Variant="ButtonVariant.Default">Back to dashboard</BbButton>
+            </BbCardContent>
+        </BbCard>
+    }
+    else
+    {
+        <NoOrganizationNotice />
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">What happens next</BbCardTitle>
+                <BbCardDescription>
+                    Accounts created after the first deployment start without an organization. This is
+                    intentional: access is granted by an Owner, not by signing up.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <ul class="bb:list-disc bb:space-y-2 bb:pl-5 bb:text-sm bb:text-muted-foreground">
+                    <li>Ask the Owner of the organization you want to join to add your account as a member.</li>
+                    <li>Until then, projects, workers, secrets and builds remain unavailable to this account.</li>
+                    <li>You can sign out and use a different account at any time.</li>
+                </ul>
+            </BbCardContent>
+        </BbCard>
+
+        <div class="bb:flex bb:flex-wrap bb:gap-3">
+            <BbButton Href="/" Variant="ButtonVariant.Outline">Back to dashboard</BbButton>
+            <BbButton Href="/account/logout" Variant="ButtonVariant.Ghost">Sign out</BbButton>
+        </div>
+    }
+</div>
+
+@code {
+    private UserSessionInfo? _session;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await UserSession.GetAsync();
+    }
+}

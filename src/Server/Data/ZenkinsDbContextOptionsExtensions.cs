@@ -32,7 +32,16 @@ public static class ZenkinsDbContextOptionsExtensions
         {
             case DatabaseProvider.Sqlite:
                 EnsureSqliteDirectoryExists(options.ConnectionString);
-                builder.UseSqlite(options.ConnectionString);
+
+                // SQLite only enforces foreign keys when PRAGMA foreign_keys is on for the
+                // connection (its default is off). Without this the OrganizationMember -> AspNetUsers
+                // foreign key F-001 added would be decorative in development while PostgreSQL
+                // enforces it in production. Existing connection-string keywords are preserved.
+                var sqliteConnectionString = new SqliteConnectionStringBuilder(options.ConnectionString)
+                {
+                    ForeignKeys = true,
+                }.ConnectionString;
+                builder.UseSqlite(sqliteConnectionString);
 
                 // The single migration set is generated against PostgreSQL (uuid, timestamptz,
                 // varchar), because a SQLite-generated set would create TEXT columns that Npgsql

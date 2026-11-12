@@ -181,9 +181,18 @@ public sealed class TwoOrgsFixture : IDisposable
     private void Seed()
     {
         // Bootstrap data exists before any tenant is selected, so it can only be written through
-        // the system scope - the same shape F-001's first-run bootstrap will use.
+        // the system scope - the same shape F-001's first-run bootstrap uses.
         using var scope = SystemDataScope.BeginScope();
         using var context = CreateContext();
+
+        // F-001 made OrganizationMember.UserId a real foreign key to AspNetUsers, so the fixture
+        // seeds the three identity accounts its memberships refer to. Ids stay the readable strings
+        // the existing probes assert on; emails exist because Identity stores one per account.
+        context.Users.AddRange(
+            CreateUser(OrgAOwnerUserId, "alice@example.test"),
+            CreateUser(OrgAMemberUserId, "bob@example.test"),
+            CreateUser(OrgBOwnerUserId, "carol@example.test"));
+        context.SaveChanges();
 
         context.Organizations.AddRange(
             new Organization { Id = OrgAId, Name = OrgAName },
@@ -232,6 +241,22 @@ public sealed class TwoOrgsFixture : IDisposable
 
         context.SaveChanges();
     }
+
+    /// <summary>
+    /// A seeded account with a non-null security stamp (Identity's claims factory requires one) and
+    /// no password: these users exist to satisfy the membership foreign key, not to sign in.
+    /// </summary>
+    private static User CreateUser(string userId, string email) => new()
+    {
+        Id = userId,
+        UserName = userId,
+        NormalizedUserName = userId.ToUpperInvariant(),
+        Email = email,
+        NormalizedEmail = email.ToUpperInvariant(),
+        EmailConfirmed = true,
+        SecurityStamp = $"seed-security-stamp-{userId}",
+        ConcurrencyStamp = $"seed-concurrency-stamp-{userId}",
+    };
 
     public void Dispose()
     {

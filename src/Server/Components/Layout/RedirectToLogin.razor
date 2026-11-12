@@ -1,0 +1,12 @@
+@inject NavigationManager Navigation
+
+@* Renders nothing: authorization failed for the requested page, so send the browser to the login
+   page (a full page load, because the account pages are static SSR) and come back afterwards. *@
+@code {
+    protected override void OnInitialized()
+    {
+        // ToBaseRelativePath keeps the path and query without the app base, e.g. "projects?page=2".
+        var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri);
+        Navigation.NavigateTo(ReturnUrlSanitizer.BuildLoginUrl("/" + relativePath), forceLoad: true);
+    }
+}

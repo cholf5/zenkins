@@ -14,10 +14,13 @@ public sealed class OrganizationMember : ITenantOwned
     public Guid OrganizationId { get; set; }
 
     /// <summary>
-    /// Identity user id. Stored as a plain column with no navigation or foreign key because I-002
-    /// does not model <c>User</c>; F-001 adds the ASP.NET Identity table and must add the foreign key.
+    /// Identity user id (F-001 added the foreign key to the Identity users table). The row is deleted
+    /// with the account, never with the organization's other data.
     /// </summary>
     public required string UserId { get; set; }
+
+    /// <summary>Optional navigation for member listings (F-002); the id above is the source of truth.</summary>
+    public User? User { get; set; }
 
     public OrganizationRole Role { get; set; } = OrganizationRole.Member;
 

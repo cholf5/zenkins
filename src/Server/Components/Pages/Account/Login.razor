@@ -1,0 +1,133 @@
+@page "/account/login"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Identity
+@inject SignInManager<User> SignInManager
+@inject NavigationManager Navigation
+
+<PageTitle>Sign in · Zenkins</PageTitle>
+
+<div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
+    <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
+        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">Sign in</h1>
+        <p class="bb:text-sm bb:text-muted-foreground">
+            Use the account you registered, or the account an organization Owner invited.
+        </p>
+    </div>
+
+    <div class="bb:p-6 bb:pt-0">
+        <EditForm Model="Input!" FormName="@FormName" OnValidSubmit="SignInAsync" class="bb:space-y-4">
+            <DataAnnotationsValidator />
+
+            @if (SignedOut)
+            {
+                <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                    You have been signed out.
+                </div>
+            }
+
+            @if (_errors.Count > 0)
+            {
+                <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                    @foreach (var error in _errors)
+                    {
+                        <p>@error</p>
+                    }
+                </div>
+            }
+
+            <div class="bb:space-y-2">
+                <label for="login-email" class="bb:text-sm bb:font-medium">Email</label>
+                <InputText id="login-email"
+                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                           @bind-Value="Input!.Email"
+                           autocomplete="username"
+                           autofocus />
+                <ValidationMessage For="() => Input!.Email" class="validation-message" />
+            </div>
+
+            <div class="bb:space-y-2">
+                <label for="login-password" class="bb:text-sm bb:font-medium">Password</label>
+                <InputText id="login-password"
+                           type="password"
+                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                           @bind-Value="Input!.Password"
+                           autocomplete="current-password" />
+                <ValidationMessage For="() => Input!.Password" class="validation-message" />
+            </div>
+
+            <button type="submit"
+                    class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                Sign in
+            </button>
+        </EditForm>
+
+        <p class="bb:mt-4 bb:text-center bb:text-sm bb:text-muted-foreground">
+            No account yet?
+            <a href="/account/register" class="bb:font-medium bb:underline bb:underline-offset-4">Register</a>
+        </p>
+    </div>
+</div>
+
+@code {
+    private const string FormName = "login";
+
+    private readonly List<string> _errors = [];
+
+    [SupplyParameterFromQuery]
+    private bool SignedOut { get; set; }
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromForm(FormName = FormName)]
+    private LoginInput? Input { get; set; }
+
+    protected override void OnInitialized()
+    {
+        // A plain GET renders the empty form; a form post supplies the model itself.
+        Input ??= new();
+    }
+
+    private async Task SignInAsync()
+    {
+        _errors.Clear();
+
+        var input = Input!;
+        var result = await SignInManager.PasswordSignInAsync(
+            input.Email.Trim(),
+            input.Password,
+            isPersistent: false,
+            lockoutOnFailure: true);
+
+        if (result.Succeeded)
+        {
+            Navigation.NavigateTo(ReturnUrlSanitizer.Sanitize(ReturnUrl));
+            return;
+        }
+
+        if (result.IsLockedOut)
+        {
+            // Deliberately specific so a legitimate user is not told to keep retrying, and
+            // deliberately silent about which part of the credential was wrong.
+            _errors.Add("This account is temporarily locked after repeated failed sign-ins. Try again in 15 minutes.");
+            return;
+        }
+
+        _errors.Add("Incorrect email or password.");
+    }
+
+    /// <summary>The login form fields. Validation runs server-side on the POST (<c>OnValidSubmit</c>).</summary>
+    public sealed class LoginInput
+    {
+        [Required(ErrorMessage = "Enter your email address.")]
+        [EmailAddress(ErrorMessage = "Enter a valid email address.")]
+        [StringLength(256)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Enter your password.")]
+        public string Password { get; set; } = string.Empty;
+    }
+}
