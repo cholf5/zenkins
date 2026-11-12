@@ -22,12 +22,20 @@ public static class DataServiceCollectionExtensions
 
         // Options are immutable and content-root dependent, so they are captured once at startup.
         services.AddSingleton(options);
-        services.AddScoped<ITenantContext, TenantContext>();
+
+        // The concrete type is what the auth pipeline switches tenants through; the interface is
+        // mapped onto the very same scoped instance, so consumers cannot end up with a second copy.
+        services.AddScoped<TenantContext>();
+        services.AddScoped<ITenantContext>(serviceProvider => serviceProvider.GetRequiredService<TenantContext>());
         services.AddScoped<ISystemDataScope, SystemDataScope>();
 
         // The context is scoped: one per HTTP request / DI scope, never per process. Interactive
         // Blazor circuits resolve the scope once per circuit, so components must NOT inject the
         // context; they take IDbContextFactory<ZenkinsDbContext> and create one context per operation.
+        //
+        // Both registrations TryAdd the same DbContextOptions<ZenkinsDbContext> service. Today the
+        // two options actions are identical, so order is irrelevant - keep them identical, because
+        // whichever registration runs last would otherwise win for both the context and the factory.
         services.AddDbContext<ZenkinsDbContext>((serviceProvider, builder) =>
             builder.UseZenkinsDatabase(serviceProvider.GetRequiredService<ZenkinsDataOptions>()));
 

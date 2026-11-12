@@ -146,7 +146,7 @@ public sealed class TenantIsolationTests : IDisposable
     }
 
     [Fact]
-    public void Duplicate_membership_is_rejected_by_the_unique_index()
+    public void Duplicate_membership_is_rejected_by_the_unique_index_sqlite()
     {
         var (organizationA, _) = SeedTwoOrganizations();
         _tenantContext.OrganizationId = organizationA;
@@ -243,6 +243,23 @@ public sealed class TenantIsolationTests : IDisposable
     }
 
     [Fact]
+    public async Task Find_after_a_tenant_switch_does_not_leak_through_a_decorated_tenant_context()
+    {
+        var (organizationA, organizationB) = SeedTwoOrganizations();
+        _tenantContext.OrganizationId = organizationA;
+
+        // F-002 will replace/wrap ITenantContext; the protection must not depend on the concrete type.
+        using var context = CreateContext(new ForwardingTenantContext(_tenantContext));
+        var projectOfA = context.Projects.Single();
+        Assert.NotNull(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
+
+        _tenantContext.OrganizationId = organizationB;
+
+        Assert.Null(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
+        Assert.Equal(organizationB, Assert.Single(context.Projects.ToList()).OrganizationId);
+    }
+
+    [Fact]
     public async Task System_query_requires_an_active_scope_and_returns_all_tenants_inside_it()
     {
         var (organizationA, organizationB) = SeedTwoOrganizations();
@@ -283,6 +300,11 @@ public sealed class TenantIsolationTests : IDisposable
         using var secondOperationContext = factory.CreateDbContext();
         Assert.NotSame(operationContext, secondOperationContext);
 
+        // The concrete type and the interface must be the same scoped instance, otherwise switching
+        // through the concrete type would not affect anything that consumes ITenantContext.
+        var concreteTenant = firstRequest.ServiceProvider.GetRequiredService<TenantContext>();
+        Assert.Same(concreteTenant, firstRequest.ServiceProvider.GetRequiredService<ITenantContext>());
+
         Assert.Equal(DatabaseProvider.Sqlite, provider.GetRequiredService<ZenkinsDataOptions>().Provider);
     }
 
@@ -298,7 +320,9 @@ public sealed class TenantIsolationTests : IDisposable
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
 
-        var tenantContext = (TenantContext)scope.ServiceProvider.GetRequiredService<ITenantContext>();
+        // Resolve through the interface, switch through the concrete registration (F-001 does the same).
+        Assert.IsType<TenantContext>(scope.ServiceProvider.GetRequiredService<ITenantContext>());
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
         var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ZenkinsDbContext>>();
 
         tenantContext.OrganizationId = organizationA;
@@ -354,7 +378,9 @@ public sealed class TenantIsolationTests : IDisposable
         return (organizationA.Id, organizationB.Id);
     }
 
-    private ZenkinsDbContext CreateContext()
+    private ZenkinsDbContext CreateContext() => CreateContext(_tenantContext);
+
+    private ZenkinsDbContext CreateContext(ITenantContext tenantContext)
     {
         var options = new DbContextOptionsBuilder<ZenkinsDbContext>()
             .UseZenkinsDatabase(new ZenkinsDataOptions(
@@ -362,9 +388,17 @@ public sealed class TenantIsolationTests : IDisposable
                 $"Data Source={_databasePath}"))
             .Options;
 
-        var context = new ZenkinsDbContext(options, _tenantContext, _systemDataScope);
+        var context = new ZenkinsDbContext(options, tenantContext, _systemDataScope);
         context.Database.Migrate();
         return context;
+    }
+
+    /// <summary>Stands in for F-002's decorator: a cast-free wrapper around the real tenant context.</summary>
+    private sealed class ForwardingTenantContext(ITenantContext inner) : ITenantContext
+    {
+        public Guid? OrganizationId => inner.OrganizationId;
+
+        public int TenantRevision => inner.TenantRevision;
     }
 
     public void Dispose()

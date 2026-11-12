@@ -11,12 +11,7 @@ namespace Zenkins.Server.Data.Tenancy;
 public sealed class TenantContext : ITenantContext
 {
     private Guid? _organizationId;
-
-    /// <summary>
-    /// Raised after <see cref="OrganizationId"/> changed to a different value.
-    /// <see cref="ZenkinsDbContext"/> uses it to drop rows tracked under the previous tenant.
-    /// </summary>
-    internal event EventHandler? OrganizationIdChanged;
+    private int _tenantRevision;
 
     /// <inheritdoc />
     public Guid? OrganizationId
@@ -33,7 +28,10 @@ public sealed class TenantContext : ITenantContext
             }
 
             _organizationId = value;
-            OrganizationIdChanged?.Invoke(this, EventArgs.Empty);
+            _tenantRevision++;
         }
     }
+
+    /// <inheritdoc />
+    public int TenantRevision => _tenantRevision;
 }

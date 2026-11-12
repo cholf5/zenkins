@@ -30,5 +30,9 @@ public sealed class ZenkinsDbContextFactory : IDbContextFactory<ZenkinsDbContext
         _systemDataScope = systemDataScope;
     }
 
+    /// <summary>
+    /// The caller owns the returned context and must dispose it (wrap it in <c>using</c>): it holds a
+    /// change tracker for its lifetime, and the tenant-revision check only runs when it is used.
+    /// </summary>
     public ZenkinsDbContext CreateDbContext() => new(_options, _tenantContext, _systemDataScope);
 }

@@ -99,8 +99,8 @@ Steps:
 Expected:
 - Unique index violation on the second insert.
 
-Result: **PASS** — `TenantIsolationTests.Duplicate_membership_for_the_same_organization_and_user_is_rejected`
-(`DbUpdateException`; only the first membership survives).
+Result: **PASS** — `TenantIsolationTests.Duplicate_membership_is_rejected_by_the_unique_index_sqlite`
+(the `(OrganizationId, UserId)` unique-index violation; only the first membership survives).
 
 ### TC-004: Migration parity
 
@@ -128,7 +128,7 @@ Implementation notes:
   evaluation; EF parameterizes it per query. `CurrentOrganizationId` falls back to `Guid.Empty` when no
   tenant is selected, so an unset tenant matches no rows instead of all rows. Verified by a test that
   re-points the tenant on the *same* context instance, between A and B, and gets one project each time.
-- **`SaveChanges` is a guard, not a stamp.** `Added` tenant-owned rows take `OrganizationId` from the
+- **`SaveChanges` guards tenant writes and owns the audit timestamps.** `Added` tenant-owned rows take `OrganizationId` from the
   active tenant; a caller-supplied non-empty foreign value throws `TenantIsolationException` before any
   SQL is sent, and no tenant at all also throws. `Modified`/`Deleted` check the tracked original value,
   reject an `OrganizationId` mutation, and then re-read the persisted row via `GetDatabaseValues()`:
@@ -138,7 +138,7 @@ Implementation notes:
   has no async write path yet.
 - **Escape hatch is a service, not a flag.** `ISystemDataScope` is a distinct scoped service; entering a
   scope is the only way to bypass the write guard, and cross-tenant reads must go through
-  `ZenkinsDbContext.SystemQuery<T>()`, which refuses to run without an active scope. `IgnoreQueryFilters()`
+  `ZenkinsDbContext.SystemQueryAsync<T>()`, which refuses to run without an active scope. `IgnoreQueryFilters()`
   at the call site is not enough because it bypasses only one query (not `Find`, includes, or writes), and
   it is invisible in a review: nothing in the constructor or diff shows the escalation. It is deliberately
   not reachable through `ITenantContext`. `TenantContext` itself is mutable so F-001's auth pipeline (and
@@ -149,7 +149,7 @@ Implementation notes:
   design-time factory resolves the content root from `ZENKINS_CONTENT_ROOT` or the server project
   directory - never `AppContext.BaseDirectory`, which would put the design-time database under `bin/`. `ZenkinsDbContext` is registered scoped via `AddDbContext`, the tenant
   context and system scope are scoped too, and a scoped-registration test proves two request scopes get
-  different context instances. `ZenkinsDbContextFactory : IDesignTimeDbContextFactory<ZenkinsDbContext>`
+  different context instances. `ZenkinsDesignTimeDbContextFactory : IDesignTimeDbContextFactory<ZenkinsDbContext>`
   reads `appsettings.json` + environment variables so `dotnet ef` works without the web host and gates can
   pass `Database__Provider=Postgres ConnectionStrings__Default=...` inline.
 - **Migrations are generated against PostgreSQL, not SQLite.** A SQLite-generated migration emits
@@ -224,6 +224,39 @@ Handoffs and known gaps (no follow-up card):
   method) by design.
 - **F-003**: consumes `CreatedAt`/`UpdatedAt` as stamped by the data layer; do not duplicate the stamping.
 
+### 2026-11-12 - review round 2 (FAIL -> fixes)
+
+- **B1: tracker-clear protection no longer depends on the concrete tenant type.** `ITenantContext` now
+  exposes a monotonic `TenantRevision`; `TenantContext` increments it on every real change. `ZenkinsDbContext`
+  samples it in the constructor, drops the change tracker whenever it moves (`Set<T>()` overrides catch the
+  read path before `Find`/`Include` can short-circuit, and `SaveChanges` checks it first too), and the
+  event/subscription/downcast is gone. `ZenkinsDbContextFactory` no longer has a dispose-time unsubscribe
+  obligation, though callers still own disposal. Probe:
+  `Find_after_a_tenant_switch_does_not_leak_through_a_decorated_tenant_context` wraps the real context in a
+  forwarding `ITenantContext` decorator (standing in for F-002) and asserts `FindAsync` returns null after
+  a switch. Red proof: with the revision check disabled it fails.
+- **N2: a tenant can actually be selected.** `TenantContext` is registered scoped as itself, and
+  `ITenantContext` is mapped onto that same instance, so F-001 can inject the concrete type to switch and
+  everyone else reads the interface. Test asserts both resolve to the same scoped instance and that a
+  factory context follows a switch made through the concrete type.
+- **N3:** `base.OnModelCreating(modelBuilder)` is now called first, so F-001 re-basing on Identity cannot
+  silently drop the Identity configuration.
+- **N5:** TC-003 test renamed `Duplicate_membership_is_rejected_by_the_unique_index_sqlite`, because SQLite
+  reports the violated index columns rather than its name; the assertion now checks the
+  `(OrganizationId, UserId)` unique-index violation instead of any `DbUpdateException`.
+- **N7:** comment on the `AddDbContext` + `AddDbContextFactory` pair: they `TryAdd`-share
+  `DbContextOptions<ZenkinsDbContext>`, so the two options actions must stay identical or the last
+  registration silently wins for both.
+- **N8:** class doc now states that `Organization` **inserts** are deliberately unguarded (bootstrap creates
+  the first organization before any tenant exists); only modify/delete are constrained.
+- **N9:** `ZenkinsDbContextFactory.CreateDbContext` documents that the caller owns and must dispose the
+  context.
+- **N4 (operational note):** after regenerating a migration in place, delete `src/Server/App_Data/` (or run
+  `dotnet ef database drop`) before the next `Migrate()`/`database update`; otherwise it fails with
+  "table Organizations already exists".
+- **N6:** the two (now three) red-proof assertion lines are pasted into Verification so the strongest
+  evidence survives the machine.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -242,7 +275,7 @@ Handoffs and known gaps (no follow-up card):
   5. `Database__Provider=Postgres ConnectionStrings__Default="..." dotnet ef migrations script --idempotent --project src/Server --output /tmp/initial-postgres.sql`
 - Results (full output in `/tmp/zenkins-logs/I-002/`):
   - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build-final.log`
-  - `dotnet test` -> **PASS**, 12 passed / 0 failed / 0 skipped (2 pre-existing guards + 10 tenancy/data tests) -> `test-final.log`
+  - `dotnet test` -> **PASS**, 13 passed / 0 failed / 0 skipped (2 pre-existing guards + 11 tenancy/data tests) -> `test-final.log`
   - `dotnet ef database update` (SQLite, temp db) -> **PASS**, `Applying migration '<Initial>'` -> `ef-database-update-sqlite.log`
   - `sqlite3 <temp>.schema` -> **PASS**: three tables, `IX_OrganizationMembers_OrganizationId_UserId UNIQUE`,
     `CK_OrganizationMembers_Role`, foreign keys, `uuid`/`timestamp with time zone` columns, history row;
@@ -251,9 +284,16 @@ Handoffs and known gaps (no follow-up card):
   - `dotnet ef migrations script --idempotent` (Postgres) -> **PASS**, `uuid`/`timestamp with time zone`/
     `character varying` plus the unique index and check constraint -> `ef-script-postgres.log`, `initial-postgres.sql`
   - Red proof 1: organization guard branch removed -> `Cross_tenant_organization_delete_and_update_are_rejected`
-    fails with "No exception was thrown" -> `red-proof-organization-guard.log`
-  - Red proof 2: `ChangeTracker.Clear()` in the tenant-change handler disabled ->
-    `Find_after_a_tenant_switch_does_not_return_the_previous_tenants_row` fails with the old row still
-    returned -> `red-proof-tracker-clear.log`
+    fails with:
+    `Assert.Throws() Failure: No exception was thrown` / `Expected: typeof(Zenkins.Server.Data.Tenancy.TenantIsolationException)`
+    -> `red-proof-organization-guard.log`
+  - Red proof 2: tenant-change handler disabled ->
+    `Find_after_a_tenant_switch_does_not_return_the_previous_tenants_row` fails with:
+    `Assert.Null() Failure: Value is not null` / `Actual: Project { … Name = "alpha-app", … }`
+    -> `red-proof-tracker-clear.log`
+  - Red proof 3: revision check disabled ->
+    `Find_after_a_tenant_switch_does_not_leak_through_a_decorated_tenant_context` fails with:
+    `Assert.Null() Failure: Value is not null` / `Actual: Project { … Name = "alpha-app", … }`
+    -> `red-proof-tenant-revision.log`
   - PostgreSQL instance apply -> **NOT RUN**: `pg_isready`, `psql`, `docker` not found and port 5432 closed
     -> `postgres-availability.log`. Not claimed as verified.

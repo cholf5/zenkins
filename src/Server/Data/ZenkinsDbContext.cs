@@ -17,16 +17,27 @@ namespace Zenkins.Server.Data;
 /// an <see cref="ISystemDataScope"/> scope; add a guarded method here if one is ever needed.
 /// </para>
 /// <para>
+/// <b>Tenant switches:</b> the change tracker is dropped whenever <see cref="ITenantContext.TenantRevision"/>
+/// moves, because <c>Find</c>/<c>Include</c> short-circuit on tracked rows without consulting the
+/// query filter. This is deliberately cast-free so a decorator or replacement
+/// <see cref="ITenantContext"/> (F-002) keeps the protection.
+/// </para>
+/// <para>
 /// <b>Lifetime:</b> register the context per operation, never as a long-lived object. UI components
 /// must not inject <see cref="ZenkinsDbContext"/> (an interactive Blazor circuit lives for hours);
 /// they use <see cref="IDbContextFactory{TContext}"/> and create one context per operation.
+/// </para>
+/// <para>
+/// <b>Organizations:</b> inserts are intentionally unguarded - bootstrap (F-001) creates the first
+/// organization before any tenant exists. Only modify/delete are constrained to the active
+/// organization (or a system scope).
 /// </para>
 /// </summary>
 public sealed class ZenkinsDbContext : DbContext
 {
     private readonly ITenantContext _tenantContext;
     private readonly ISystemDataScope _systemDataScope;
-    private TenantContext? _mutableTenantContext;
+    private int _observedTenantRevision;
 
     public ZenkinsDbContext(
         DbContextOptions<ZenkinsDbContext> options,
@@ -36,15 +47,7 @@ public sealed class ZenkinsDbContext : DbContext
     {
         _tenantContext = tenantContext;
         _systemDataScope = systemDataScope;
-
-        // A tracked entity from the previous tenant would survive a tenant switch and could be
-        // returned by Find/Include without ever touching the query filter. Dropping the tracker on
-        // every switch makes "one context, one tenant" impossible to violate by accident.
-        if (tenantContext is TenantContext mutableTenantContext)
-        {
-            _mutableTenantContext = mutableTenantContext;
-            mutableTenantContext.OrganizationIdChanged += OnOrganizationIdChanged;
-        }
+        _observedTenantRevision = tenantContext.TenantRevision;
     }
 
     /// <summary>
@@ -65,6 +68,22 @@ public sealed class ZenkinsDbContext : DbContext
     public DbSet<OrganizationMember> OrganizationMembers => Set<OrganizationMember>();
 
     public DbSet<Project> Projects => Set<Project>();
+
+    // Every query starts by resolving a DbSet, so this is the one place that catches a tenant switch
+    // before Find/Include can short-circuit on rows tracked under the previous tenant.
+    public override DbSet<TEntity> Set<TEntity>()
+        where TEntity : class
+    {
+        DropTrackerIfTenantChanged();
+        return base.Set<TEntity>();
+    }
+
+    public override DbSet<TEntity> Set<TEntity>(string name)
+        where TEntity : class
+    {
+        DropTrackerIfTenantChanged();
+        return base.Set<TEntity>(name);
+    }
 
     /// <summary>
     /// Cross-tenant read path for system operations. The scope is checked when the query is
@@ -92,6 +111,10 @@ public sealed class ZenkinsDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // F-001 re-bases this model on Identity; a missing base call would compile but silently drop
+        // the Identity entity configuration.
+        base.OnModelCreating(modelBuilder);
+
         modelBuilder.Entity<Organization>(entity =>
         {
             entity.HasKey(organization => organization.Id);
@@ -150,35 +173,27 @@ public sealed class ZenkinsDbContext : DbContext
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
-    public override void Dispose()
+    /// <summary>
+    /// Rows tracked under the previous tenant must never be reachable through Find/Include, which
+    /// bypass the query filter. Sampling <see cref="ITenantContext.TenantRevision"/> here keeps this
+    /// working for any <see cref="ITenantContext"/> implementation, not just <see cref="TenantContext"/>.
+    /// </summary>
+    private void DropTrackerIfTenantChanged()
     {
-        UnsubscribeFromTenantChanges();
-        base.Dispose();
-    }
-
-    public override ValueTask DisposeAsync()
-    {
-        UnsubscribeFromTenantChanges();
-        return base.DisposeAsync();
-    }
-
-    private void OnOrganizationIdChanged(object? sender, EventArgs e)
-    {
-        // Rows tracked under the previous tenant must never be reachable through Find/Include.
-        ChangeTracker.Clear();
-    }
-
-    private void UnsubscribeFromTenantChanges()
-    {
-        if (_mutableTenantContext is not null)
+        var revision = _tenantContext.TenantRevision;
+        if (revision == _observedTenantRevision)
         {
-            _mutableTenantContext.OrganizationIdChanged -= OnOrganizationIdChanged;
-            _mutableTenantContext = null;
+            return;
         }
+
+        ChangeTracker.Clear();
+        _observedTenantRevision = revision;
     }
 
     private void EnforceTenantBoundary()
     {
+        DropTrackerIfTenantChanged();
+
         var activeOrganizationId = _tenantContext.OrganizationId;
         var now = DateTimeOffset.UtcNow;
 
