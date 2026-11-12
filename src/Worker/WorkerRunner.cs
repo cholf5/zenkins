@@ -4,20 +4,24 @@ using System.Net.Sockets;
 namespace Zenkins.Worker;
 
 /// <summary>
-/// The worker's state machine (card F-005): load-or-register the credential, then heartbeat on the
-/// configured interval, retrying transport failures with capped exponential backoff + jitter, and
-/// shutting down gracefully on SIGINT/SIGTERM - one best-effort final heartbeat, exit code 0.
+/// The worker's state machine (cards F-005 + F-007): load-or-register the credential, then run two
+/// concurrent loops until shutdown - the heartbeat loop (retrying transport failures with capped
+/// exponential backoff + jitter) and <see cref="WorkerConfiguration.MaxConcurrency"/> run-execution
+/// loops (<see cref="WorkerRunLoop"/>: claim → execute → report). Shutdown is graceful: one
+/// best-effort final heartbeat, exit code 0; a process killed mid-run gets no completed report (the
+/// run's Lost transition is F-010's business).
 /// <para>
 /// <b>State transitions are logged</b> (registered, first heartbeat, reconnects, failures with the
-/// next retry delay); individual successful heartbeats are silent so a healthy worker produces a
-/// bounded log, not a steady drip. Plaintext tokens are never written to the console: only the
-/// server-assigned worker id is.
+/// next retry delay, claimed runs); individual successful heartbeats are silent so a healthy worker
+/// produces a bounded log, not a steady drip. Plaintext tokens are never written to the console:
+/// only the server-assigned worker id is.
 /// </para>
 /// </summary>
 public sealed class WorkerRunner(
     WorkerConfiguration configuration,
     WorkerApiClient api,
     WorkerTokenStore tokenStore,
+    WorkDirectoryService workDirectories,
     BackoffScheduler backoff,
     TextWriter log,
     TextWriter errorLog)
@@ -47,6 +51,29 @@ public sealed class WorkerRunner(
             Log($"worker token persisted to {tokenStore.StorePath}.");
         }
 
+        Log($"run execution starts on {configuration.MaxConcurrency} loop(s); "
+            + $"claiming every {configuration.ClaimPollInterval.TotalSeconds:0.#} second(s).");
+        var heartbeat = HeartbeatLoopAsync(workerToken, shutdown);
+        var runLoops = Enumerable.Range(0, configuration.MaxConcurrency)
+            .Select(_ => new WorkerRunLoop(
+                configuration,
+                api,
+                workerToken,
+                workDirectories,
+                BackoffScheduler.Default(),
+                log,
+                errorLog).RunAsync(shutdown))
+            .ToArray();
+        await Task.WhenAll([heartbeat, .. runLoops]);
+
+        await SendFinalHeartbeatAsync(workerToken);
+        Log("stopped cleanly.");
+        return 0;
+    }
+
+    /// <summary>The F-005 heartbeat loop, unchanged in behaviour: heartbeat, back off, reconnect.</summary>
+    private async Task HeartbeatLoopAsync(string workerToken, CancellationToken shutdown)
+    {
         var announceOnFirstSuccess = true;
         var reconnecting = false;
 
@@ -124,10 +151,6 @@ public sealed class WorkerRunner(
                 }
             }
         }
-
-        await SendFinalHeartbeatAsync(workerToken);
-        Log("stopped cleanly.");
-        return 0;
     }
 
     private string? LoadPersistedToken()

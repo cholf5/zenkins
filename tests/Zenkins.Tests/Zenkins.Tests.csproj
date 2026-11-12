@@ -14,6 +14,15 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
   </ItemGroup>
 
+  <!-- The TestAssets folder owns its own projects (ArgvEcho, F-007); without this exclusion the
+       default Compile glob would pull their sources and generated obj files into this assembly. -->
+  <ItemGroup>
+    <Compile Remove="TestAssets/**" />
+    <Content Remove="TestAssets/**" />
+    <EmbeddedResource Remove="TestAssets/**" />
+    <None Remove="TestAssets/**" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../../src/Shared/Zenkins.Shared.csproj" />
     <ProjectReference Include="../../src/Server/Zenkins.Server.csproj" />
@@ -21,6 +30,9 @@
          E2E spawns the Worker from this build output. Referencing the assembly also copies the
          apphost, deps and runtimeconfig.json here, which the WorkerRuntimeConfigTests guard reads. -->
     <ProjectReference Include="../../src/Worker/Zenkins.Worker.csproj" />
+    <!-- F-007: the ArgvEcho test asset is built with the tests but never loaded into the test
+         process - the WorkerRuntime tests locate its DLL and run it through `dotnet exec`. -->
+    <ProjectReference Include="TestAssets/ArgvEcho/ArgvEcho.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

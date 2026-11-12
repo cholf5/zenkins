@@ -17,7 +17,7 @@ public sealed class WorkerRuntimeConfigTests
     public void Worker_runtimeconfig_does_not_include_aspnetcore_frameworks()
     {
         // MSBuild copies the Worker's apphost, deps and runtimeconfig next to the test
-        // assembly (build-order-only ProjectReference in Zenkins.Tests.csproj), so this
+        // assembly (full ProjectReference in Zenkins.Tests.csproj), so this
         // never has to guess a configuration, target framework or output layout.
         var runtimeConfigPath = Path.Combine(AppContext.BaseDirectory, WorkerRuntimeConfigFileName);
 
@@ -25,9 +25,10 @@ public sealed class WorkerRuntimeConfigTests
         {
             Assert.Fail(
                 $"{runtimeConfigPath} was not found, so the only guard for the transitive ASP.NET Core "
-                + "reference path cannot run. This test fails closed on purpose. Zenkins.Tests.csproj must "
-                + "keep <ProjectReference Include=\"../../src/Worker/Zenkins.Worker.csproj\" "
-                + "ReferenceOutputAssembly=\"false\" /> so the Worker is built into this output folder.");
+                + "reference path cannot run. This test fails closed on purpose. Zenkins.Tests.csproj "
+                + "references ../../src/Worker/Zenkins.Worker.csproj (full reference, no "
+                + "ReferenceOutputAssembly override) so the Worker's apphost, deps and runtimeconfig.json "
+                + "are copied into this output folder.");
             return;
         }
 

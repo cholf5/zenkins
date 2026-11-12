@@ -46,6 +46,83 @@ public sealed class WorkerConfigurationTests
         Assert.Equal(string.Empty, configuration.Tags);
         Assert.Equal(TimeSpan.FromSeconds(15), configuration.HeartbeatInterval);
         Assert.EndsWith(".zenkins", configuration.DataDirectory, StringComparison.Ordinal);
+
+        // F-007's defaults: work root, temp cleanup on, concurrency 1, 2s claim polling.
+        Assert.Equal("work", configuration.WorkRoot);
+        Assert.True(configuration.CleanupTemp);
+        Assert.Equal(1, configuration.MaxConcurrency);
+        Assert.Equal(TimeSpan.FromSeconds(2), configuration.ClaimPollInterval);
+        Assert.Equal(1, configuration.BuildRegistrationRequest().MaxConcurrency);
+    }
+
+    [Fact]
+    public void The_f007_run_execution_knobs_parse_from_the_environment()
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [WorkerConfiguration.WorkRootVariable] = "/var/zenkins/work",
+            [WorkerConfiguration.CleanupTempVariable] = "false",
+            [WorkerConfiguration.WorkerConcurrencyVariable] = "4",
+            [WorkerConfiguration.ClaimSecondsVariable] = "0.5",
+        });
+
+        var configuration = AssertGetValue(result);
+        Assert.Equal("/var/zenkins/work", configuration.WorkRoot);
+        Assert.False(configuration.CleanupTemp);
+        Assert.Equal(4, configuration.MaxConcurrency);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), configuration.ClaimPollInterval);
+    }
+
+    [Theory]
+    [InlineData("yes")]
+    [InlineData("1")]
+    public void An_unparseable_cleanup_flag_is_a_configuration_error(string cleanupTemp)
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [WorkerConfiguration.CleanupTempVariable] = cleanupTemp,
+        });
+
+        Assert.Null(result.Configuration);
+        Assert.NotNull(result.Error);
+        Assert.Contains(WorkerConfiguration.CleanupTempVariable, result.Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-2")]
+    [InlineData("1025")]
+    [InlineData("two")]
+    public void An_out_of_range_concurrency_is_a_configuration_error(string concurrency)
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [WorkerConfiguration.WorkerConcurrencyVariable] = concurrency,
+        });
+
+        Assert.Null(result.Configuration);
+        Assert.NotNull(result.Error);
+        Assert.Contains(WorkerConfiguration.WorkerConcurrencyVariable, result.Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("3601")]
+    [InlineData("soon")]
+    public void An_out_of_range_claim_interval_is_a_configuration_error(string claimSeconds)
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [WorkerConfiguration.ClaimSecondsVariable] = claimSeconds,
+        });
+
+        Assert.Null(result.Configuration);
+        Assert.NotNull(result.Error);
+        Assert.Contains(WorkerConfiguration.ClaimSecondsVariable, result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -124,7 +201,6 @@ public sealed class WorkerConfigurationTests
         Assert.Equal(registration.Os, configuration.BuildHeartbeatRequest().Os);
         Assert.Equal(registration.Architecture, configuration.BuildHeartbeatRequest().Architecture);
         Assert.Equal(Environment.ProcessorCount, registration.CpuCount);
-        Assert.Equal(1, registration.MaxConcurrency);
         Assert.False(string.IsNullOrWhiteSpace(registration.Version));
     }
 

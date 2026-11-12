@@ -66,6 +66,10 @@ internal static class Program
                 configuration.DataDirectory,
                 configuration.ServerUrl,
                 configuration.WorkerName),
+            new WorkDirectoryService(
+                // ZENKINS_WORK_ROOT, default "work/" relative to the worker's current directory
+                // (absolute values pass through GetFullPath unchanged).
+                Path.GetFullPath(configuration.WorkRoot)),
             BackoffScheduler.Default(),
             Console.Out,
             Console.Error);

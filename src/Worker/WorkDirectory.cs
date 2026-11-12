@@ -1,0 +1,94 @@
+namespace Zenkins.Worker;
+
+/// <summary>
+/// The per-run work directory trio (card F-007, PRD §3.4.6):
+/// <c>{work-root}/{run-id}/repository|artifacts|temp</c>. Every run gets its own tree; different
+/// runs never share a writable directory (PRD §8 constraint 7).
+/// <para>
+/// <b>Run-id hardening.</b> The run id is parsed as a GUID before any path is built, and the
+/// directory name is the GUID's canonical <c>D</c> rendering - so a malformed id (path traversal,
+/// garbage, empty) is refused <em>before the file system is ever touched</em>, and even an exotic
+/// but parseable spelling can only ever map onto the canonical, traversal-free name.
+/// </para>
+/// <para>
+/// <b>Idempotency.</b> Preparation is plain <see cref="Directory.CreateDirectory"/>, which is a
+/// no-op for existing directories - re-preparing the same run (a retried claim, a restart) neither
+/// fails nor wipes anything.
+/// </para>
+/// </summary>
+public sealed class WorkDirectoryService
+{
+    private readonly string _root;
+
+    /// <param name="workRoot">
+    /// The work root: <c>ZENKINS_WORK_ROOT</c>, default <c>work/</c> relative to the worker's
+    /// current directory (resolved to an absolute path here; absolute values pass through).
+    /// </param>
+    public WorkDirectoryService(string workRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workRoot);
+        _root = Path.GetFullPath(workRoot);
+    }
+
+    /// <summary>The absolute work root every run tree lives under.</summary>
+    public string Root => _root;
+
+    /// <summary>Whether <paramref name="runIdText"/> parses as a GUID (the only accepted shape).</summary>
+    public static bool IsValidRunId(string? runIdText, out Guid runId) =>
+        Guid.TryParse(runIdText, out runId);
+
+    /// <summary>
+    /// Prepares the run's directory trio, validating the run id first. A malformed run id throws
+    /// <see cref="WorkDirectoryException"/> and the file system is never touched.
+    /// </summary>
+    public RunWorkDirectory Prepare(string runIdText)
+    {
+        if (!IsValidRunId(runIdText, out var runId))
+        {
+            throw new WorkDirectoryException(
+                $"run id '{runIdText}' is not a GUID; refusing to touch the file system.");
+        }
+
+        return Prepare(runId);
+    }
+
+    /// <summary>Prepares (idempotently) the trio for an already-validated run id.</summary>
+    public RunWorkDirectory Prepare(Guid runId)
+    {
+        var rootPath = Path.Combine(_root, runId.ToString("D"));
+        var work = new RunWorkDirectory(
+            runId,
+            rootPath,
+            Path.Combine(rootPath, "repository"),
+            Path.Combine(rootPath, "artifacts"),
+            Path.Combine(rootPath, "temp"));
+        Directory.CreateDirectory(work.RepositoryPath);
+        Directory.CreateDirectory(work.ArtifactsPath);
+        Directory.CreateDirectory(work.TempPath);
+        return work;
+    }
+
+    /// <summary>
+    /// Deletes the run's <c>temp/</c> tree (card decision: on by default via
+    /// <c>ZENKINS_CLEANUP_TEMP</c>). <c>repository/</c> and <c>artifacts/</c> are kept; retention
+    /// for those is a later card. Deleting a missing directory is fine.
+    /// </summary>
+    public void CleanupTemp(RunWorkDirectory work)
+    {
+        if (Directory.Exists(work.TempPath))
+        {
+            Directory.Delete(work.TempPath, recursive: true);
+        }
+    }
+}
+
+/// <summary>The prepared trio of one run. Paths are absolute.</summary>
+public sealed record RunWorkDirectory(
+    Guid RunId,
+    string RootPath,
+    string RepositoryPath,
+    string ArtifactsPath,
+    string TempPath);
+
+/// <summary>A refused or failed work-directory operation; always safe to log verbatim.</summary>
+public sealed class WorkDirectoryException(string message) : Exception(message);
