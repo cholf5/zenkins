@@ -4,8 +4,10 @@ using Xunit;
 namespace Zenkins.Tests;
 
 /// <summary>
-/// Guards the project-layout rules from card I-001: <c>Zenkins.Shared</c> is consumed by
-/// the console Worker, so it must never drag ASP.NET Core into that dependency graph.
+/// Secondary AC7 check: <c>Zenkins.Shared</c> is consumed by the console Worker, so it must
+/// not expose ASP.NET Core types. This only sees assemblies reached through used types, so
+/// it cannot catch a <c>FrameworkReference</c>; the load-bearing guards are the MSBuild
+/// check in <c>Directory.Build.targets</c> and <see cref="WorkerRuntimeConfigTests"/>.
 /// </summary>
 public sealed class SharedAssemblyTests
 {
