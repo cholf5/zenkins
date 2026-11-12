@@ -175,7 +175,11 @@ executed statement's shape under Npgsql, and
 lock, failing if either path drops the call. Red proof: with both `LockAsync` calls removed in a /tmp
 copy the wiring test FAILS (`Expected [A, A] / Actual []`) -> `red-proof-lock.log`; restored -> PASS
 -> `red-proof-lock-restored.log`. **Caveat:** the PG race is fixed by construction, not executed
-end-to-end (no PostgreSQL instance in this environment), the same gap I-002/F-001 record.
+end-to-end (no PostgreSQL instance in this environment), the same gap I-002/F-001 record. Both
+mutations now open their transaction with `IsolationLevel.ReadCommitted` explicitly, so a connection
+string default such as `Default Isolation Level=RepeatableRead` cannot restore the pre-wait snapshot
+and reopen B1: under READ COMMITTED the counting statement after the lock wait sees the first
+committer's Owner changes.
 
 **Authorization before validation.** `Rename` authorizes before validating the name, `Invite`
 authorizes before validating the email, and `ChangeRole`/`RemoveMember` now take the raw form strings
@@ -201,13 +205,12 @@ empty and populated databases.
 
 Known gaps recorded for v0.1 (accepted, not implemented): invite by exact email is a global
 account-existence oracle for any Owner (cross-tenant signal); mutating forms depend on
-`wwwroot/js/antiforgery.js` and return 400 with JavaScript blocked (<c>AntiforgeryToken</c> is not
-usable in an interactive circuit); `SystemDataScope` is a counter on one scoped instance and is now
+`wwwroot/js/antiforgery.js` and return 400 with JavaScript blocked (`AntiforgeryToken` is not usable
+in an interactive circuit); `SystemDataScope` is a counter on one scoped instance and is now
 entered from inside a circuit where an await can interleave with another render - reads stay
 tenant-filtered and no tenant writes originate in a circuit, but "one scope, one request" no longer
 holds for circuits; resolution writes on read (idempotent fallback repair, 2 queries + at most 1
-UPDATE per request); mutating forms require JavaScript because `AntiforgeryToken` is not usable in an
-interactive circuit.
+UPDATE per request).
 
 ## Bugs
 
@@ -252,9 +255,9 @@ interactive circuit.
      # as carol (non-member) POST /organizations/switch Bravo -> 403; ActiveOrganizationId unchanged
      ```
 - Results (full output in `/tmp/orca-logs/F-002/`):
-  - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build-review-final.log`
+  - `dotnet build -c Release` -> **PASS**, 0 warnings / 0 errors -> `build-final-isolation.log`
   - `dotnet test` -> **PASS**, **88 passed / 0 failed / 0 skipped** (70 pre-card; 18 added, including
-    the two row-lock tests) -> `test-review-final.log`
+    the two row-lock tests) -> `test-final-isolation.log`
   - `dotnet ef database update` on an empty temp SQLite file -> **PASS**, all three migrations applied,
     `ActiveOrganizationId`, its index and the `ON DELETE SET NULL` FK present; temp deleted ->
     `ef-database-update-empty-review.log`

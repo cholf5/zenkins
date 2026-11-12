@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Auth;
@@ -316,7 +317,12 @@ public sealed class OrganizationManagementService(
                 "Choose either Owner or Member.");
         }
 
-        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        // Pin READ COMMITTED explicitly: the lock-then-count invariant depends on the counting
+        // statement taking a fresh snapshot after waiting for the organization row lock. A connection
+        // string default of RepeatableRead would keep the pre-wait snapshot and silently reopen B1.
+        await using var transaction = await context.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
 
         // Serialize owner-affecting mutations per organization before the count below.
         await rowLock.LockAsync(context, activeOrganizationId.Value, cancellationToken);
@@ -380,7 +386,10 @@ public sealed class OrganizationManagementService(
             return InvalidMember();
         }
 
-        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        // Same pinned isolation level as the role path (see the comment there).
+        await using var transaction = await context.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
 
         // Same lock as the role path: both are owner-affecting mutations on the organization.
         await rowLock.LockAsync(context, activeOrganizationId.Value, cancellationToken);
