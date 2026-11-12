@@ -1,6 +1,5 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Zenkins.Server.Data;
@@ -11,63 +10,60 @@ using Zenkins.Shared.Tenancy;
 namespace Zenkins.Tests.Tenancy;
 
 /// <summary>
-/// Isolation tests for card I-002 (TC-001..TC-003). Every query goes through the real
-/// <see cref="ZenkinsDbContext"/> filter rather than a hand-written <c>Where</c>, and every test
-/// uses its own temporary SQLite file so nothing touches <c>App_Data</c>.
+/// Isolation tests for card I-002 (TC-001..TC-003), refactored onto card Q-001's
+/// <see cref="TwoOrgsFixture"/>: one seed routine, one temporary SQLite file per test, and no local
+/// copy of the two-organization setup. Every query goes through the real
+/// <see cref="ZenkinsDbContext"/> filter rather than a hand-written <c>Where</c>.
 /// </summary>
+[Trait("Category", "TenantIsolation")]
 public sealed class TenantIsolationTests : IDisposable
 {
-    private const string RepositoryUrl = "https://example.test/repository.git";
-
-    private readonly string _databasePath =
-        Path.Combine(Path.GetTempPath(), $"zenkins-i002-{Guid.NewGuid():N}.db");
-
-    private readonly TenantContext _tenantContext = new();
-    private readonly SystemDataScope _systemDataScope = new();
+    // A fixture per test, not per class: these tests mutate rows (inserts, renames), and a shared
+    // file would make them order-dependent. The read-only probes use IClassFixture instead.
+    private readonly TwoOrgsFixture _fixture = new();
 
     private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
 
     [Fact]
-    public void Query_filter_returns_only_the_active_tenant_and_follows_a_tenant_switch()
+    public async Task Query_filter_returns_only_the_active_tenant_and_follows_a_tenant_switch()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-
-        _tenantContext.OrganizationId = organizationA;
-        using var context = CreateContext();
+        _fixture.UseOrganizationA();
+        await using var context = _fixture.CreateContext();
 
         // No Where clause on purpose: the isolation must come from the query filter.
-        var projectsOfA = context.Projects.ToList();
+        var projectsOfA = await context.Projects.ToListAsync(CancellationToken);
         var projectOfA = Assert.Single(projectsOfA);
-        Assert.Equal(organizationA, projectOfA.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.OrgAId, projectOfA.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.ProjectAName, projectOfA.Name);
 
         // Re-selecting the same organization is not a tenant switch and must not bump the revision.
-        var revisionBeforeReselect = _tenantContext.TenantRevision;
-        _tenantContext.OrganizationId = organizationA;
-        Assert.Equal(revisionBeforeReselect, _tenantContext.TenantRevision);
+        var revisionBeforeReselect = _fixture.TenantContext.TenantRevision;
+        _fixture.UseOrganizationA();
+        Assert.Equal(revisionBeforeReselect, _fixture.TenantContext.TenantRevision);
 
         // Re-point the active tenant without rebuilding the context or the model. A filter that
         // captured ITenantContext at model-build time would still return organization A's project.
-        _tenantContext.OrganizationId = organizationB;
+        _fixture.UseOrganizationB();
 
-        var projectsOfB = context.Projects.ToList();
+        var projectsOfB = await context.Projects.ToListAsync(CancellationToken);
         var projectOfB = Assert.Single(projectsOfB);
-        Assert.Equal(organizationB, projectOfB.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.OrgBId, projectOfB.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.ProjectBName, projectOfB.Name);
         Assert.NotEqual(projectOfA.Id, projectOfB.Id);
     }
 
     [Fact]
     public void Cross_tenant_insert_throws_and_persists_nothing()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
-        using (var context = CreateContext())
+        using (var context = _fixture.CreateContext())
         {
             context.Projects.Add(new Project
             {
-                OrganizationId = organizationB,
+                OrganizationId = TwoOrgsFixture.OrgBId,
                 Name = "smuggled",
-                RepositoryUrl = RepositoryUrl,
+                RepositoryUrl = TwoOrgsFixture.ProjectARepositoryUrl,
                 DefaultBranch = "main",
             });
 
@@ -75,77 +71,81 @@ public sealed class TenantIsolationTests : IDisposable
         }
 
         // Verified through the tenant's own filtered view, not through the system escape hatch.
-        using var verification = CreateContext();
+        using var verification = _fixture.CreateContext();
         var project = Assert.Single(verification.Projects.ToList());
-        Assert.Equal("alpha-app", project.Name);
-        Assert.Equal(organizationA, project.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.ProjectAName, project.Name);
+        Assert.Equal(TwoOrgsFixture.OrgAId, project.OrganizationId);
     }
 
     [Fact]
     public void Cross_tenant_update_throws_even_when_the_caller_fakes_the_original_value()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
+        _fixture.UseOrganizationA();
 
         Guid projectOfAId;
-        using (var seed = CreateContext())
+        using (var seed = _fixture.CreateContext())
         {
-            _tenantContext.OrganizationId = organizationA;
             projectOfAId = seed.Projects.Single().Id;
         }
 
         // Organization B's session attaches organization A's row and claims the row is its own.
-        _tenantContext.OrganizationId = organizationB;
-        using (var context = CreateContext())
+        _fixture.UseOrganizationB();
+        using (var context = _fixture.CreateContext())
         {
             var impostor = new Project
             {
                 Id = projectOfAId,
-                OrganizationId = organizationB,
+                OrganizationId = TwoOrgsFixture.OrgBId,
                 Name = "hijacked",
-                RepositoryUrl = RepositoryUrl,
+                RepositoryUrl = TwoOrgsFixture.ProjectARepositoryUrl,
                 DefaultBranch = "main",
             };
 
             context.Attach(impostor);
             context.Entry(impostor).State = EntityState.Modified;
-            context.Entry(impostor).Property(project => project.OrganizationId).OriginalValue = organizationB;
+            context.Entry(impostor).Property(project => project.OrganizationId).OriginalValue =
+                TwoOrgsFixture.OrgBId;
 
             Assert.Throws<TenantIsolationException>(() => context.SaveChanges());
         }
 
-        using var verification = CreateContext();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
+        using var verification = _fixture.CreateContext();
         var untouched = verification.Projects.Single();
-        Assert.Equal("alpha-app", untouched.Name);
-        Assert.Equal(organizationA, untouched.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.ProjectAName, untouched.Name);
+        Assert.Equal(TwoOrgsFixture.OrgAId, untouched.OrganizationId);
     }
 
     [Fact]
     public async Task Cross_tenant_organization_delete_and_update_are_rejected()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
-        using (var context = CreateContext())
+        using (var context = _fixture.CreateContext())
         {
             // Organizations stay readable without a tenant (needed by the switcher), so the write
             // guard is the only thing standing between tenant A and the cascade delete of tenant B.
-            context.Organizations.Remove(context.Organizations.Single(o => o.Id == organizationB));
+            context.Organizations.Remove(
+                context.Organizations.Single(organization => organization.Id == TwoOrgsFixture.OrgBId));
             Assert.Throws<TenantIsolationException>(() => context.SaveChanges());
         }
 
-        using (var context = CreateContext())
+        using (var context = _fixture.CreateContext())
         {
-            context.Organizations.Single(o => o.Id == organizationB).Name = "renamed across tenants";
+            context.Organizations.Single(organization => organization.Id == TwoOrgsFixture.OrgBId).Name =
+                "renamed across tenants";
             Assert.Throws<TenantIsolationException>(() => context.SaveChanges());
         }
 
-        using var verification = CreateContext();
-        Assert.Equal("Beta", verification.Organizations.Single(o => o.Id == organizationB).Name);
-        using (_systemDataScope.BeginScope())
+        using var verification = _fixture.CreateContext();
+        Assert.Equal(
+            TwoOrgsFixture.OrgBName,
+            verification.Organizations.Single(organization => organization.Id == TwoOrgsFixture.OrgBId).Name);
+
+        using (_fixture.SystemDataScope.BeginScope())
         {
             var survivingProjects = await verification.SystemQueryAsync<Project>(
-                project => project.OrganizationId == organizationB, CancellationToken);
+                project => project.OrganizationId == TwoOrgsFixture.OrgBId, CancellationToken);
             Assert.Single(survivingProjects);
         }
     }
@@ -153,22 +153,15 @@ public sealed class TenantIsolationTests : IDisposable
     [Fact]
     public void Duplicate_membership_is_rejected_by_the_unique_index_sqlite()
     {
-        var (organizationA, _) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
-        using (var context = CreateContext())
+        using (var context = _fixture.CreateContext())
         {
-            // The guard stamps OrganizationId from the active tenant; the caller does not set it.
+            // alice already owns organization A (seeded by the fixture), so a second row for the
+            // same (OrganizationId, UserId) pair must be refused by the database.
             context.OrganizationMembers.Add(new OrganizationMember
             {
-                UserId = "alice",
-                Role = OrganizationRole.Owner,
-            });
-            context.SaveChanges();
-
-            context.OrganizationMembers.Add(new OrganizationMember
-            {
-                UserId = "alice",
+                UserId = TwoOrgsFixture.OrgAOwnerUserId,
                 Role = OrganizationRole.Member,
             });
 
@@ -184,24 +177,25 @@ public sealed class TenantIsolationTests : IDisposable
                 StringComparison.Ordinal);
         }
 
-        using var verification = CreateContext();
-        var membership = Assert.Single(verification.OrganizationMembers.ToList());
-        Assert.Equal("alice", membership.UserId);
-        Assert.Equal(OrganizationRole.Owner, membership.Role);
+        using var verification = _fixture.CreateContext();
+        var membersOfA = verification.OrganizationMembers.Where(member => member.UserId == TwoOrgsFixture.OrgAOwnerUserId)
+            .ToList();
+        var owner = Assert.Single(membersOfA);
+        Assert.Equal(TwoOrgsFixture.OrgAId, owner.OrganizationId);
+        Assert.Equal(OrganizationRole.Owner, owner.Role);
     }
 
     [Fact]
     public void Insert_stamps_the_active_organization_and_the_timestamps()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
         var stale = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        using var context = CreateContext();
+        using var context = _fixture.CreateContext();
         var project = new Project
         {
             Name = "gamma-app",
-            RepositoryUrl = RepositoryUrl,
+            RepositoryUrl = TwoOrgsFixture.ProjectARepositoryUrl,
             DefaultBranch = "main",
             CreatedAt = stale,
             UpdatedAt = stale,
@@ -211,8 +205,8 @@ public sealed class TenantIsolationTests : IDisposable
         context.Projects.Add(project);
         context.SaveChanges();
 
-        Assert.Equal(organizationA, project.OrganizationId);
-        Assert.NotEqual(organizationB, project.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.OrgAId, project.OrganizationId);
+        Assert.NotEqual(TwoOrgsFixture.OrgBId, project.OrganizationId);
         Assert.Equal("pipeline.lua", project.PipelinePath);
         Assert.InRange(project.CreatedAt, insertStarted, DateTimeOffset.UtcNow);
         Assert.InRange(project.UpdatedAt, insertStarted, DateTimeOffset.UtcNow);
@@ -229,36 +223,34 @@ public sealed class TenantIsolationTests : IDisposable
     [Fact]
     public async Task Find_after_a_tenant_switch_does_not_return_the_previous_tenants_row()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
-        using var context = CreateContext();
-        var projectOfA = context.Projects.Single();
+        await using var context = _fixture.CreateContext();
+        var projectOfA = await context.Projects.SingleAsync(CancellationToken);
 
         // Loaded and tracked under organization A.
         Assert.NotNull(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
 
-        _tenantContext.OrganizationId = organizationB;
+        _fixture.UseOrganizationB();
 
         // Find short-circuits in the change tracker, so only dropping the tracker makes this null.
         Assert.Null(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
 
-        var projectOfB = Assert.Single(context.Projects.ToList());
-        Assert.Equal(organizationB, projectOfB.OrganizationId);
+        var projectOfB = Assert.Single(await context.Projects.ToListAsync(CancellationToken));
+        Assert.Equal(TwoOrgsFixture.OrgBId, projectOfB.OrganizationId);
     }
 
     [Fact]
     public async Task Find_after_a_tenant_switch_does_not_leak_through_a_decorated_tenant_context()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
         // F-002 will replace/wrap ITenantContext; the protection must not depend on the concrete type.
-        using var context = CreateContext(new ForwardingTenantContext(_tenantContext));
-        var projectOfA = context.Projects.Single();
+        await using var context = _fixture.CreateContext(new ForwardingTenantContext(_fixture.TenantContext));
+        var projectOfA = await context.Projects.SingleAsync(CancellationToken);
         Assert.NotNull(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
 
-        _tenantContext.OrganizationId = organizationB;
+        _fixture.UseOrganizationB();
 
         // The non-generic overloads bypass Set<T>(), so they pin the sampler themselves. They must be
         // asserted before any Set<T>() access, otherwise the tracker would already be cleared.
@@ -266,74 +258,73 @@ public sealed class TenantIsolationTests : IDisposable
         Assert.Null(await context.FindAsync(typeof(Project), [projectOfA.Id], CancellationToken));
         Assert.Null(context.Find<Project>(projectOfA.Id));
         Assert.Null(await context.Projects.FindAsync([projectOfA.Id], CancellationToken));
-        Assert.Equal(organizationB, Assert.Single(context.Projects.ToList()).OrganizationId);
+        Assert.Equal(
+            TwoOrgsFixture.OrgBId,
+            Assert.Single(await context.Projects.ToListAsync(CancellationToken)).OrganizationId);
     }
 
     [Fact]
     public void Generic_find_is_the_first_tracker_access_after_a_switch_and_still_returns_null()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
-        using var context = CreateContext();
+        using var context = _fixture.CreateContext();
         var projectOfA = context.Projects.Single();
 
-        _tenantContext.OrganizationId = organizationB;
+        _fixture.UseOrganizationB();
 
         // Deliberately the first access on this context after the switch: no Set<T>() call has run,
         // so the tracker still holds tenant A's project. Find<T> must not return it. This pins the
         // EF Core 10 behaviour that the generic overload goes through Set<T>(); if a future EF
         // version changes that, this test fails instead of silently losing coverage.
         Assert.Null(context.Find<Project>(projectOfA.Id));
-        Assert.Equal(organizationB, Assert.Single(context.Projects.ToList()).OrganizationId);
+        Assert.Equal(
+            TwoOrgsFixture.OrgBId,
+            Assert.Single(context.Projects.ToList()).OrganizationId);
     }
 
     [Fact]
     public void Switching_tenant_with_unsaved_changes_throws_instead_of_discarding_them()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
+        _fixture.UseOrganizationA();
 
-        using var context = CreateContext();
+        using var context = _fixture.CreateContext();
         context.Projects.Single().Name = "pending rename";
 
         var exception = Assert.Throws<TenantIsolationException>(() =>
         {
-            _tenantContext.OrganizationId = organizationB;
+            _fixture.UseOrganizationB();
             _ = context.Projects.ToList();
         });
 
         Assert.StartsWith("Cannot switch the active organization with unsaved changes.", exception.Message);
-        Assert.Equal(organizationB, _tenantContext.OrganizationId);
+        Assert.Equal(TwoOrgsFixture.OrgBId, _fixture.ActiveOrganizationId);
     }
 
     [Fact]
     public async Task System_query_requires_an_active_scope_and_returns_all_tenants_inside_it()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-        _tenantContext.OrganizationId = organizationA;
-        using var context = CreateContext();
+        _fixture.UseOrganizationA();
+        await using var context = _fixture.CreateContext();
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => context.SystemQueryAsync<Project>(_ => true, CancellationToken));
 
-        using (_systemDataScope.BeginScope())
+        using (_fixture.SystemDataScope.BeginScope())
         {
             var all = await context.SystemQueryAsync<Project>(_ => true, CancellationToken);
             Assert.Equal(2, all.Count);
-            Assert.Contains(all, project => project.OrganizationId == organizationA);
-            Assert.Contains(all, project => project.OrganizationId == organizationB);
+            Assert.Contains(all, project => project.OrganizationId == TwoOrgsFixture.OrgAId);
+            Assert.Contains(all, project => project.OrganizationId == TwoOrgsFixture.OrgBId);
         }
     }
 
     [Fact]
     public void Data_layer_registration_is_scoped_and_exposes_a_scoped_context_factory()
     {
-        var configuration = CreateConfiguration();
-
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddZenkinsData(configuration, Path.GetTempPath());
+        services.AddZenkinsData(_fixture.Configuration, Path.GetTempPath());
 
         using var provider = services.BuildServiceProvider();
         using var firstRequest = provider.CreateScope();
@@ -364,11 +355,9 @@ public sealed class TenantIsolationTests : IDisposable
     [Fact]
     public void Factory_created_contexts_follow_the_current_tenant()
     {
-        var (organizationA, organizationB) = SeedTwoOrganizations();
-
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddZenkinsData(CreateConfiguration(), Path.GetTempPath());
+        services.AddZenkinsData(_fixture.Configuration, Path.GetTempPath());
 
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
@@ -378,72 +367,22 @@ public sealed class TenantIsolationTests : IDisposable
         var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
         var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ZenkinsDbContext>>();
 
-        tenantContext.OrganizationId = organizationA;
+        tenantContext.OrganizationId = TwoOrgsFixture.OrgAId;
         using (var context = factory.CreateDbContext())
         {
-            Assert.Equal(organizationA, Assert.Single(context.Projects.ToList()).OrganizationId);
+            Assert.Equal(
+                TwoOrgsFixture.OrgAId,
+                Assert.Single(context.Projects.ToList()).OrganizationId);
         }
 
         // A new per-operation context must see the new tenant, not a cached model or stale tracker.
-        tenantContext.OrganizationId = organizationB;
+        tenantContext.OrganizationId = TwoOrgsFixture.OrgBId;
         using (var context = factory.CreateDbContext())
         {
-            Assert.Equal(organizationB, Assert.Single(context.Projects.ToList()).OrganizationId);
+            Assert.Equal(
+                TwoOrgsFixture.OrgBId,
+                Assert.Single(context.Projects.ToList()).OrganizationId);
         }
-    }
-
-    private IConfiguration CreateConfiguration() =>
-        new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [ZenkinsDataOptions.ProviderConfigurationKey] = "Sqlite",
-                [ZenkinsDataOptions.ConnectionStringConfigurationKey] = $"Data Source={_databasePath}",
-            })
-            .Build();
-
-    private (Guid OrganizationA, Guid OrganizationB) SeedTwoOrganizations()
-    {
-        var organizationA = new Organization { Name = "Alpha" };
-        var organizationB = new Organization { Name = "Beta" };
-
-        using var context = CreateContext();
-        using (_systemDataScope.BeginScope())
-        {
-            context.Organizations.AddRange(organizationA, organizationB);
-            context.Projects.AddRange(
-                new Project
-                {
-                    OrganizationId = organizationA.Id,
-                    Name = "alpha-app",
-                    RepositoryUrl = RepositoryUrl,
-                    DefaultBranch = "main",
-                },
-                new Project
-                {
-                    OrganizationId = organizationB.Id,
-                    Name = "beta-app",
-                    RepositoryUrl = RepositoryUrl,
-                    DefaultBranch = "develop",
-                });
-            context.SaveChanges();
-        }
-
-        return (organizationA.Id, organizationB.Id);
-    }
-
-    private ZenkinsDbContext CreateContext() => CreateContext(_tenantContext);
-
-    private ZenkinsDbContext CreateContext(ITenantContext tenantContext)
-    {
-        var options = new DbContextOptionsBuilder<ZenkinsDbContext>()
-            .UseZenkinsDatabase(new ZenkinsDataOptions(
-                DatabaseProvider.Sqlite,
-                $"Data Source={_databasePath}"))
-            .Options;
-
-        var context = new ZenkinsDbContext(options, tenantContext, _systemDataScope);
-        context.Database.Migrate();
-        return context;
     }
 
     /// <summary>Stands in for F-002's decorator: a cast-free wrapper around the real tenant context.</summary>
@@ -454,14 +393,5 @@ public sealed class TenantIsolationTests : IDisposable
         public int TenantRevision => inner.TenantRevision;
     }
 
-    public void Dispose()
-    {
-        foreach (var path in new[] { _databasePath, _databasePath + "-shm", _databasePath + "-wal" })
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-    }
+    public void Dispose() => _fixture.Dispose();
 }

@@ -10,6 +10,8 @@
     <PackageReference Include="xunit.v3" />
     <!-- Used directly by the I-002 tenancy tests (temp SQLite databases through ZenkinsDbContext). -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- Q-001: WebApplicationFactory<Program> serves the test-only probe endpoint over a real pipeline. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
   </ItemGroup>
 
   <ItemGroup>

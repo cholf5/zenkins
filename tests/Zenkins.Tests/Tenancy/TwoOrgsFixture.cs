@@ -1,0 +1,260 @@
+using System.Linq.Expressions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Zenkins.Server.Data;
+using Zenkins.Server.Data.Entities;
+using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.Tenancy;
+
+namespace Zenkins.Tests.Tenancy;
+
+/// <summary>
+/// Two-organization isolation fixture (card Q-001): the shared shape every tenancy test needs.
+/// <para>
+/// Organization A (<c>Alpha</c>) owns one project (<c>alpha-app</c>) and has two members, its owner
+/// <c>alice</c> and the ordinary member <c>bob</c>. Organization B (<c>Beta</c>) owns one project
+/// (<c>beta-app</c>) and has one member, its owner <c>carol</c>. Everything is created by a single
+/// <see cref="Seed"/> routine inside an <see cref="ISystemDataScope"/> scope, because the first
+/// organizations and memberships exist before any tenant can be selected.
+/// </para>
+/// <para>
+/// The fixture owns one temporary SQLite file (migrated with the product's real migration set,
+/// never the repository's <c>App_Data</c>) plus the scoped tenant context the tests re-point. It is
+/// disposable: <see cref="Dispose"/> drops the connection pools and deletes the file and its
+/// journals. Construct it per test class (<c>IClassFixture&lt;TwoOrgsFixture&gt;</c>) for read-mostly
+/// probes, or per test when a test mutates rows.
+/// </para>
+/// <para>
+/// The ids are fixed constants rather than generated values so a test failure reads as prose
+/// (<c>ProjectBId</c>) and so the HTTP probe can put a literal id in a URL. The fixture is the only
+/// thing that writes them, and it does so under a system scope because inserting tenant-owned rows
+/// requires an explicit organization there.
+/// </para>
+/// </summary>
+public sealed class TwoOrgsFixture : IDisposable
+{
+    // ---------------------------------------------------------------------------------------------
+    // The fixture shape. Tests reference these names instead of hard-coded strings.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>Tenant root A.</summary>
+    public static readonly Guid OrgAId = new("a0000000-0000-4000-8000-000000000001");
+
+    /// <summary>Tenant root B.</summary>
+    public static readonly Guid OrgBId = new("b0000000-0000-4000-8000-000000000002");
+
+    /// <summary>A's only project, the positive control for every probe.</summary>
+    public static readonly Guid ProjectAId = new("a0000000-0000-4000-8000-000000000011");
+
+    /// <summary>B's only project, the id a cross-tenant probe substitutes.</summary>
+    public static readonly Guid ProjectBId = new("b0000000-0000-4000-8000-000000000012");
+
+    /// <summary>A's owner membership row.</summary>
+    public static readonly Guid OrgAOwnerMembershipId = new("a0000000-0000-4000-8000-000000000021");
+
+    /// <summary>A's ordinary membership row.</summary>
+    public static readonly Guid OrgAMemberMembershipId = new("a0000000-0000-4000-8000-000000000022");
+
+    /// <summary>B's owner membership row.</summary>
+    public static readonly Guid OrgBOwnerMembershipId = new("b0000000-0000-4000-8000-000000000023");
+
+    public const string OrgAName = "Alpha";
+    public const string OrgBName = "Beta";
+
+    public const string OrgAOwnerUserId = "alice";
+    public const string OrgAMemberUserId = "bob";
+    public const string OrgBOwnerUserId = "carol";
+
+    public const string ProjectAName = "alpha-app";
+    public const string ProjectBName = "beta-app";
+    public const string ProjectABranch = "main";
+    public const string ProjectBBranch = "develop";
+    public const string ProjectARepositoryUrl = "https://example.test/alpha.git";
+    public const string ProjectBRepositoryUrl = "https://example.test/beta.git";
+
+    private readonly string _databasePath;
+    private bool _migrated;
+
+    public TwoOrgsFixture()
+    {
+        _databasePath = Path.Combine(Path.GetTempPath(), $"zenkins-q001-{Guid.NewGuid():N}.db");
+
+        TenantContext = new TenantContext();
+        SystemDataScope = new SystemDataScope();
+        Configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [ZenkinsDataOptions.ProviderConfigurationKey] = nameof(DatabaseProvider.Sqlite),
+                [ZenkinsDataOptions.ConnectionStringConfigurationKey] = ConnectionString,
+            })
+            .Build();
+
+        Seed();
+    }
+
+    /// <summary>Absolute path of this fixture's temporary SQLite file (never inside the repository).</summary>
+    public string DatabasePath => _databasePath;
+
+    /// <summary>Connection string for the same file, for hosts and options built outside the fixture.</summary>
+    public string ConnectionString => $"Data Source={_databasePath}";
+
+    /// <summary>The scoped tenant context every fixture-created context uses.</summary>
+    public TenantContext TenantContext { get; }
+
+    /// <summary>The scoped escape hatch the seed and the system-wide assertions need.</summary>
+    public ISystemDataScope SystemDataScope { get; }
+
+    /// <summary>Configuration with only the data-layer keys, for <c>AddZenkinsData</c> style tests.</summary>
+    public IConfiguration Configuration { get; }
+
+    /// <summary>Active organization, or <see langword="null"/> when no tenant is selected.</summary>
+    public Guid? ActiveOrganizationId => TenantContext.OrganizationId;
+
+    /// <summary>Re-points the active tenant mid-test. The data layer detects the switch through the revision.</summary>
+    public void UseOrganization(Guid organizationId) => TenantContext.OrganizationId = organizationId;
+
+    /// <summary>Activates organization A, keeping the full setup readable in tests.</summary>
+    public void UseOrganizationA() => UseOrganization(OrgAId);
+
+    /// <summary>Activates organization B.</summary>
+    public void UseOrganizationB() => UseOrganization(OrgBId);
+
+    /// <summary>Simulates an anonymous request: no tenant selected, so no tenant-owned row matches.</summary>
+    public void ClearOrganizationSelection() => TenantContext.OrganizationId = null;
+
+    /// <summary>
+    /// Creates a migrated context on the fixture's file, bound to the fixture's tenant context.
+    /// The caller owns (and disposes) it.
+    /// </summary>
+    public ZenkinsDbContext CreateContext() => CreateContext(TenantContext);
+
+    /// <summary>
+    /// Creates a context on the fixture's file with a caller-supplied <see cref="ITenantContext"/>
+    /// (used to prove the data layer does not depend on the concrete type).
+    /// </summary>
+    public ZenkinsDbContext CreateContext(ITenantContext tenantContext)
+    {
+        ArgumentNullException.ThrowIfNull(tenantContext);
+
+        var options = new DbContextOptionsBuilder<ZenkinsDbContext>()
+            .UseZenkinsDatabase(new ZenkinsDataOptions(DatabaseProvider.Sqlite, ConnectionString))
+            .Options;
+
+        var context = new ZenkinsDbContext(options, tenantContext, SystemDataScope);
+        if (!_migrated)
+        {
+            context.Database.Migrate();
+            _migrated = true;
+        }
+
+        return context;
+    }
+
+    /// <summary>
+    /// Reads rows across every tenant through the product's escape hatch. This is how the harness
+    /// derives its expectations and how a probe proves "nothing persisted" without trusting the
+    /// filtered view it is testing.
+    /// </summary>
+    public async Task<List<TEntity>> ReadAcrossTenantsAsync<TEntity>(
+        Expression<Func<TEntity, bool>> predicate,
+        CancellationToken cancellationToken = default)
+        where TEntity : class
+    {
+        using var scope = SystemDataScope.BeginScope();
+        await using var context = CreateContext();
+        return await context.SystemQueryAsync(predicate, cancellationToken);
+    }
+
+    /// <summary>
+    /// Counts one tenant's rows across all tenants. Used by write probes to prove a rejected write
+    /// left both the active and the foreign tenant untouched.
+    /// </summary>
+    public async Task<int> CountAcrossTenantsAsync<TEntity>(
+        Guid organizationId,
+        CancellationToken cancellationToken = default)
+        where TEntity : class, ITenantOwned =>
+        (await ReadAcrossTenantsAsync<TEntity>(
+            entity => entity.OrganizationId == organizationId,
+            cancellationToken)).Count;
+
+    private void Seed()
+    {
+        // Bootstrap data exists before any tenant is selected, so it can only be written through
+        // the system scope - the same shape F-001's first-run bootstrap will use.
+        using var scope = SystemDataScope.BeginScope();
+        using var context = CreateContext();
+
+        context.Organizations.AddRange(
+            new Organization { Id = OrgAId, Name = OrgAName },
+            new Organization { Id = OrgBId, Name = OrgBName });
+
+        context.OrganizationMembers.AddRange(
+            new OrganizationMember
+            {
+                Id = OrgAOwnerMembershipId,
+                OrganizationId = OrgAId,
+                UserId = OrgAOwnerUserId,
+                Role = OrganizationRole.Owner,
+            },
+            new OrganizationMember
+            {
+                Id = OrgAMemberMembershipId,
+                OrganizationId = OrgAId,
+                UserId = OrgAMemberUserId,
+                Role = OrganizationRole.Member,
+            },
+            new OrganizationMember
+            {
+                Id = OrgBOwnerMembershipId,
+                OrganizationId = OrgBId,
+                UserId = OrgBOwnerUserId,
+                Role = OrganizationRole.Owner,
+            });
+
+        context.Projects.AddRange(
+            new Project
+            {
+                Id = ProjectAId,
+                OrganizationId = OrgAId,
+                Name = ProjectAName,
+                RepositoryUrl = ProjectARepositoryUrl,
+                DefaultBranch = ProjectABranch,
+            },
+            new Project
+            {
+                Id = ProjectBId,
+                OrganizationId = OrgBId,
+                Name = ProjectBName,
+                RepositoryUrl = ProjectBRepositoryUrl,
+                DefaultBranch = ProjectBBranch,
+            });
+
+        context.SaveChanges();
+    }
+
+    public void Dispose()
+    {
+        // SQLite pools connections; on Windows the file stays locked until the pool is drained.
+        SqliteConnection.ClearAllPools();
+
+        foreach (var path in new[] { _databasePath, _databasePath + "-shm", _databasePath + "-wal" })
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (IOException)
+            {
+                // A leaked reader in a failing test must not mask the real failure; the file lives
+                // in the OS temp directory and is never committed.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+}

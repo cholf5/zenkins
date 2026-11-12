@@ -30,6 +30,12 @@
     <PackageVersion Include="BlazorBlueprint.Icons.Lucide" Version="2.0.2" />
     <PackageVersion Include="BlazorBlueprint.Primitives" Version="4.2.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.3" />
+    <!--
+      Q-001: WebApplicationFactory<Program> for the HTTP id-swap probe. Test-only; the ASP.NET Core
+      framework it needs is already the Server's framework reference. Pinned alongside the other
+      10.0.x packages so a restore cannot silently cross a major version.
+    -->
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
   </ItemGroup>
 
 </Project>

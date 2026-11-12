@@ -72,3 +72,8 @@ static bool IsHtmlNavigation(HttpContext context)
 
     return request.Headers.Accept.ToString().Contains("text/html", StringComparison.OrdinalIgnoreCase);
 }
+
+// Q-001: WebApplicationFactory<Program> needs a reachable entry-point type. Top-level statements
+// generate an internal Program class, so this declaration is the only production change the HTTP
+// probe needs; it must stay at the end of the file, after every statement and local function.
+public partial class Program { }
