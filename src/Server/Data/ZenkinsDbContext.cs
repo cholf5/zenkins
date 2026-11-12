@@ -80,6 +80,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
 
     public DbSet<Project> Projects => Set<Project>();
 
+    public DbSet<Worker> Workers => Set<Worker>();
+
+    public DbSet<WorkerToken> WorkerTokens => Set<WorkerToken>();
+
     /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
     public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
 
@@ -225,6 +229,64 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasQueryFilter(project => project.OrganizationId == CurrentOrganizationId);
+        });
+
+        // F-004: workers and their bearer tokens are tenant-owned like projects. Every worker-API
+        // call authenticates with a token, and the token - never a cookie or URL - selects the
+        // tenant for those requests (WorkerService sets it after resolving the hash).
+        modelBuilder.Entity<Worker>(entity =>
+        {
+            entity.HasKey(worker => worker.Id);
+            entity.Property(worker => worker.Name).IsRequired().HasMaxLength(200);
+
+            // Container restarts must not duplicate workers: re-registering with a known name
+            // updates the row. The database index is the guard, not a pre-flight query.
+            entity.HasIndex(worker => new { worker.OrganizationId, worker.Name }).IsUnique();
+            entity.Property(worker => worker.Os).IsRequired().HasMaxLength(32);
+            entity.Property(worker => worker.Architecture).IsRequired().HasMaxLength(32);
+            entity.Property(worker => worker.Version).IsRequired().HasMaxLength(64);
+            entity.Property(worker => worker.Tags).IsRequired().HasMaxLength(400);
+            entity.Property(worker => worker.Status).IsRequired().HasMaxLength(16);
+            entity.HasOne<Organization>().WithMany().HasForeignKey(worker => worker.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Belt and braces for the string status, same shape as the role check above.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_Workers_Status",
+                $"\"Status\" IN ('{WorkerStatus.Online}', '{WorkerStatus.Offline}')"));
+
+            entity.HasQueryFilter(worker => worker.OrganizationId == CurrentOrganizationId);
+        });
+
+        modelBuilder.Entity<WorkerToken>(entity =>
+        {
+            entity.HasKey(token => token.Id);
+            entity.Property(token => token.Kind).IsRequired().HasMaxLength(16);
+
+            // M1 (review fix): the one-time transitions of a token are guarded by EF optimistic
+            // concurrency. Two concurrent registrations racing to burn the same single-use token
+            // (UsedAt) - or a revoke racing a register/heartbeat write (RevokedAt) - cannot both
+            // commit: the loser's UPDATE matches no row and surfaces as
+            // DbUpdateConcurrencyException, which WorkerService maps to 401. Plain concurrency
+            // tokens change no column and no index, so no migration is needed for them.
+
+            // The hash is the authentication lookup key, so it is globally unique (also the cheap
+            // index the system-scope lookup uses; plaintext tokens are never stored or logged).
+            entity.HasIndex(token => token.TokenHash).IsUnique();
+            entity.Property(token => token.TokenHash).IsRequired().HasMaxLength(64);
+            entity.HasOne<Organization>().WithMany().HasForeignKey(token => token.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Worker>().WithMany().HasForeignKey(token => token.WorkerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_WorkerTokens_Kind",
+                $"\"Kind\" IN ('{WorkerTokenKind.Registration}', '{WorkerTokenKind.Worker}')"));
+
+            entity.HasQueryFilter(token => token.OrganizationId == CurrentOrganizationId);
+
+            entity.Property(token => token.UsedAt).IsConcurrencyToken();
+            entity.Property(token => token.RevokedAt).IsConcurrencyToken();
         });
     }
 

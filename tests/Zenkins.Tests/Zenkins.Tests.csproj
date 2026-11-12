@@ -17,9 +17,10 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Shared/Zenkins.Shared.csproj" />
     <ProjectReference Include="../../src/Server/Zenkins.Server.csproj" />
-    <!-- Build-order only: the AC7 guard reads Zenkins.Worker's runtimeconfig.json, so the
-         Worker must exist next to this build. No assembly is referenced. -->
-    <ProjectReference Include="../../src/Worker/Zenkins.Worker.csproj" ReferenceOutputAssembly="false" />
+    <!-- F-005 unit tests use the Worker's config/store/backoff types directly, and the process-level
+         E2E spawns the Worker from this build output. Referencing the assembly also copies the
+         apphost, deps and runtimeconfig.json here, which the WorkerRuntimeConfigTests guard reads. -->
+    <ProjectReference Include="../../src/Worker/Zenkins.Worker.csproj" />
   </ItemGroup>
 
 </Project>

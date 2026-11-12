@@ -5,6 +5,10 @@ using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Shared.Tenancy;
 
+// The worker project's namespace is Zenkins.Worker, which shadows the entity type name inside any
+// Zenkins.* namespace; the alias keeps the entity readable here.
+using WorkerEntity = Zenkins.Server.Data.Entities.Worker;
+
 namespace Zenkins.Tests.Tenancy;
 
 /// <summary>
@@ -26,7 +30,8 @@ public static class TenantIsolationProbes
     /// Every tenant-owned entity the harness probes. Kept explicit (no reflection here) because the
     /// probe bodies are generic and a new entity needs a reviewed line, not an invisible discovery.
     /// </summary>
-    public static IReadOnlyList<Type> CoveredEntityTypes { get; } = [typeof(OrganizationMember), typeof(Project)];
+    public static IReadOnlyList<Type> CoveredEntityTypes { get; } =
+        [typeof(OrganizationMember), typeof(Project), typeof(WorkerEntity), typeof(WorkerToken)];
 
     /// <summary>
     /// The read probe: an unfiltered query returns exactly the active tenant's rows, for A and then

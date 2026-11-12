@@ -8,6 +8,7 @@ using Zenkins.Server.Components;
 using Zenkins.Server.Data;
 using Zenkins.Server.Organizations;
 using Zenkins.Server.Projects;
+using Zenkins.Server.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,6 +17,7 @@ builder.Services.AddZenkinsData(builder.Configuration, builder.Environment.Conte
 builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
+builder.Services.AddZenkinsWorkers();
 
 // EF logs every SQL command at Information; keep that out of the production log so a parameter
 // value can never be one config change away from being written down. Identity/registration logs
@@ -119,6 +121,11 @@ app.MapOrganizationEndpoints();
 // Project create/edit/delete (F-003). Same form-bound, antiforgery-validated shape; the service
 // enforces membership (create/edit) and Owner-only deletion.
 app.MapProjectEndpoints();
+
+// Worker registration/heartbeat API (token-authenticated, exempt from cookie auth) and the
+// Owner-only registration-token form endpoints (F-004). See WorkerEndpoints for why the two
+// groups deliberately differ in authentication.
+app.MapWorkerEndpoints();
 
 app.Run();
 

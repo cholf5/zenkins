@@ -1,28 +1,173 @@
 @page "/workers"
 @attribute [Authorize]
+@inject UserSession UserSession
+@inject WorkerService WorkerService
 
 <PageTitle>Workers · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
         <BbCardTitle As="h1" tabindex="-1">Workers</BbCardTitle>
-        <BbBadge Variant="BadgeVariant.Secondary">Shell preview</BbBadge>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+        }
     </div>
 
-    <BbCard>
-        <BbCardHeader>
-            <BbCardTitle As="h2">Registered workers</BbCardTitle>
-            <BbCardDescription>
-                Worker registration, heartbeats and platform tags will be listed here.
-            </BbCardDescription>
-        </BbCardHeader>
-        <BbCardContent>
-            <BbEmpty Title="No workers connected"
-                     Description="Start a worker and it will register here once the worker runtime lands.">
-                <Icon>
-                    <LucideIcon Name="server" Class="bb:h-12 bb:w-12" />
-                </Icon>
-            </BbEmpty>
-        </BbCardContent>
-    </BbCard>
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else
+    {
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive bb:bg-destructive/10 bb:p-3 bb:text-sm">
+                <p>@error</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Registered workers</BbCardTitle>
+                <BbCardDescription>
+                    Workers of the active organization. Every worker authenticates with its own token;
+                    heartbeats keep it Online (PRD §3.4.3).
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_workers.Count == 0)
+                {
+                    <BbEmpty Title="No workers connected"
+                             Description="Mint a registration token, then start a worker with it (ZENKINS_SERVER_URL + ZENKINS_REGISTRATION_TOKEN).">
+                        <Icon>
+                            <LucideIcon Name="server" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                }
+                else
+                {
+                    <ul class="bb:divide-y">
+                        @foreach (var worker in _workers)
+                        {
+                            <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
+                                <div class="bb:min-w-0">
+                                    <p class="bb:font-medium">@worker.Name</p>
+                                    <p class="bb:truncate bb:text-xs bb:text-muted-foreground">
+                                        @worker.Os · @worker.Architecture · v@(worker.Version) · @worker.CpuCount CPUs · max @worker.MaxConcurrency
+                                    </p>
+                                    @if (!string.IsNullOrEmpty(worker.Tags))
+                                    {
+                                        <p class="bb:text-xs bb:text-muted-foreground">Tags: @worker.Tags</p>
+                                    }
+                                </div>
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    <BbBadge Variant="BadgeVariant.Outline">@worker.Status</BbBadge>
+                                    <span>
+                                        @(worker.LastHeartbeatAt?.ToString("yyyy-MM-dd HH:mm") ?? "-") UTC
+                                    </span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+
+        @if (_session?.CanManageActiveOrganization == true)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Registration tokens</BbCardTitle>
+                    <BbCardDescription>
+                        Single-use tokens for registering a worker. The plaintext is shown once at
+                        creation and never stored; revoking a pending token immediately invalidates it.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <form method="post" action="/workers/registration-tokens" data-zenkins-antiforgery>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create registration token</BbButton>
+                    </form>
+
+                    @if (_tokens.Count == 0)
+                    {
+                        <p class="bb:mt-4 bb:text-sm bb:text-muted-foreground">No registration tokens yet.</p>
+                    }
+                    else
+                    {
+                        <ul class="bb:mt-4 bb:divide-y">
+                            @foreach (var token in _tokens)
+                            {
+                                <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
+                                    <div class="bb:min-w-0">
+                                        <p class="bb:text-sm">Created @token.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</p>
+                                        <p class="bb:text-xs bb:text-muted-foreground">
+                                            @(token.UsedAt is { } used ? $"Used {used:yyyy-MM-dd HH:mm} UTC"
+                                                : token.RevokedAt is { } revoked ? $"Revoked {revoked:yyyy-MM-dd HH:mm} UTC"
+                                                : "Pending (unused)")
+                                        </p>
+                                    </div>
+                                    @if (token.UsedAt is null && token.RevokedAt is null)
+                                    {
+                                        <form method="post" action="/workers/registration-tokens/@token.Id/revoke" data-zenkins-antiforgery>
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Revoke</BbButton>
+                                        </form>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </BbCardContent>
+            </BbCard>
+        }
+    }
 </div>
+
+@code {
+    private UserSessionInfo? _session;
+    private IReadOnlyList<WorkerView> _workers = [];
+    private IReadOnlyList<WorkerRegistrationTokenView> _tokens = [];
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        "token-revoked" => "The registration token was revoked.",
+        _ => null,
+    };
+
+    private string? Error => ErrorCode switch
+    {
+        WorkerErrorCodes.TokenAlreadyConsumed => "That token was already used to register a worker.",
+        WorkerErrorCodes.TokenAlreadyRevoked => "That token is already revoked.",
+        _ => null,
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Same hazard as the projects page: resolving the session selects the circuit's tenant
+        // before any tenant-owned row is read.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _workers = await WorkerService.GetWorkersAsync();
+        if (_session.CanManageActiveOrganization)
+        {
+            _tokens = await WorkerService.GetRegistrationTokensAsync();
+        }
+    }
+}

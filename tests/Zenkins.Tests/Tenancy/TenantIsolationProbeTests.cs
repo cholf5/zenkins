@@ -3,6 +3,10 @@ using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Shared.Tenancy;
 
+// The worker project's namespace is Zenkins.Worker, which shadows the entity type name inside any
+// Zenkins.* namespace; the alias keeps the entity readable here.
+using WorkerEntity = Zenkins.Server.Data.Entities.Worker;
+
 namespace Zenkins.Tests.Tenancy;
 
 /// <summary>
@@ -26,6 +30,14 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
     [Fact]
     public Task Projects_are_invisible_across_tenants() =>
         TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<Project>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Workers_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<WorkerEntity>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Worker_tokens_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<WorkerToken>(_fixture, CancellationToken);
 
     [Fact]
     public Task Cross_tenant_membership_write_is_rejected_and_persists_nothing() =>
@@ -53,6 +65,34 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     [Fact]
+    public Task Cross_tenant_worker_write_is_rejected_and_persists_nothing() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<WorkerEntity>(
+            _fixture,
+            () => new WorkerEntity
+            {
+                Name = "smuggled-agent",
+                Os = "Linux",
+                Architecture = "X64",
+                Version = "1.0.0",
+                Tags = "dotnet",
+                CpuCount = 1,
+                MaxConcurrency = 1,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Cross_tenant_worker_token_write_is_rejected_and_persists_nothing() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<WorkerToken>(
+            _fixture,
+            () => new WorkerToken
+            {
+                WorkerId = null,
+                Kind = WorkerTokenKind.Registration,
+                TokenHash = "smuggled-registration-token-hash".PadRight(64, '-'),
+            },
+            CancellationToken);
+
+    [Fact]
     public Task Find_after_a_tenant_switch_returns_null_for_memberships() =>
         TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<OrganizationMember>(
             _fixture,
@@ -66,6 +106,22 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             _fixture,
             TwoOrgsFixture.ProjectAId,
             TwoOrgsFixture.ProjectBId,
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_workers() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<WorkerEntity>(
+            _fixture,
+            TwoOrgsFixture.WorkerAId,
+            TwoOrgsFixture.WorkerBId,
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_worker_tokens() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<WorkerToken>(
+            _fixture,
+            TwoOrgsFixture.WorkerTokenAId,
+            TwoOrgsFixture.WorkerTokenBId,
             CancellationToken);
 
     [Fact]

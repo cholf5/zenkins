@@ -8,6 +8,10 @@ using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Shared.Tenancy;
 
+// The worker project's namespace is Zenkins.Worker, which shadows the entity type name inside any
+// Zenkins.* namespace; the alias keeps the entity readable here.
+using WorkerEntity = Zenkins.Server.Data.Entities.Worker;
+
 namespace Zenkins.Tests.Tenancy;
 
 /// <summary>
@@ -60,6 +64,18 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's owner membership row.</summary>
     public static readonly Guid OrgBOwnerMembershipId = new("b0000000-0000-4000-8000-000000000023");
 
+    /// <summary>A's only worker, the positive control for the F-004 probes.</summary>
+    public static readonly Guid WorkerAId = new("a0000000-0000-4000-8000-000000000031");
+
+    /// <summary>B's only worker.</summary>
+    public static readonly Guid WorkerBId = new("b0000000-0000-4000-8000-000000000032");
+
+    /// <summary>A worker token of A's worker (the id a cross-tenant probe substitutes).</summary>
+    public static readonly Guid WorkerTokenAId = new("a0000000-0000-4000-8000-000000000041");
+
+    /// <summary>A worker token of B's worker.</summary>
+    public static readonly Guid WorkerTokenBId = new("b0000000-0000-4000-8000-000000000042");
+
     public const string OrgAName = "Alpha";
     public const string OrgBName = "Beta";
 
@@ -80,6 +96,9 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string ProjectBBranch = "develop";
     public const string ProjectARepositoryUrl = "https://example.test/alpha.git";
     public const string ProjectBRepositoryUrl = "https://example.test/beta.git";
+
+    public const string WorkerAName = "alpha-agent";
+    public const string WorkerBName = "beta-agent";
 
     private readonly string _databasePath;
     private bool _migrated;
@@ -247,8 +266,60 @@ public sealed class TwoOrgsFixture : IDisposable
                 DefaultBranch = ProjectBBranch,
             });
 
+        // F-004: one worker per organization, each with one worker token (the token hash is the
+        // SHA-256 of an arbitrary offline string - the plaintext never exists in tests).
+        context.Workers.AddRange(
+            new WorkerEntity
+            {
+                Id = WorkerAId,
+                OrganizationId = OrgAId,
+                Name = WorkerAName,
+                Os = "Linux",
+                Architecture = "X64",
+                Version = "1.0.0",
+                Tags = "dotnet",
+                CpuCount = 4,
+                MaxConcurrency = 1,
+                Status = WorkerStatus.Offline,
+            },
+            new WorkerEntity
+            {
+                Id = WorkerBId,
+                OrganizationId = OrgBId,
+                Name = WorkerBName,
+                Os = "macOS",
+                Architecture = "Arm64",
+                Version = "1.0.0",
+                Tags = "dotnet",
+                CpuCount = 8,
+                MaxConcurrency = 1,
+                Status = WorkerStatus.Online,
+            });
+
+        context.WorkerTokens.AddRange(
+            new WorkerToken
+            {
+                Id = WorkerTokenAId,
+                OrganizationId = OrgAId,
+                WorkerId = WorkerAId,
+                Kind = WorkerTokenKind.Worker,
+                TokenHash = SeededTokenHash(WorkerAName),
+            },
+            new WorkerToken
+            {
+                Id = WorkerTokenBId,
+                OrganizationId = OrgBId,
+                WorkerId = WorkerBId,
+                Kind = WorkerTokenKind.Worker,
+                TokenHash = SeededTokenHash(WorkerBName),
+            });
+
         context.SaveChanges();
     }
+
+    /// <summary>A fake but well-shaped 64-character hash for fixture tokens (no plaintext exists).</summary>
+    private static string SeededTokenHash(string workerName) =>
+        $"seed:{workerName}".PadRight(64, '-');
 
     /// <summary>
     /// A seeded account with a non-null security stamp (Identity's claims factory requires one) and
