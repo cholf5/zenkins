@@ -4,23 +4,30 @@ using Xunit;
 namespace Zenkins.Tests;
 
 /// <summary>
-/// AC7 guard for the failure mode the assembly-reference test cannot see: adding
-/// <c>&lt;FrameworkReference Include="Microsoft.AspNetCore.App" /&gt;</c> to a shared library
-/// leaves assembly references and package graphs untouched, but propagates into the
-/// <c>runtimeconfig.json</c> of every app that consumes it — here, the Worker.
+/// AC7 guard for the failure mode the assembly-reference test cannot see: adding a
+/// reference to ASP.NET Core in a shared library leaves assembly references and package
+/// graphs of the Worker looking clean, but propagates into the <c>runtimeconfig.json</c>
+/// of every app that consumes it — here, the Worker.
 /// </summary>
 public sealed class WorkerRuntimeConfigTests
 {
+    private const string WorkerRuntimeConfigFileName = "Zenkins.Worker.runtimeconfig.json";
+
     [Fact]
     public void Worker_runtimeconfig_does_not_include_aspnetcore_frameworks()
     {
-        var runtimeConfigPath = FindWorkerRuntimeConfig();
+        // MSBuild copies the Worker's apphost, deps and runtimeconfig next to the test
+        // assembly (build-order-only ProjectReference in Zenkins.Tests.csproj), so this
+        // never has to guess a configuration, target framework or output layout.
+        var runtimeConfigPath = Path.Combine(AppContext.BaseDirectory, WorkerRuntimeConfigFileName);
 
-        if (runtimeConfigPath is null)
+        if (!File.Exists(runtimeConfigPath))
         {
-            Assert.Skip(
-                "Zenkins.Worker has no runtimeconfig.json for this configuration and target framework yet; "
-                + "run `dotnet build` before `dotnet test` to exercise this guard.");
+            Assert.Fail(
+                $"{runtimeConfigPath} was not found, so the only guard for the transitive ASP.NET Core "
+                + "reference path cannot run. This test fails closed on purpose. Zenkins.Tests.csproj must "
+                + "keep <ProjectReference Include=\"../../src/Worker/Zenkins.Worker.csproj\" "
+                + "ReferenceOutputAssembly=\"false\" /> so the Worker is built into this output folder.");
             return;
         }
 
@@ -58,45 +65,4 @@ public sealed class WorkerRuntimeConfigTests
 
     private static string? FrameworkName(JsonElement framework) =>
         framework.TryGetProperty("name", out var name) ? name.GetString() : null;
-
-    /// <summary>
-    /// Locates the Worker's runtimeconfig.json relative to the test assembly output
-    /// (<c>tests/Zenkins.Tests/bin/&lt;Configuration&gt;/&lt;tfm&gt;</c>) and the repository root.
-    /// </summary>
-    private static string? FindWorkerRuntimeConfig()
-    {
-        var outputDirectory = new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
-        var targetFramework = outputDirectory.Name;
-        var configuration = outputDirectory.Parent?.Name;
-
-        if (configuration is null)
-        {
-            return null;
-        }
-
-        var repositoryRoot = FindRepositoryRoot(outputDirectory);
-        if (repositoryRoot is null)
-        {
-            return null;
-        }
-
-        var candidate = Path.Combine(
-            repositoryRoot.FullName,
-            "src", "Worker", "bin", configuration, targetFramework, "Zenkins.Worker.runtimeconfig.json");
-
-        return File.Exists(candidate) ? candidate : null;
-    }
-
-    private static DirectoryInfo? FindRepositoryRoot(DirectoryInfo start)
-    {
-        for (var directory = start; directory is not null; directory = directory.Parent)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "Zenkins.slnx")))
-            {
-                return directory;
-            }
-        }
-
-        return null;
-    }
 }

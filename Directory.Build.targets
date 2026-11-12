@@ -4,17 +4,27 @@
     Structural guard for card I-001 (AC7): Zenkins.Shared is consumed by the console
     Worker, which has to stay publishable self-contained/trimmed without ASP.NET Core.
 
-    A FrameworkReference to Microsoft.AspNetCore.App is invisible to
-    Assembly.GetReferencedAssemblies() (no type is used yet) and to the package list
-    (it is a framework, not a package), so it is rejected at build time instead of
-    being caught by tooling afterwards.
+    Two vectors are rejected here because neither is visible from the outside:
+      * a FrameworkReference to Microsoft.AspNetCore.App is invisible to
+        Assembly.GetReferencedAssemblies() (no type is used yet) and to the package list
+        (it is a framework, not a package);
+      * a PackageReference to any Microsoft.AspNetCore.* package is invisible to the
+        runtimeconfig test (the Worker's framework list stays clean) and only shows up in
+        a manually run `dotnet list package` query.
+
+    NOTE: this target is keyed on the project name. Renaming Zenkins.Shared means
+    re-pointing the condition below, otherwise the guard silently stops applying.
   -->
-  <Target Name="Zenkins_RejectAspNetCoreFrameworkReference"
+  <Target Name="Zenkins_RejectAspNetCoreReferences"
           BeforeTargets="CoreCompile"
           Condition="'$(MSBuildProjectName)' == 'Zenkins.Shared'">
-    <!-- Batched over @(FrameworkReference): the task simply does not run when the list is empty. -->
+    <!-- Batched over @(FrameworkReference): the task does not run when the list is empty. -->
     <Error Condition="$([System.String]::Copy('%(FrameworkReference.Identity)').StartsWith('Microsoft.AspNetCore'))"
            Text="$(MSBuildProjectName): FrameworkReference '%(FrameworkReference.Identity)' is not allowed. Zenkins.Shared must not reference ASP.NET Core because Zenkins.Worker consumes it as a plain console app; put ASP.NET Core dependencies in Zenkins.Server instead." />
+
+    <!-- Batched over @(PackageReference): rejects Microsoft.AspNetCore.* packages too. -->
+    <Error Condition="$([System.String]::Copy('%(PackageReference.Identity)').StartsWith('Microsoft.AspNetCore'))"
+           Text="$(MSBuildProjectName): PackageReference '%(PackageReference.Identity)' is not allowed. Zenkins.Shared must not reference ASP.NET Core because Zenkins.Worker consumes it as a plain console app; put ASP.NET Core dependencies in Zenkins.Server instead." />
   </Target>
 
 </Project>
