@@ -4,7 +4,7 @@ title: <title>
 type: feature          # feature | bug | refactor | test | docs | release | chore
 priority: P1           # P0 | P1 | P2 | P3
 size: M                # S | M | L
-status: todo           # todo | done
+status: todo           # todo | review | done
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 blocked: none          # none, or a mapping: reason / unblock / owner

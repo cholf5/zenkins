@@ -4,7 +4,7 @@ title: Solution scaffold — .NET 10, .slnx, central package management, Server/
 type: chore
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-12
 updated: 2026-11-12
 blocked: none
