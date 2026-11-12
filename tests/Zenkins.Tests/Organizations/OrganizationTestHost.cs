@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
@@ -30,9 +31,10 @@ public sealed class OrganizationTestHost : IDisposable
     public AuthTestHost Host { get; }
 
     /// <summary>Starts an empty host and registers the first account (Owner of the starter organization).</summary>
-    public static async Task<OrganizationTestHost> CreateAsync()
+    public static async Task<OrganizationTestHost> CreateAsync(
+        Action<IConfigurationBuilder>? configureAppConfiguration = null)
     {
-        var host = new AuthTestHost();
+        var host = new AuthTestHost(configureAppConfiguration: configureAppConfiguration);
         using var client = host.CreateClient();
         var response = await AuthTestHost.RegisterAsync(client, OwnerEmail);
         if ((int)response.StatusCode is not (302 or 303))

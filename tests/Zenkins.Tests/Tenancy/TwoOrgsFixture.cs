@@ -76,6 +76,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>A worker token of B's worker.</summary>
     public static readonly Guid WorkerTokenBId = new("b0000000-0000-4000-8000-000000000042");
 
+    /// <summary>A's only build run, the positive control for the F-006 probes.</summary>
+    public static readonly Guid BuildRunAId = new("a0000000-0000-4000-8000-000000000051");
+
+    /// <summary>B's only build run.</summary>
+    public static readonly Guid BuildRunBId = new("b0000000-0000-4000-8000-000000000052");
+
     public const string OrgAName = "Alpha";
     public const string OrgBName = "Beta";
 
@@ -312,6 +318,29 @@ public sealed class TwoOrgsFixture : IDisposable
                 WorkerId = WorkerBId,
                 Kind = WorkerTokenKind.Worker,
                 TokenHash = SeededTokenHash(WorkerBName),
+            });
+
+        // F-006: one queued run per organization, both unleased (the state every run starts in).
+        context.BuildRuns.AddRange(
+            new BuildRun
+            {
+                Id = BuildRunAId,
+                OrganizationId = OrgAId,
+                ProjectId = ProjectAId,
+                TriggerType = BuildRunTriggerType.Manual,
+                TriggerUserId = OrgAOwnerUserId,
+                RequiredTags = string.Empty,
+                CommandJson = """["dotnet","--version"]""",
+            },
+            new BuildRun
+            {
+                Id = BuildRunBId,
+                OrganizationId = OrgBId,
+                ProjectId = ProjectBId,
+                TriggerType = BuildRunTriggerType.Manual,
+                TriggerUserId = OrgBOwnerUserId,
+                RequiredTags = "dotnet",
+                CommandJson = """["dotnet","build"]""",
             });
 
         context.SaveChanges();

@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
@@ -25,8 +26,15 @@ public sealed class WorkerTestHost : IDisposable
 
     public OrganizationTestHost Inner { get; }
 
-    public static async Task<WorkerTestHost> CreateAsync() =>
-        new(await OrganizationTestHost.CreateAsync());
+    public static Task<WorkerTestHost> CreateAsync() => CreateAsync(null);
+
+    /// <summary>Optional extra configuration sources (F-006 uses them for the short lease window).</summary>
+    public static Task<WorkerTestHost> CreateAsync(
+        Action<IConfigurationBuilder>? configureAppConfiguration) =>
+        CreateCoreAsync(OrganizationTestHost.CreateAsync(configureAppConfiguration));
+
+    private static async Task<WorkerTestHost> CreateCoreAsync(Task<OrganizationTestHost> inner) =>
+        new(await inner);
 
     /// <summary>Signs in the starter organization's Owner.</summary>
     public Task<HttpClient> SignInOwnerAsync() => Inner.SignInAsync(OrganizationTestHost.OwnerEmail);
@@ -197,7 +205,7 @@ public sealed class WorkerTestHost : IDisposable
     private static async Task<ZenkinsDbContext> CreateContextAsync(IServiceProvider services) =>
         await services.GetRequiredService<IDbContextFactory<ZenkinsDbContext>>().CreateDbContextAsync();
 
-    private static Task<HttpResponseMessage> SendWorkerJsonAsync(
+    internal static Task<HttpResponseMessage> SendWorkerJsonAsync(
         HttpClient client,
         string? bearerToken,
         string url,

@@ -8,6 +8,7 @@ using Zenkins.Server.Components;
 using Zenkins.Server.Data;
 using Zenkins.Server.Organizations;
 using Zenkins.Server.Projects;
+using Zenkins.Server.Runs;
 using Zenkins.Server.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,6 +19,7 @@ builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
 builder.Services.AddZenkinsWorkers();
+builder.Services.AddZenkinsRuns(builder.Configuration);
 
 // EF logs every SQL command at Information; keep that out of the production log so a parameter
 // value can never be one config change away from being written down. Identity/registration logs
@@ -126,6 +128,10 @@ app.MapProjectEndpoints();
 // Owner-only registration-token form endpoints (F-004). See WorkerEndpoints for why the two
 // groups deliberately differ in authentication.
 app.MapWorkerEndpoints();
+
+// Run trigger form (F-003's authenticated form shape) and the token-authenticated run claim and
+// reporting API (F-006); the background lease sweeper is registered by AddZenkinsRuns.
+app.MapRunEndpoints();
 
 app.Run();
 

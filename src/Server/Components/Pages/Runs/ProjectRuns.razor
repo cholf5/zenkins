@@ -1,0 +1,138 @@
+@page "/projects/{ProjectId:guid}/runs"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+@inject RunService RunsService
+
+<PageTitle>Runs · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
+    @if (_project is null)
+    {
+        @* Foreign tenant id == missing id: the service reads through the tenant filter and the
+           response is a real 404 (same pattern as the project detail page, IStatusCodePagesFeature
+           disabled so /not-found is not re-executed into the component request). *@
+        <NotFoundPage />
+    }
+    else
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">Runs · @_project.Name</BbCardTitle>
+                <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+            </div>
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">Project</BbButton>
+                <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Default">Start run</BbButton>
+            </div>
+        </div>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Build runs</BbCardTitle>
+                <BbCardDescription>
+                    Every execution of this project's command, newest first. Workers pull queued runs
+                    through an atomic claim; a claimed run must be accepted inside its lease window.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_runs.Count == 0)
+                {
+                    <BbEmpty Title="No runs yet"
+                             Description="Start a run from the project page; it waits in the queue until an eligible worker claims it.">
+                        <Icon>
+                            <LucideIcon Name="play" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                }
+                else
+                {
+                    <ul class="bb:divide-y">
+                        @foreach (var run in _runs)
+                        {
+                            <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
+                                <div class="bb:min-w-0">
+                                    <p class="bb:font-medium">
+                                        <a href="/runs/@run.Id" class="bb:underline bb:underline-offset-4">Run @run.Id.ToString("N")[..8]</a>
+                                        <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
+                                            @(string.Join(' ', run.Command.Take(3)))@(run.Command.Length > 3 ? " …" : "")
+                                        </span>
+                                    </p>
+                                    <p class="bb:text-xs bb:text-muted-foreground">
+                                        @(run.TriggerUserEmail ?? run.TriggerType)
+                                        @if (run.WorkerName is { } workerName)
+                                        {
+                                            <span> · @workerName</span>
+                                        }
+                                    </p>
+                                </div>
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    <BbBadge Variant="RunBadgeVariant(run.Status)">@run.Status</BbBadge>
+                                    <span>@run.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid ProjectId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private UserSessionInfo? _session;
+    private ProjectView? _project;
+    private IReadOnlyList<RunView> _runs = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read. Never rely on the layout having done it first.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is null)
+        {
+            SetNotFound();
+            return;
+        }
+
+        _runs = await RunsService.GetProjectRunsAsync(ProjectId);
+    }
+
+    private static BadgeVariant RunBadgeVariant(string status) => status switch
+    {
+        BuildRunStatus.Queued => BadgeVariant.Secondary,
+        BuildRunStatus.Running => BadgeVariant.Default,
+        BuildRunStatus.Success => BadgeVariant.Success,
+        BuildRunStatus.Failed => BadgeVariant.Destructive,
+        _ => BadgeVariant.Outline,
+    };
+
+    private void SetNotFound()
+    {
+        if (HttpContext is null)
+        {
+            return;
+        }
+
+        // A real 404 for a foreign or missing id. The status-code-pages middleware must not
+        // re-execute /not-found in this same request: the component renderer already owns the
+        // NavigationManager, and re-execution fails with "already initialized" (F-003 bug B1).
+        HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+        if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+        {
+            statusCodePages.Enabled = false;
+        }
+    }
+}

@@ -104,9 +104,7 @@ public sealed class WorkerProcessE2ETests
             if (!OperatingSystem.IsWindows())
             {
                 SendSigterm(worker);
-                Assert.True(
-                    worker.WaitForExit(ShutdownTimeout),
-                    "The worker did not exit after SIGTERM within the shutdown timeout.");
+                WaitForWorkerExit(worker, "The worker did not exit after SIGTERM within the shutdown timeout.");
                 Assert.Equal(0, worker.ExitCode);
 
                 // The final (best-effort) heartbeat attempt is logged before a clean stop.
@@ -136,7 +134,7 @@ public sealed class WorkerProcessE2ETests
             using var worker = StartWorker(ResolveDotnetPath(), workerDll, serverUrl: null, registrationToken: null, workerName: "bad-cfg", workerDataDir: tempRoot);
             using var workerLogs = new ProcessLog(worker);
 
-            Assert.True(worker.WaitForExit(ShutdownTimeout), "The worker ignored the bad configuration and kept running.");
+            WaitForWorkerExit(worker, "The worker ignored the bad configuration and kept running.");
 
             // C (second review fix): configuration errors stay on code 2 - only a definitive
             // server rejection of the registration itself exits with 3.
@@ -172,9 +170,7 @@ public sealed class WorkerProcessE2ETests
                 ResolveDotnetPath(), workerDll, stub.Url, "zreg_definitely-rejected-token", "rej400-agent", tempRoot);
             using var workerLogs = new ProcessLog(worker);
 
-            Assert.True(
-                worker.WaitForExit(ShutdownTimeout),
-                "The worker kept running against a definitive 400 rejection instead of exiting.");
+            WaitForWorkerExit(worker, "The worker kept running against a definitive 400 rejection instead of exiting.");
 
             // C (second review fix): a permanently rejected registration exits with the dedicated
             // code 3 - distinct from a configuration error (2).
@@ -230,9 +226,7 @@ public sealed class WorkerProcessE2ETests
             if (!OperatingSystem.IsWindows())
             {
                 SendSigterm(worker);
-                Assert.True(
-                    worker.WaitForExit(ShutdownTimeout),
-                    "The worker did not exit after SIGTERM within the shutdown timeout.");
+                WaitForWorkerExit(worker, "The worker did not exit after SIGTERM within the shutdown timeout.");
                 Assert.Equal(0, worker.ExitCode);
             }
         }
@@ -288,9 +282,7 @@ public sealed class WorkerProcessE2ETests
             if (!OperatingSystem.IsWindows())
             {
                 SendSigterm(worker);
-                Assert.True(
-                    worker.WaitForExit(ShutdownTimeout),
-                    "The worker did not exit after SIGTERM within the shutdown timeout.");
+                WaitForWorkerExit(worker, "The worker did not exit after SIGTERM within the shutdown timeout.");
                 Assert.Equal(0, worker.ExitCode);
             }
         }
@@ -583,6 +575,21 @@ public sealed class WorkerProcessE2ETests
         }
 
         throw new TimeoutException($"The Server did not answer within {ServerStartTimeout.TotalSeconds}s.");
+    }
+
+    /// <summary>
+    /// Waits for the worker process to exit and then flushes its redirected output. The timed
+    /// <see cref="Process.WaitForExit(int)"/> overload can return while the asynchronous output
+    /// readers are still draining the pipes (documented Process behaviour); the parameterless
+    /// overload after it blocks until they are done. Without the flush, a fast-exiting worker
+    /// (bad configuration, definitive rejection) can already be gone when the assertions read the
+    /// log - an empty snapshot under load, an intermittent failure that has nothing to do with
+    /// the behaviour under test.
+    /// </summary>
+    private static void WaitForWorkerExit(Process worker, string failureMessage)
+    {
+        Assert.True(worker.WaitForExit(ShutdownTimeout), failureMessage);
+        worker.WaitForExit();
     }
 
     private static Process StartWorker(

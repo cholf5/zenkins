@@ -1,0 +1,155 @@
+@page "/runs/{RunId:guid}"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject RunService RunsService
+
+<PageTitle>Run @(_run?.Id.ToString("N")[..8] ?? "") · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
+    @if (_run is null)
+    {
+        @* Foreign tenant id == missing id: the service reads through the tenant filter and the
+           response is a real 404 (same pattern as the project detail page). *@
+        <NotFoundPage />
+    }
+    else
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">Run @(_run.Id.ToString("N")[..8])</BbCardTitle>
+                <BbBadge Variant="@RunBadgeVariant(_run.Status)">@_run.Status</BbBadge>
+            </div>
+            <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">All runs</BbButton>
+        </div>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Command</BbCardTitle>
+                <BbCardDescription>
+                    The exact argv the worker executes - one argument per line, no shell quoting
+                    interpretation.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <pre id="run-command" class="bb:overflow-x-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-sm"><code>@foreach (var argument in _run.Command)
+{
+    <text>@argument
+</text>
+}</code></pre>
+                @if (_run.RequiredTags.Length > 0)
+                {
+                    <p class="bb:mt-3 bb:text-sm bb:text-muted-foreground">
+                        Required tags: @string.Join(", ", _run.RequiredTags)
+                    </p>
+                }
+                else
+                {
+                    <p class="bb:mt-3 bb:text-sm bb:text-muted-foreground">No required tags.</p>
+                }
+            </BbCardContent>
+        </BbCard>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Execution</BbCardTitle>
+                <BbCardDescription>PRD §3.5 run metadata.</BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <dl id="run-details" class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Worker</dt>
+                        <dd id="run-worker">@(_run.WorkerName ?? "-")</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered by</dt>
+                        <dd id="run-trigger">@(_run.TriggerUserEmail ?? "-") (@_run.TriggerType.ToLowerInvariant())</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Exit code</dt>
+                        <dd id="run-exit-code">@(_run.ExitCode?.ToString() ?? "-")</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Started</dt>
+                        <dd id="run-started">@(_run.StartedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-") UTC</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Ended</dt>
+                        <dd id="run-ended">@(_run.EndedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-") UTC</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Duration</dt>
+                        <dd id="run-duration">@(FormatDuration(_run.StartedAt, _run.EndedAt))</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Queued</dt>
+                        <dd>@_run.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Failure reason</dt>
+                        <dd>@(_run.FailureReason ?? "-")</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Run id</dt>
+                        <dd class="bb:break-all">@_run.Id</dd>
+                    </div>
+                </dl>
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid RunId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private RunView? _run;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read. Never rely on the layout having done it first.
+        var session = await UserSession.GetAsync();
+        if (session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _run = await RunsService.GetRunAsync(RunId);
+        if (_run is null && HttpContext is not null)
+        {
+            // A real 404 for a foreign or missing id; the /not-found re-execute is disabled for
+            // this request (F-003 bug B1: "RemoteNavigationManager already initialized").
+            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+            {
+                statusCodePages.Enabled = false;
+            }
+        }
+    }
+
+    private static BadgeVariant RunBadgeVariant(string status) => status switch
+    {
+        BuildRunStatus.Queued => BadgeVariant.Secondary,
+        BuildRunStatus.Running => BadgeVariant.Default,
+        BuildRunStatus.Success => BadgeVariant.Success,
+        BuildRunStatus.Failed => BadgeVariant.Destructive,
+        _ => BadgeVariant.Outline,
+    };
+
+    /// <summary>Duration from the persisted start and end times; "-" while the run has no end.</summary>
+    private static string FormatDuration(DateTimeOffset? startedAt, DateTimeOffset? endedAt)
+    {
+        if (startedAt is not { } start || endedAt is not { } end)
+        {
+            return "-";
+        }
+
+        var duration = end - start;
+        return duration.TotalMinutes >= 1
+            ? $"{(int)duration.TotalMinutes}m {duration.Seconds:D2}s"
+            : $"{duration.TotalSeconds:F1}s";
+    }
+}

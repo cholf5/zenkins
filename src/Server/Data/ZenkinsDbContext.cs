@@ -84,6 +84,9 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
 
     public DbSet<WorkerToken> WorkerTokens => Set<WorkerToken>();
 
+    /// <summary>Build runs (F-006): queued/running/finished executions of a project's command.</summary>
+    public DbSet<BuildRun> BuildRuns => Set<BuildRun>();
+
     /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
     public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
 
@@ -151,6 +154,74 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             .IgnoreQueryFilters()
             .Where(predicate)
             .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// F-006: atomic compare-and-set lease of one queued run (the claim endpoint). This is the one
+    /// guarded <c>ExecuteUpdate</c> on a tenant-owned entity outside a system scope (see the class
+    /// doc's bypass discipline): the SET is fixed here - never caller-supplied - and the WHERE is
+    /// the tenant query filter (which applies to <c>ExecuteUpdate</c>) plus the compare-and-set
+    /// conditions that make a concurrent double-claim impossible: the run must still be
+    /// <c>Queued</c> and still unleased.
+    /// <para>
+    /// One UPDATE statement is atomic under both providers' write locking: PostgreSQL re-evaluates
+    /// the predicate after granting the row lock (READ COMMITTED), which is the equivalent of the
+    /// SELECT … FOR UPDATE SKIP LOCKED dance without native SQL, and SQLite serializes database
+    /// writes. The loser of a race therefore updates 0 rows and must move on to the next candidate.
+    /// Only unleased runs are claimable - the lease sweeper is the single authority on expiry
+    /// (SQLite cannot compare <c>DateTimeOffset</c> values in SQL at all, so expiry is a sweep
+    /// concern, not a claim predicate).
+    /// </para>
+    /// </summary>
+    /// <returns>1 when this call won the lease, 0 when the run was leased or requeued concurrently.</returns>
+    public Task<int> TryLeaseBuildRunAsync(
+        Guid runId,
+        Guid workerId,
+        DateTimeOffset leaseExpiresAt,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        BuildRuns
+            .Where(run => run.Id == runId
+                && run.Status == BuildRunStatus.Queued
+                && run.LeaseExpiresAt == null)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.WorkerId, workerId)
+                .SetProperty(run => run.LeaseExpiresAt, (DateTimeOffset?)leaseExpiresAt)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+
+    /// <summary>
+    /// F-006: the lease sweeper's requeue of one expired, claimed-but-never-accepted run. The
+    /// WHERE restates the exact observed state - still <c>Queued</c>, still carrying precisely the
+    /// expired lease that was read - so the statement is a compare-and-set: it can never touch a
+    /// run that was accepted (no lease anymore), never touch a valid lease, and never clobber a
+    /// lease some other writer stamped meanwhile. Cross-tenant by design (the sweeper serves every
+    /// organization), so it requires an active <see cref="ISystemDataScope"/> - same discipline as
+    /// <see cref="SystemQueryAsync{TEntity}"/>.
+    /// </summary>
+    /// <returns>1 when this call requeued the run, 0 when it was already requeued or accepted.</returns>
+    public Task<int> RequeueExpiredBuildRunLeaseAsync(
+        Guid runId,
+        DateTimeOffset expiredLease,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_systemDataScope.IsActive)
+        {
+            throw new InvalidOperationException(
+                $"Requeueing expired leases spans tenants and requires an active {nameof(ISystemDataScope)} scope.");
+        }
+
+        return BuildRuns
+            .IgnoreQueryFilters()
+            .Where(run => run.Id == runId
+                && run.Status == BuildRunStatus.Queued
+                && run.LeaseExpiresAt == expiredLease)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.WorkerId, (Guid?)null)
+                .SetProperty(run => run.LeaseExpiresAt, (DateTimeOffset?)null)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -287,6 +358,48 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
 
             entity.Property(token => token.UsedAt).IsConcurrencyToken();
             entity.Property(token => token.RevokedAt).IsConcurrencyToken();
+        });
+
+        // F-006: build runs are tenant-owned like workers and projects. A claim does not change the
+        // status - it stamps WorkerId + LeaseExpiresAt atomically via TryLeaseBuildRunAsync (the one
+        // guarded ExecuteUpdate on a tenant-owned entity outside a system scope); the lease sweeper
+        // requeues expired never-accepted leases via RequeueExpiredBuildRunLeaseAsync (system
+        // scope). State transitions go through the transition service only.
+        modelBuilder.Entity<BuildRun>(entity =>
+        {
+            entity.HasKey(run => run.Id);
+            entity.Property(run => run.Status).IsRequired().HasMaxLength(16);
+            entity.Property(run => run.TriggerType).IsRequired().HasMaxLength(16);
+            entity.Property(run => run.TriggerUserId).HasMaxLength(450);
+            entity.Property(run => run.RequiredTags).IsRequired().HasMaxLength(400);
+
+            // No max length on purpose: an argv can be 100 x 32 KiB, so the column is text.
+            entity.Property(run => run.CommandJson).IsRequired();
+            entity.Property(run => run.FailureReason).HasMaxLength(200);
+
+            // The claim query filters by tenant + status and orders by creation (FIFO); the project
+            // runs list filters by project. Both are small explicit indexes.
+            entity.HasIndex(run => new { run.OrganizationId, run.Status });
+            entity.HasIndex(run => run.ProjectId);
+
+            entity.HasOne<Organization>().WithMany().HasForeignKey(run => run.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(run => run.Project).WithMany().HasForeignKey(run => run.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Attribution is best-effort: deleting a worker (no product path today) keeps the run
+            // rows but forgets which worker executed them. Never blocks an organization cascade.
+            entity.HasOne(run => run.Worker).WithMany().HasForeignKey(run => run.WorkerId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Belt and braces for the string status, same shape as the worker status check above.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_BuildRuns_Status",
+                $"\"Status\" IN ('{BuildRunStatus.Queued}', '{BuildRunStatus.Running}', "
+                + $"'{BuildRunStatus.Success}', '{BuildRunStatus.Failed}', "
+                + $"'{BuildRunStatus.Canceled}', '{BuildRunStatus.Lost}')"));
+
+            entity.HasQueryFilter(run => run.OrganizationId == CurrentOrganizationId);
         });
     }
 

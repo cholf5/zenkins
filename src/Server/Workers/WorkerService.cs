@@ -494,32 +494,11 @@ public sealed class WorkerService(
         ArgumentNullException.ThrowIfNull(input);
 
         // Authenticate before validating the payload (same probing argument as RegisterAsync).
-        if (string.IsNullOrWhiteSpace(plaintextToken))
+        var workerToken = await AuthenticateWorkerAsync(plaintextToken, cancellationToken);
+        if (workerToken is null)
         {
             return WorkerHeartbeatResult.InvalidToken();
         }
-
-        var hash = WorkerTokenCrypto.Hash(plaintextToken);
-        WorkerToken? workerToken;
-        using var scope = systemDataScope.BeginScope();
-        {
-            await using var lookupContext = await contextFactory.CreateDbContextAsync(cancellationToken);
-            var candidates = await lookupContext.SystemQueryAsync<WorkerToken>(
-                token => token.TokenHash == hash && token.Kind == WorkerTokenKind.Worker,
-                cancellationToken);
-            workerToken = candidates.FirstOrDefault();
-        }
-
-        if (workerToken is null || workerToken.RevokedAt is not null)
-        {
-            logger.LogWarning(
-                "Worker heartbeat rejected. Hash={TokenHashPrefix}… Reason={Reason}",
-                hash[..LogHashPrefixLength],
-                workerToken is null ? "unknown-token" : "revoked");
-            return WorkerHeartbeatResult.InvalidToken();
-        }
-
-        tenantContext.OrganizationId = workerToken.OrganizationId;
 
         // Only now validate the payload: a rejected 400 is only ever shown to an authenticated
         // caller (review fix). A malformed heartbeat from a valid token is a client bug, not an
@@ -589,6 +568,50 @@ public sealed class WorkerService(
         }
 
         return WorkerHeartbeatResult.Success(worker.Id, now);
+    }
+
+    /// <summary>
+    /// Authenticates a plaintext worker token (<c>zwrk_…</c>): SHA-256 it, look it up by
+    /// <c>TokenHash</c> equality through <see cref="ZenkinsDbContext.SystemQueryAsync{TEntity}"/>
+    /// inside an <see cref="ISystemDataScope"/> (no tenant exists yet), then let the token row
+    /// select the tenant. Returns the token row - with <see cref="TenantContext.OrganizationId"/>
+    /// already set - or <c>null</c> for a missing/unknown/revoked token (the caller answers a bare
+    /// 401). Authentication must run before any payload validation, so a tokenless caller cannot
+    /// probe the contract through the 400-vs-401 difference (F-004 review fix; shared with the
+    /// F-006 run endpoints, which authenticate the same way).
+    /// </summary>
+    public async Task<WorkerToken?> AuthenticateWorkerAsync(
+        string? plaintextToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(plaintextToken))
+        {
+            return null;
+        }
+
+        var hash = WorkerTokenCrypto.Hash(plaintextToken);
+        WorkerToken? workerToken;
+        using var scope = systemDataScope.BeginScope();
+        {
+            await using var lookupContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var candidates = await lookupContext.SystemQueryAsync<WorkerToken>(
+                token => token.TokenHash == hash && token.Kind == WorkerTokenKind.Worker,
+                cancellationToken);
+            workerToken = candidates.FirstOrDefault();
+        }
+
+        if (workerToken is null || workerToken.RevokedAt is not null)
+        {
+            logger.LogWarning(
+                "Worker request rejected. Hash={TokenHashPrefix}… Reason={Reason}",
+                hash[..LogHashPrefixLength],
+                workerToken is null ? "unknown-token" : "revoked");
+            return null;
+        }
+
+        // The token row - never a cookie, header or URL value - selects the tenant.
+        tenantContext.OrganizationId = workerToken.OrganizationId;
+        return workerToken;
     }
 
     private static Task<bool> IsOwnerAsync(

@@ -40,6 +40,10 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
         TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<WorkerToken>(_fixture, CancellationToken);
 
     [Fact]
+    public Task Build_runs_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BuildRun>(_fixture, CancellationToken);
+
+    [Fact]
     public Task Cross_tenant_membership_write_is_rejected_and_persists_nothing() =>
         TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<OrganizationMember>(
             _fixture,
@@ -93,6 +97,19 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     [Fact]
+    public Task Cross_tenant_build_run_write_is_rejected_and_persists_nothing() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<BuildRun>(
+            _fixture,
+            () => new BuildRun
+            {
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                TriggerType = BuildRunTriggerType.Manual,
+                RequiredTags = string.Empty,
+                CommandJson = """["echo","smuggled"]""",
+            },
+            CancellationToken);
+
+    [Fact]
     public Task Find_after_a_tenant_switch_returns_null_for_memberships() =>
         TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<OrganizationMember>(
             _fixture,
@@ -122,6 +139,14 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             _fixture,
             TwoOrgsFixture.WorkerTokenAId,
             TwoOrgsFixture.WorkerTokenBId,
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_build_runs() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<BuildRun>(
+            _fixture,
+            TwoOrgsFixture.BuildRunAId,
+            TwoOrgsFixture.BuildRunBId,
             CancellationToken);
 
     [Fact]

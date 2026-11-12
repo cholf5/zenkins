@@ -169,7 +169,8 @@ public static class WorkerEndpoints
     private static IResult Error(int statusCode, string code) =>
         Results.Json(new WorkerApiError(code), statusCode: statusCode);
 
-    private static string? BearerToken(HttpContext httpContext)
+    /// <summary>Shared with the F-006 run endpoints: the only credential shape the worker API accepts.</summary>
+    internal static string? BearerToken(HttpContext httpContext)
     {
         var header = httpContext.Request.Headers.Authorization.ToString();
         if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))

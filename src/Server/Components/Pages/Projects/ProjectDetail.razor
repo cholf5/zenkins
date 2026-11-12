@@ -24,6 +24,7 @@
                 <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <BbButton Href="@($"/projects/{_project.Id}/runs")" Variant="ButtonVariant.Outline">Runs</BbButton>
                 <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit</BbButton>
                 @if (_canDelete)
                 {
@@ -92,6 +93,46 @@
                 and edit projects.
             </p>
         }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Start run</BbCardTitle>
+                <BbCardDescription>
+                    The command reaches the worker as raw argv - one argument per line, no shell quoting
+                    interpretation. Optional required tags restrict which worker may claim the run.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <form method="post" action="@($"/projects/{_project.Id}/runs/start")" data-zenkins-antiforgery>
+                    <div class="bb:space-y-4">
+                        <div>
+                            <label for="run-command" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Command</label>
+                            <textarea id="run-command"
+                                      name="Command"
+                                      rows="3"
+                                      class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
+                                      placeholder="dotnet&#10;--version"></textarea>
+                            @if (CommandError is { } commandError)
+                            {
+                                <p id="run-command-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@commandError</p>
+                            }
+                        </div>
+                        <div>
+                            <label for="run-required-tags" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Required tags (optional)</label>
+                            <input id="run-required-tags"
+                                   name="RequiredTags"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="linux, dotnet" />
+                            @if (TagsError is { } tagsError)
+                            {
+                                <p id="run-required-tags-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@tagsError</p>
+                            }
+                        </div>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Start run</BbButton>
+                    </div>
+                </form>
+            </BbCardContent>
+        </BbCard>
     }
 </div>
 
@@ -109,10 +150,28 @@
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
 
+    [SupplyParameterFromQuery(Name = "runError")]
+    private string? RunErrorCode { get; set; }
+
     private string? Notice => NoticeCode switch
     {
         "created" => "The project was created.",
         "updated" => "The project was updated.",
+        _ => null,
+    };
+
+    private string? CommandError => RunErrorCode switch
+    {
+        RunErrorCodes.ArgvEmpty => "The command needs at least one argument - enter one argument per line.",
+        RunErrorCodes.ArgvTooManyArguments => "A run accepts at most 100 arguments.",
+        RunErrorCodes.ArgvArgumentTooLong => "Each argument may be at most 32 KiB.",
+        _ => null,
+    };
+
+    private string? TagsError => RunErrorCode switch
+    {
+        RunErrorCodes.TagUnknown => "No registered worker in this organization has one of these tags.",
+        RunErrorCodes.TagInvalid => "Required tags are comma-separated text, at most 64 characters per tag.",
         _ => null,
     };
 
