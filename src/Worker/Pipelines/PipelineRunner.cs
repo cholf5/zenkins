@@ -26,6 +26,15 @@ public sealed class PipelineRunOptions
     public required string PipelinePath { get; init; }
 
     /// <summary>
+    /// F-017 (review M1): the exact commit this run must build, when the claim named one (a webhook push).
+    /// The clone still starts at the branch (it is what makes a targeted fetch cheap), and then
+    /// <c>checkout()</c> pins this commit - because the branch may have moved between the push and now, and
+    /// a run must build the tree its push named. <see langword="null"/> (a manual run) keeps the F-013
+    /// behaviour: the branch tip is what gets built and reported.
+    /// </summary>
+    public string? ExpectedCommit { get; init; }
+
+    /// <summary>
     /// The run's deadline, frozen by the server at accept time (F-009). It bounds the definition
     /// phase; the deadline sweeper owns the executor's steps.
     /// </summary>
@@ -267,6 +276,23 @@ public sealed class PipelineRunner
                 credential,
                 cancellationToken);
             commit = clone.Commit;
+
+            // F-017 (review M1): when the claim named a commit (a webhook push), pin it. The clone started
+            // at the branch so git could fetch only what it needs, but the branch is not the authority -
+            // two pushes to one branch may overlap, and this run must build the tree its own push named.
+            // checkout() is idempotent (already at the commit: two read-only commands, no fetch) and it
+            // verifies HEAD really is the requested object, so a checkout that cannot be honoured fails
+            // the run instead of silently building the branch tip.
+            if (_options.ExpectedCommit is { Length: > 0 } expected)
+            {
+                var pinned = await workspace.CheckoutAsync(expected, cancellationToken);
+                if (!pinned.AlreadyAtCommit)
+                {
+                    Log($"zenkins: the branch moved; checked out the pushed commit {pinned.Commit}.");
+                }
+
+                commit = pinned.Commit;
+            }
         }
         catch (OperationCanceledException)
         {

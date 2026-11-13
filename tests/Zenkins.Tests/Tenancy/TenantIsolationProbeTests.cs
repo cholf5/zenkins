@@ -312,6 +312,61 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             TwoOrgsFixture.ArtifactBId,
             CancellationToken);
 
+    // ---- F-017: webhooks and their replay records ------------------------
+
+    [Fact]
+    public Task Webhooks_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<Webhook>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Webhook_delivery_records_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<WebhookDelivery>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_webhook_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<Webhook>(
+            _fixture,
+            () => new Webhook
+            {
+                // Only the tenant field is wrong; the project and the name are legal.
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                Name = $"smuggled-{Guid.NewGuid():N}",
+                SecretCiphertext = "CfDJ8-smuggled-webhook-ciphertext",
+                BranchFilter = "main",
+                RequiredTags = string.Empty,
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_webhook_delivery_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<WebhookDelivery>(
+            _fixture,
+            () => new WebhookDelivery
+            {
+                // A fresh dedupe key per direction, so the rejection is the tenant guard's - never a key clash.
+                WebhookId = TwoOrgsFixture.WebhookAId,
+                DedupeKey = $"id:{Guid.NewGuid():N}",
+                Outcome = "queued",
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_webhooks() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<Webhook>(
+            _fixture,
+            TwoOrgsFixture.WebhookAId,
+            TwoOrgsFixture.WebhookBId,
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_webhook_deliveries() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<WebhookDelivery>(
+            _fixture,
+            TwoOrgsFixture.WebhookDeliveryAId,
+            TwoOrgsFixture.WebhookDeliveryBId,
+            CancellationToken);
+
     [Fact]
     public void Every_tenant_owned_entity_is_covered_by_the_harness()
     {

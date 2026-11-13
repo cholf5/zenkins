@@ -431,6 +431,151 @@ public sealed class TenantIsolationTests : IDisposable
         }
     }
 
+    // ---- F-017: webhooks -----------------------------------------------
+
+    [Fact]
+    public void Duplicate_webhook_name_in_one_project_is_rejected_by_the_unique_index_sqlite()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // A's project already has "alpha-hook", so a second webhook with the same name in that project
+            // must be refused by the database: the index is the guard, not a pre-flight query.
+            context.Set<Webhook>().Add(new Webhook
+            {
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                Name = TwoOrgsFixture.WebhookAName,
+                SecretCiphertext = "CfDJ8-duplicate-webhook-ciphertext",
+                BranchFilter = "main",
+                RequiredTags = string.Empty,
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            });
+
+            var exception = Assert.Throws<DbUpdateException>(() => context.SaveChanges());
+
+            var sqlite = Assert.IsType<SqliteException>(exception.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains(
+                "UNIQUE constraint failed: Webhooks.ProjectId, Webhooks.Name",
+                sqlite.Message,
+                StringComparison.Ordinal);
+        }
+
+        using var verification = _fixture.CreateContext();
+        var webhook = Assert.Single(verification.Set<Webhook>().ToList());
+        Assert.Equal(TwoOrgsFixture.WebhookAName, webhook.Name);
+        Assert.Equal(TwoOrgsFixture.OrgAId, webhook.OrganizationId);
+    }
+
+    [Fact]
+    public void The_webhook_name_index_is_per_project_not_global()
+    {
+        // The same webhook name in another project of the same organization is not a duplicate: two
+        // projects may each wire their repository to a webhook called "github-main".
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            var anotherProject = new Project
+            {
+                OrganizationId = TwoOrgsFixture.OrgAId,
+                Name = "alpha-second",
+                RepositoryUrl = TwoOrgsFixture.ProjectARepositoryUrl,
+                DefaultBranch = "main",
+            };
+            context.Projects.Add(anotherProject);
+            context.Set<Webhook>().Add(new Webhook
+            {
+                ProjectId = anotherProject.Id,
+                Name = TwoOrgsFixture.WebhookAName,
+                SecretCiphertext = "CfDJ8-second-project-webhook-ciphertext",
+                BranchFilter = "main",
+                RequiredTags = string.Empty,
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            });
+            context.SaveChanges();
+        }
+
+        using var verification = _fixture.CreateContext();
+        Assert.Equal(2, verification.Set<Webhook>().Count());
+    }
+
+    [Fact]
+    public void Duplicate_delivery_key_in_one_webhook_is_rejected_by_the_unique_index_sqlite()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // The fixture seeds one delivery for A's webhook; a second row with the same dedupe key is the
+            // replay guard's collision - the database, not a "have I seen this?" check.
+            context.Set<WebhookDelivery>().Add(new WebhookDelivery
+            {
+                WebhookId = TwoOrgsFixture.WebhookAId,
+                DedupeKey = TwoOrgsFixture.WebhookDedupeKey,
+                Outcome = "queued",
+            });
+
+            var exception = Assert.Throws<DbUpdateException>(() => context.SaveChanges());
+
+            var sqlite = Assert.IsType<SqliteException>(exception.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains(
+                "UNIQUE constraint failed: WebhookDeliveries.WebhookId, WebhookDeliveries.DedupeKey",
+                sqlite.Message,
+                StringComparison.Ordinal);
+        }
+
+        using var verification = _fixture.CreateContext();
+        Assert.Single(verification.Set<WebhookDelivery>().ToList());
+    }
+
+    [Fact]
+    public async Task Deleting_a_webhook_cascades_its_delivery_records_and_leaves_another_tenants_alone()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // A delivery record is not meaningful without its webhook (card F-017), so the foreign key
+            // cascades - which is also what makes a re-created webhook start with a clean replay window.
+            context.Set<Webhook>().Remove(
+                context.Set<Webhook>().Single(webhook => webhook.Id == TwoOrgsFixture.WebhookAId));
+            context.SaveChanges();
+        }
+
+        var remaining = await _fixture.ReadAcrossTenantsAsync<WebhookDelivery>(_ => true, CancellationToken);
+
+        Assert.DoesNotContain(remaining, delivery => delivery.WebhookId == TwoOrgsFixture.WebhookAId);
+        var survivor = Assert.Single(remaining);
+        Assert.Equal(TwoOrgsFixture.WebhookDeliveryBId, survivor.Id);
+        Assert.Equal(TwoOrgsFixture.OrgBId, survivor.OrganizationId);
+    }
+
+    [Fact]
+    public async Task Deleting_a_project_cascades_its_webhooks_and_their_delivery_records()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // The webhook belongs to the project (its repository is the one the run clones), so a project
+            // delete takes the webhooks with it - and their delivery records with them.
+            context.Projects.Remove(
+                context.Projects.Single(project => project.Id == TwoOrgsFixture.ProjectAId));
+            context.SaveChanges();
+        }
+
+        var webhooks = await _fixture.ReadAcrossTenantsAsync<Webhook>(_ => true, CancellationToken);
+        Assert.DoesNotContain(webhooks, webhook => webhook.Id == TwoOrgsFixture.WebhookAId);
+        Assert.Contains(webhooks, webhook => webhook.Id == TwoOrgsFixture.WebhookBId);
+
+        var deliveries = await _fixture.ReadAcrossTenantsAsync<WebhookDelivery>(_ => true, CancellationToken);
+        Assert.DoesNotContain(deliveries, delivery => delivery.WebhookId == TwoOrgsFixture.WebhookAId);
+        Assert.Contains(deliveries, delivery => delivery.Id == TwoOrgsFixture.WebhookDeliveryBId);
+    }
+
     [Fact]
     public void Insert_stamps_the_active_organization_and_the_timestamps()
     {

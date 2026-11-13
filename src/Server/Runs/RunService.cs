@@ -182,6 +182,11 @@ public sealed record RunClaimResult(
     Guid? ProjectId = null,
     string? RepositoryUrl = null,
     string? Branch = null,
+
+    // F-017 (review M1): the exact commit this run must build, when the trigger already named it. Null for
+    // a manual run (the worker resolves the branch tip and reports it back) and for a webhook run whose
+    // payload carried no usable commit (never happens today - the parser refuses that payload).
+    string? Commit = null,
     string? PipelinePath = null,
     DateTimeOffset? LeaseExpiresAt = null)
 {
@@ -365,21 +370,15 @@ public sealed class RunService(
             }
         }
 
-        var run = new BuildRun
-        {
-            // The tenant comes from the active request; the data layer rejects anything else.
-            OrganizationId = activeOrganizationId.Value,
-            ProjectId = project.Id,
-            TriggerType = BuildRunTriggerType.Manual,
-            TriggerUserId = actingUserId,
-            RequiredTags = requiredTags,
-
-            // F-014 snapshots: the branch the form chose (or the project's default) and the project's
-            // pipeline path. Both are copies, so editing the project later never moves this run.
-            GitBranch = requestedBranch.Length > 0 ? requestedBranch : project.DefaultBranch,
-            PipelinePath = project.PipelinePath,
-            TimeoutSeconds = timeoutMinutes is { } minutes ? minutes * 60 : null,
-        };
+        var run = BuildQueuedRun(
+            activeOrganizationId.Value,
+            project,
+            requestedBranch.Length > 0 ? requestedBranch : project.DefaultBranch,
+            requiredTags,
+            timeoutMinutes is { } minutes ? minutes * 60 : null,
+            BuildRunTriggerType.Manual,
+            actingUserId,
+            gitCommit: null);
         context.BuildRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken);
 
@@ -393,6 +392,136 @@ public sealed class RunService(
             actingUserId);
         return RunTriggerResult.Success(run.Id);
     }
+
+    /// <summary>
+    /// Queues a run for a push delivery (card F-017), <b>on the caller's context and inside the caller's
+    /// unit of work</b>. The webhook decides <em>which</em> branch and commit; this is the same construction
+    /// routine the manual trigger uses (one routine, one queue, one state machine), so a webhook run is
+    /// never a special case downstream.
+    /// <para>
+    /// <b>Why it takes a context.</b> The delivery's replay record and the run it creates must commit
+    /// together (review m6): a crash between "record the delivery" and "queue the run" would otherwise
+    /// lose that push forever - a retry would answer <c>duplicate</c> with no run behind it. The caller
+    /// owns the transaction, and this method stages the run without saving it.
+    /// </para>
+    /// <para>
+    /// <b>Differs from <see cref="TriggerAsync"/> in exactly three ways, each deliberate.</b> There is no
+    /// acting user (nobody signed in) and therefore no membership check - the caller proved possession of
+    /// the webhook's secret, and the webhook row selected the tenant before this call. Required tags are
+    /// <b>not</b> checked against the organization's workers: a push to a branch whose tag set no worker
+    /// covers yet stays <c>Queued</c>, which is the honest answer (the AC's "no eligible worker keeps the
+    /// run Queued") rather than a rejected delivery. And <see cref="BuildRun.GitCommit"/> is recorded at
+    /// creation from the pushed <c>after</c>, because the webhook already names the commit - the claim
+    /// hands that same commit to the worker to pin (review M1), so the recorded commit and the built tree
+    /// cannot drift apart when the branch moves between push and clone.
+    /// </para>
+    /// <para>
+    /// <b>The repository is the project's, never the payload's.</b> Nothing on this path reads a
+    /// <c>clone_url</c>: the claim hands the worker <c>project.RepositoryUrl</c>, so a valid signature
+    /// cannot redirect a build to another repository.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// <see cref="RunTriggerResult.Success"/> with the staged run's id (<b>not yet saved</b>), or the
+    /// reason nothing was staged - in which case the caller rolls its transaction back.
+    /// </returns>
+    public async Task<RunTriggerResult> QueueWebhookRunAsync(
+        ZenkinsDbContext context,
+        Guid projectId,
+        string branch,
+        string gitCommit,
+        IReadOnlyList<string> requiredTags,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(requiredTags);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            // The webhook row selects the tenant; reaching here without one is a wiring fault, not a
+            // user error - refuse rather than write an untagged run.
+            return RunTriggerResult.Forbidden("No organization is selected for this delivery.");
+        }
+
+        // The branch came from `ref` and the commit from `after`; both are re-validated here so a
+        // malformed payload cannot reach the queue through a future caller of this method.
+        if (RunValidation.ValidateBranch(branch, out var normalizedBranch) is not null
+            || normalizedBranch.Length == 0)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Branch, RunErrorCodes.BranchInvalid));
+        }
+
+        if (!GitCommitValidation.IsValid(gitCommit))
+        {
+            return RunTriggerResult.Invalid(
+                new RunFieldError(RunFields.Branch, GitCommitValidation.InvalidCode));
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return RunTriggerResult.NotFound();
+        }
+
+        var run = BuildQueuedRun(
+            activeOrganizationId.Value,
+            project,
+            normalizedBranch,
+            string.Join(',', requiredTags),
+            timeoutSeconds: null,
+            BuildRunTriggerType.Webhook,
+            triggerUserId: null,
+            gitCommit);
+        context.BuildRuns.Add(run);
+
+        logger.LogInformation(
+            "Run queued by webhook. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} Commit={Commit} PipelinePath={PipelinePath}",
+            activeOrganizationId,
+            project.Id,
+            run.Id,
+            run.GitBranch,
+            run.GitCommit,
+            run.PipelinePath);
+        return RunTriggerResult.Success(run.Id);
+    }
+
+    /// <summary>
+    /// The one run construction routine both trigger sources use: the tenant from the active request (the
+    /// data layer rejects anything else), the branch and pipeline path snapshotted so a later project edit
+    /// cannot move this run, and the trigger source's own attribution. Adding and saving is the caller's
+    /// step, so each source keeps its own unit of work (the manual trigger saves one row; a webhook saves
+    /// its replay record and the run together).
+    /// </summary>
+    private static BuildRun BuildQueuedRun(
+        Guid organizationId,
+        Project project,
+        string branch,
+        string requiredTags,
+        int? timeoutSeconds,
+        string triggerType,
+        string? triggerUserId,
+        string? gitCommit) =>
+        new()
+        {
+            OrganizationId = organizationId,
+            ProjectId = project.Id,
+            TriggerType = triggerType,
+            TriggerUserId = triggerUserId,
+            RequiredTags = requiredTags,
+
+            // F-014 snapshots: the branch the trigger chose and the project's pipeline path. Both are
+            // copies, so editing the project later never moves this run.
+            GitBranch = branch,
+            PipelinePath = project.PipelinePath,
+            TimeoutSeconds = timeoutSeconds,
+
+            // F-017: a webhook delivery already names the commit; a manual trigger leaves it to the
+            // worker's accepted report (F-013).
+            GitCommit = gitCommit,
+        };
 
     /// <summary>Runs of one project in the active organization, newest first.</summary>
     public async Task<IReadOnlyList<RunView>> GetProjectRunsAsync(
@@ -538,13 +667,16 @@ public sealed class RunService(
                     leaseExpiresAt);
 
                 // F-014: the claim carries what the pipeline layer executes - the repository, the
-                // branch this run snapshotted and the pipeline path it snapshotted.
+                // branch this run snapshotted and the pipeline path it snapshotted. F-017 adds the exact
+                // commit when the trigger already named one (a webhook push): the worker pins that commit
+                // instead of trusting the branch tip, which may have moved by now.
                 return new RunClaimResult(
                     RunOperationStatus.Success,
                     candidate.Id,
                     candidate.ProjectId,
                     candidate.Project.RepositoryUrl,
                     candidate.GitBranch,
+                    candidate.GitCommit,
                     candidate.PipelinePath,
                     leaseExpiresAt);
             }
@@ -621,6 +753,18 @@ public sealed class RunService(
             if (!BuildRunStateMachine.CanTransition(run.Status, BuildRunStatus.Running))
             {
                 return RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
+            }
+
+            // F-017 (review M1): a webhook run already records the commit the push named, and the claim
+            // handed that same commit to this worker to pin. A report that disagrees is refused - never
+            // silently overwritten (the column is write-once) and never silently accepted (the run would
+            // claim to have built one tree while the worker built another). The check runs BEFORE any
+            // write, so a refused report leaves the run exactly as it was.
+            if (run.GitCommit is not null
+                && gitCommit is not null
+                && !string.Equals(run.GitCommit, gitCommit, StringComparison.Ordinal))
+            {
+                return RunReportResult.Conflict(RunErrorCodes.GitCommitMismatch);
             }
 
             if (run.LeaseExpiresAt is null || run.LeaseExpiresAt <= now)
@@ -781,6 +925,23 @@ public sealed class RunService(
                 // A definition can only be frozen on a running run; anything else is a stale or
                 // misdirected report.
                 return RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
+            }
+
+            // F-017 (review M1): the definition report is where a worker normally states the commit it
+            // checked out. A webhook run was created with the pushed commit, and the claim told the worker
+            // to pin exactly that; a report naming a different commit means the worker built something
+            // else, which is a conflict, not a detail to absorb. Nothing is written on the refusal path -
+            // no commit rewrite, no frozen spec - so the run keeps its recorded commit and stays
+            // re-reportable.
+            if (run.GitCommit is not null
+                && gitCommit is not null
+                && !string.Equals(run.GitCommit, gitCommit, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "Run definition refused: the reported commit disagrees with the run's. RunId={RunId} WorkerId={WorkerId}",
+                    run.Id,
+                    worker.Id);
+                return RunReportResult.Conflict(RunErrorCodes.GitCommitMismatch);
             }
 
             var now = DateTimeOffset.UtcNow;

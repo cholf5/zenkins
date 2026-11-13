@@ -108,6 +108,18 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only Git credential.</summary>
     public static readonly Guid GitCredentialBId = new("b0000000-0000-4000-8000-000000000072");
 
+    /// <summary>A's only webhook, the positive control for the F-017 probes.</summary>
+    public static readonly Guid WebhookAId = new("a0000000-0000-4000-8000-000000000091");
+
+    /// <summary>B's only webhook.</summary>
+    public static readonly Guid WebhookBId = new("b0000000-0000-4000-8000-000000000092");
+
+    /// <summary>A's only delivery record (of A's only webhook).</summary>
+    public static readonly Guid WebhookDeliveryAId = new("a0000000-0000-4000-8000-000000000093");
+
+    /// <summary>B's only delivery record.</summary>
+    public static readonly Guid WebhookDeliveryBId = new("b0000000-0000-4000-8000-000000000094");
+
     public const string OrgAName = "Alpha";
     public const string OrgBName = "Beta";
 
@@ -152,6 +164,15 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string ArtifactAName = "bin/Release";
     public const string ArtifactBName = "out/web";
     public const string ArtifactManifestJson = "{\"version\":1,\"fileCount\":0,\"totalBytes\":0,\"files\":[]}";
+
+    // F-017: one webhook per organization (and one delivery record each). The ciphertext is a placeholder
+    // under the same discipline as the secrets above - the tenancy probes never decrypt - and the dedupe
+    // key is a well-shaped "id:" hash.
+    public const string WebhookAName = "alpha-hook";
+    public const string WebhookBName = "beta-hook";
+    public const string WebhookACiphertext = "CfDJ8-fixture-alpha-webhook-ciphertext";
+    public const string WebhookBCiphertext = "CfDJ8-fixture-beta-webhook-ciphertext";
+    public const string WebhookDedupeKey = "id:0000000000000000000000000000000000000000000000000000000000000000";
 
     private readonly string _databasePath;
     private bool _migrated;
@@ -513,6 +534,53 @@ public sealed class TwoOrgsFixture : IDisposable
                 Kind = "SshKey",
                 Ciphertext = GitCredentialBCiphertext,
                 CreatedByUserId = OrgBOwnerUserId,
+            });
+
+        // F-017: one webhook per organization (and one delivery record hanging off each), so the
+        // read/write/find probes are not vacuous and the two unique indexes - (ProjectId, Name) and
+        // (WebhookId, DedupeKey) - each have a row to collide with.
+        context.Set<Webhook>().AddRange(
+            new Webhook
+            {
+                Id = WebhookAId,
+                OrganizationId = OrgAId,
+                ProjectId = ProjectAId,
+                Name = WebhookAName,
+                SecretCiphertext = WebhookACiphertext,
+                BranchFilter = ProjectABranch,
+                RequiredTags = string.Empty,
+                CreatedByUserId = OrgAOwnerUserId,
+            },
+            new Webhook
+            {
+                Id = WebhookBId,
+                OrganizationId = OrgBId,
+                ProjectId = ProjectBId,
+                Name = WebhookBName,
+                SecretCiphertext = WebhookBCiphertext,
+                BranchFilter = ProjectBBranch,
+                RequiredTags = string.Empty,
+                CreatedByUserId = OrgBOwnerUserId,
+            });
+
+        context.Set<WebhookDelivery>().AddRange(
+            new WebhookDelivery
+            {
+                Id = WebhookDeliveryAId,
+                OrganizationId = OrgAId,
+                WebhookId = WebhookAId,
+                DedupeKey = WebhookDedupeKey,
+                Outcome = "queued",
+                ReceivedAt = DateTimeOffset.UtcNow,
+            },
+            new WebhookDelivery
+            {
+                Id = WebhookDeliveryBId,
+                OrganizationId = OrgBId,
+                WebhookId = WebhookBId,
+                DedupeKey = WebhookDedupeKey,
+                Outcome = "queued",
+                ReceivedAt = DateTimeOffset.UtcNow,
             });
 
         context.SaveChanges();

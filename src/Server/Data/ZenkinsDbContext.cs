@@ -8,6 +8,7 @@ using Zenkins.Server.Git;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Artifacts;
+using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Tenancy;
@@ -797,6 +798,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // F-016: the artifact entity (tenant-owned, unique (RunId, Name), cascade from the run). Same
         // shape as the call above: the storage rules live next to the feature (src/Server/Artifacts).
         modelBuilder.ConfigureArtifacts(this);
+
+        // F-017: the webhook and its replay records (tenant-owned; unique (ProjectId, Name) and
+        // (WebhookId, DedupeKey)). The rules live next to the feature (src/Server/Webhooks).
+        modelBuilder.ConfigureWebhooks(this);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

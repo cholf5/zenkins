@@ -388,6 +388,9 @@ public sealed class WorkerRunLoop(
                 RepositoryUrl = claim.RepositoryUrl,
                 Branch = claim.Branch,
                 PipelinePath = claim.PipelinePath,
+
+                // F-017 (review M1): a webhook run names the commit to build; a manual run does not.
+                ExpectedCommit = claim.Commit,
                 Deadline = deadline,
                 GitDepth = configuration.GitDepth,
                 KnownHostsPath = configuration.GitKnownHostsPath,

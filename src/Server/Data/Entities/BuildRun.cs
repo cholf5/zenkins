@@ -34,6 +34,13 @@ public static class BuildRunTriggerType
 {
     /// <summary>Triggered by an organization member from the project page (this card).</summary>
     public const string Manual = "Manual";
+
+    /// <summary>
+    /// Triggered by a signed webhook delivery (card F-017): a `git push` to a configured branch. Such a
+    /// run has no <see cref="BuildRun.TriggerUserId"/> - nobody was signed in - and carries the pushed
+    /// commit from the payload instead of waiting for the worker's accept report.
+    /// </summary>
+    public const string Webhook = "Webhook";
 }
 
 /// <summary>
@@ -105,14 +112,22 @@ public sealed class BuildRun : ITenantOwned
     public DateTimeOffset? StartedAt { get; set; }
 
     /// <summary>
-    /// The exact commit the worker checked out, reported with the <c>accepted</c> report (card F-013).
+    /// The exact commit this run builds: an object name (hex sha), never a branch label - a branch moves,
+    /// and the point of the column is to say what this run actually built.
     /// <para>
-    /// <b>Written once, never derived.</b> The value is an object name (hex sha) produced by
-    /// <c>git rev-parse HEAD</c> on the worker, never something the server infers from a branch label:
-    /// a branch moves, and the point of the column is to say what this run actually built. The server
-    /// stamps it inside the accept transition only when the column is still empty
-    /// (<c>ZenkinsDbContext.TryStampGitCommitAsync</c>), so a second report - or a re-delivery of the
-    /// same one - can never rewrite it.
+    /// <b>Two sources, one invariant.</b> A manual run starts empty and is filled from the worker's
+    /// definition report (<c>git rev-parse HEAD</c> after its own clone, card F-013). A webhook run
+    /// (card F-017) is created with the pushed <c>after</c>, and the claim then hands that same commit to
+    /// the worker with the instruction to pin it (review M1) - so the recorded commit and the checked-out
+    /// tree are the same fact even when the branch moves between the push and the clone. For a run that
+    /// already carries one, a later report naming a different commit is refused
+    /// (<c>RunErrorCodes.GitCommitMismatch</c>, 409): the column is never rewritten and a disagreement is
+    /// never silently absorbed.
+    /// </para>
+    /// <para>
+    /// <b>Written once.</b> The stamp is a guarded compare-and-set on <c>GitCommit IS NULL</c>
+    /// (<c>ZenkinsDbContext.TryStampGitCommitAsync</c>), so a second report - or a re-delivery of the same
+    /// one - cannot rewrite what the run built.
     /// </para>
     /// </summary>
     public string? GitCommit { get; set; }

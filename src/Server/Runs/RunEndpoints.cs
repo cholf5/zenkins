@@ -132,6 +132,7 @@ public static class RunEndpoints
                 result.ProjectId!.Value,
                 result.RepositoryUrl!,
                 result.Branch!,
+                result.Commit,
                 result.PipelinePath!,
                 result.LeaseExpiresAt!.Value)),
         };
@@ -346,11 +347,17 @@ public static class RunEndpoints
         public string? FailureReason { get; set; }
     }
 
+    /// <param name="Commit">
+    /// F-017 (review M1): the exact commit this run must build, when the trigger already named one (a
+    /// webhook push). <see langword="null"/> for a manual run, which builds the branch tip and reports what
+    /// it checked out. The worker pins a non-null value instead of trusting the branch.
+    /// </param>
     public sealed record RunClaimResponse(
         Guid RunId,
         Guid ProjectId,
         string RepositoryUrl,
         string Branch,
+        string? Commit,
         string PipelinePath,
         DateTimeOffset LeaseExpiresAt);
 

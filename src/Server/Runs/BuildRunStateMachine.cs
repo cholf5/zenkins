@@ -20,6 +20,14 @@ public static class RunErrorCodes
     public const string RunNotAssignedToWorker = "run-not-assigned-to-worker";
     public const string LeaseExpired = "lease-expired";
     public const string InvalidTransition = "invalid-transition";
+
+    /// <summary>
+    /// F-017 (review M1): a report named a commit that is not the one this run is pinned to. A webhook run
+    /// records the pushed commit at creation and the worker is told to check out exactly it, so a
+    /// disagreement means the worker built something else - refused rather than absorbed, which is what
+    /// keeps "what the run says" and "what the worker built" the same fact.
+    /// </summary>
+    public const string GitCommitMismatch = "git-commit-mismatch";
     public const string CancelNotRequested = "cancel-not-requested";
 
     // Reporting payload validation (400).

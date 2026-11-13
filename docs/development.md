@@ -292,6 +292,29 @@ The caps are enforced by the server on every request (the worker also pre-checks
 fail early; a worker's console app reads them as `Artifacts__MaxFileBytes`). There is **no retention
 policy** in v1: an artifact lives until its run is deleted.
 
+### Worker Git behaviour (shallow clones and pinned commits)
+
+The worker clones each run's repository itself; three environment variables configure it
+(`ZENKINS_GIT_DEPTH`, `ZENKINS_GIT_KNOWN_HOSTS`, `ZENKINS_GIT_TIMEOUT_SECONDS` - see
+[`WorkerConfiguration`](../src/Worker/WorkerConfiguration.cs) for the accepted ranges).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ZENKINS_GIT_DEPTH` | `0` (full clone) | Passed as `--depth` when positive. A speed knob for large repositories; git ignores it on a plain local path. |
+| `ZENKINS_GIT_KNOWN_HOSTS` | unset (accept-new per run) | Pins SSH host keys. Never the operator's `~/.ssh/known_hosts`. |
+| `ZENKINS_GIT_TIMEOUT_SECONDS` | 300 | Budget of one git invocation, further capped by what is left of the run's deadline. |
+
+**Shallow clones and webhook runs pull in opposite directions.** A manual run clones its branch and
+builds the tip. A webhook run (card F-017) is pinned to the commit its push named, so after the clone
+the worker runs `git fetch origin` and `git checkout --detach <that commit>`, then verifies `HEAD`
+really is that object - the branch may have moved between the push and the clone, and a run must build
+the tree its own push named. With the default full clone the commit is always in history, so the pin
+always succeeds. With `ZENKINS_GIT_DEPTH > 0` the named commit can fall **outside** the shallow window
+(the branch moved several commits after the push); the checkout then fails and the run ends with a
+`git-*` failure. That is the honest outcome - it never silently builds the branch tip - but if you
+enable a shallow depth, size it to cover the push-to-clone gap, or keep webhook-triggered projects on
+`0`.
+
 ### Reverse proxy (TLS termination)
 
 `X-Forwarded-Proto` is what makes `Request.IsHttps` true behind a proxy, and therefore what makes the
@@ -622,7 +645,14 @@ created, rotated and deleted by an Owner on `/secrets`: values are encrypted at 
 Protection, are never readable again through a page or an API (there is no value route at all), and a
 Member's request for the page or a write is a 403.
 
-Not implemented yet: pipelines (`pipeline.lua` execution), Git checkout, artifacts and webhooks, and
-secret *delivery* to runs (`secret()` is F-015, Git credentials F-013); the Workers page is still a
-shell preview. Do not expect those to work in this revision. A run in this revision executes the argv
-command typed on the project page — the pipeline run contract arrives with F-014.
+A run is a **pipeline** run (F-014 and later): the worker clones the project's repository at the
+branch the run pinned (F-013, with a per-project Git credential), resolves and freezes the step list
+from `pipeline.lua` (F-011/F-014), runs the steps in order, records each step and its `secret()` values
+(F-015), publishes artifacts (F-016) and reports the commit it actually built. A run can also be started
+by a `git push` through a project webhook (F-017): the endpoint is signature-verified with the
+webhook's own secret, filtered by branch, replay-protected, rate-limited, and a webhook run is pinned to
+the pushed commit so an overlapping push to the same branch cannot move it.
+
+Not implemented yet: nothing in the run path above — the remaining shell is the standalone Workers page
+(worker registration/heartbeat work; the page is a preview), and unknown/duplicate-trigger handling for
+provider-specific webhook event types beyond `push`.

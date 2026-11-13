@@ -17,6 +17,7 @@ using Zenkins.Server.Organizations;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
 using Zenkins.Server.Secrets;
+using Zenkins.Server.Webhooks;
 using Zenkins.Server.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,6 +36,9 @@ builder.Services.AddZenkinsGit();
 // F-016: the local artifact store (App_Data/artifacts), the upload/download service and the sweeper that
 // closes abandoned uploads and orphaned directories.
 builder.Services.AddZenkinsArtifacts();
+
+// F-017: webhook management, the signature-verified delivery pipeline and the replay-record sweeper.
+builder.Services.AddZenkinsWebhooks();
 
 // F-012: the Data Protection key ring is data, not a machine default. It encrypts every stored
 // secret and mints the F-008 log-subscription tickets, so it is persisted next to the database and
@@ -207,6 +211,11 @@ app.MapRunEndpoints();
 
 // F-016: the worker artifact API (create/files/finalize) and the per-artifact download.
 app.MapArtifactEndpoints();
+
+// F-017: the anonymous, signature-authenticated delivery endpoint (POST /webhooks/{webhookId}) and the
+// cookie+antiforgery settings forms. The delivery route is deliberately outside the cookie-auth fallback,
+// like the worker API: a git host has no session, and the shared secret is the whole credential.
+app.MapWebhookEndpoints();
 
 // Log streaming hubs (F-008): the worker upstream (worker-token authenticated) and the browser
 // subscription hub (subscription-ticket authenticated). Both authenticate before any hub method

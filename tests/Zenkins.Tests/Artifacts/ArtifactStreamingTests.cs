@@ -9,8 +9,11 @@ namespace Zenkins.Tests.Artifacts;
 
 /// <summary>
 /// The collection the streaming tests run in. xUnit's <c>DisableParallelization</c> makes this collection run
-/// alone, which the heap measurement needs: <see cref="ArtifactTransferTelemetry.PeakManagedDeltaBytes"/> samples
-/// the whole process, so another test's allocations would otherwise be attributed to the transfer.
+/// alone, which two tests here need: the heap measurement, because
+/// <see cref="ArtifactTransferTelemetry.PeakManagedDeltaBytes"/> samples the whole process, and the zip
+/// temp-scan test, because it snapshots the OS temp root and any other host's temp database appearing or
+/// disappearing mid-test would be attributed to the download. Do not move a test out of this collection
+/// without checking which of the two it depends on.
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class ArtifactStreamingCollection
@@ -265,6 +268,15 @@ public sealed class ArtifactStreamingTests
     /// Every entry under the OS temp directory (recursively), as <c>relative-path|length</c>. Comparing three
     /// snapshots (before, during and after a download) proves no temporary archive appeared anywhere - without
     /// filtering by name or by run id, so a differently named temp file would still be caught.
+    /// <para>
+    /// <b>What is compared: directories, links, and every non-empty file - by path and by length.</b> The OS
+    /// temp root is shared, so it also holds entries this product cannot materialise: AF_UNIX sockets a running
+    /// app keeps there (observed: <c>Sublime Text.*.socket</c>), FIFOs, devices. .NET reports a socket as an
+    /// existing "file" with length 0, which is why the zero-length skip below is not a name filter and not a
+    /// narrowed path: <b>an archive is never empty</b>, so excluding zero-length entries cannot hide one, while
+    /// including them made the scan fail on another process's churn. The scan is still the whole tree, and a
+    /// temp archive - any name, any size above zero - still appears as a new <c>path|length</c> entry.
+    /// </para>
     /// </summary>
     private static string[] SnapshotTempDirectory()
     {
@@ -282,13 +294,42 @@ public sealed class ArtifactStreamingTests
             ReturnSpecialDirectories = false,
         };
 
-        foreach (var path in Directory.EnumerateFileSystemEntries(root, "*", options))
+        foreach (var entry in new DirectoryInfo(root).EnumerateFileSystemInfos("*", options))
         {
             try
             {
-                var info = new FileInfo(path);
-                var length = info.LinkTarget is null && info.Exists ? info.Length : -1;
-                entries.Add(Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/') + "|" + length);
+                var relative = Path.GetRelativePath(root, entry.FullName)
+                    .Replace(Path.DirectorySeparatorChar, '/');
+
+                if (entry is DirectoryInfo)
+                {
+                    entries.Add(relative + "|-1");
+                    continue;
+                }
+
+                var file = (FileInfo)entry;
+                if (file.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    // A link is an entry in its own right; its target is compared through its own path.
+                    entries.Add(relative + "|-1");
+                    continue;
+                }
+
+                if (!file.Exists)
+                {
+                    // Not a regular file at all: nothing a download can materialise.
+                    continue;
+                }
+
+                if (file.Length == 0)
+                {
+                    // An archive is never empty. A zero-length entry here is a socket/FIFO/device that another
+                    // process owns (its lifecycle is not this download's business), or an empty marker file -
+                    // neither can be a temporary zip. Non-empty files are still compared by length.
+                    continue;
+                }
+
+                entries.Add(relative + "|" + file.Length);
             }
             catch (IOException)
             {
@@ -301,6 +342,53 @@ public sealed class ArtifactStreamingTests
 
         entries.Sort(StringComparer.Ordinal);
         return [.. entries];
+    }
+
+    // ------------------------------------------------------------------
+    // The temp-scan harness itself (review m10)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void The_temp_snapshot_catches_a_new_non_empty_file()
+    {
+        // Red proof for the scan: a new non-empty file anywhere under the temp root - the shape a materialised
+        // archive would have - must show up. Without this, the zero-length/type filtering below could silently
+        // turn the zip test into an assertion that cannot fail.
+        var name = $"zenkins-f016-selftest-{Guid.NewGuid():N}.zip";
+        var path = Path.Combine(Path.GetTempPath(), name);
+        File.WriteAllBytes(path, [0x50, 0x4B, 0x03, 0x04]);
+        try
+        {
+            // Asserted on this fixture's own entry, not on whole-snapshot inequality: the shared temp root may
+            // legitimately change for other reasons, and this test is about the scan seeing new files at all.
+            Assert.Contains(SnapshotTempDirectory(), entry => entry.Contains(name, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void A_zero_length_entry_in_the_temp_root_does_not_break_the_scan()
+    {
+        // The observed flake, in its cheapest reproducible form. The real entry was
+        // "Sublime Text.<pid>.<gen>.socket" - an AF_UNIX socket another application keeps in the shared temp
+        // root, which .NET reports as an existing "file" of length 0. A socket cannot be re-created here (this
+        // temp root's absolute path is longer than the 104-byte AF_UNIX limit), so the fixture is a zero-length
+        // regular file: the filter's whole point is that length 0 is skipped whatever kind of entry it is, and
+        // an archive is never empty - so nothing that could be a temp zip is hidden by this rule.
+        var name = $"zenkins-f016-selftest-{Guid.NewGuid():N}.entry";
+        var path = Path.Combine(Path.GetTempPath(), name);
+        File.WriteAllBytes(path, []);
+        try
+        {
+            Assert.DoesNotContain(SnapshotTempDirectory(), entry => entry.Contains(name, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     /// <summary>Writes <paramref name="bytes"/> of deterministic content in 1 MiB chunks and returns its SHA-256.</summary>
