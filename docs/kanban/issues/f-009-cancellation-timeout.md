@@ -4,7 +4,7 @@ title: Cancellation propagation and per-run timeout
 type: feature
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
