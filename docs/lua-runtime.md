@@ -172,7 +172,7 @@ interrupted — it returns when the script returns — so a `while true do end` 
 would hang the worker's execution thread with no path to cancellation or timeout.
 
 ```csharp
-var coroutine = script.CreateCoroutine(filtered).Coroutine;
+var coroutine = script.CreateCoroutine(fn).Coroutine;
 coroutine.AutoYieldCounter = 10_000;        // hand control back to the host every 10k VM instructions
 
 var result = coroutine.Resume();
