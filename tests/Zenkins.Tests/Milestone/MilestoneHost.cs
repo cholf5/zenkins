@@ -58,10 +58,14 @@ internal sealed record MilestoneArtifact(
     long TotalBytes,
     string? ManifestJson);
 
-/// <summary>Knobs a milestone test may move; everything else runs on the product's own defaults.</summary>
+/// <summary>Knobs a milestone test may move; everything else runs on the product's own defaults.
+/// Q-004's recovery harness adds the F-010 heartbeat knobs (compressed, never faked: the real
+/// <see cref="Zenkins.Server.Workers.WorkerOfflineMonitor"/> drives them).</summary>
 internal sealed record MilestoneHostOptions(
     double? DefaultTimeoutMinutes = null,
-    int SweepIntervalSeconds = 1);
+    int SweepIntervalSeconds = 1,
+    int? OfflineAfterSeconds = null,
+    int? WorkerMonitorIntervalSeconds = null);
 
 /// <summary>
 /// Q-002's process harness: the <b>real Server</b> as its own process over a throwaway SQLite file and a
@@ -82,7 +86,7 @@ internal sealed record MilestoneHostOptions(
 /// leave a server or a worker (or a build's grandchildren) behind.
 /// </para>
 /// </summary>
-internal sealed class MilestoneHost : IDisposable
+internal class MilestoneHost : IDisposable
 {
     private static readonly TimeSpan ServerStartTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan WorkerOnlineTimeout = TimeSpan.FromSeconds(45);
@@ -97,6 +101,7 @@ internal sealed class MilestoneHost : IDisposable
 
     private readonly string _dotnetPath;
     private readonly string _workerDll;
+    private readonly CookieContainer _ownerCookies = new();
     private readonly List<Process> _workers = [];
     private readonly List<ProcessLog> _workerLogs = [];
     private readonly List<bool> _childExitStates = [];
@@ -104,7 +109,14 @@ internal sealed class MilestoneHost : IDisposable
     private ProcessLog? _serverLogs;
     private bool _disposed;
 
-    private MilestoneHost(string rootPath, string dotnetPath, string workerDll)
+    // Q-004's restart capability: the facts a restart needs (the same binaries, the same options) are
+    // remembered from the first start, so a restarted server is byte-for-byte the same deployment over
+    // the same database, key ring and store.
+    private string _repositoryRoot = string.Empty;
+    private string _serverDll = string.Empty;
+    private MilestoneHostOptions _startOptions = new();
+
+    protected internal MilestoneHost(string rootPath, string dotnetPath, string workerDll)
     {
         RootPath = rootPath;
         _dotnetPath = dotnetPath;
@@ -169,6 +181,9 @@ internal sealed class MilestoneHost : IDisposable
     /// <summary>The one-time registration token the worker of this host presents.</summary>
     public string RegistrationToken { get; private set; } = string.Empty;
 
+    /// <summary>The built Worker executable this host launches (Release output; resolved at start).</summary>
+    protected internal string WorkerDllPath => _workerDll;
+
     // -------------------------------------------------------------------------------------------
     // Start / stop
     // -------------------------------------------------------------------------------------------
@@ -188,9 +203,7 @@ internal sealed class MilestoneHost : IDisposable
         var host = new MilestoneHost(root, dotnet, workerDll);
         try
         {
-            host.StartServer(repositoryRoot, serverDll, options);
-            host.ServerUrl = await host.WaitForServerAsync(TestContext.Current.CancellationToken);
-            host.Owner = await SignInOwnerAsync(host.ServerUrl);
+            await host.StartCoreAsync(repositoryRoot, serverDll, options);
 
             var (token, response) = await WorkerTestHost.MintRegistrationTokenAsync(host.Owner);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -204,7 +217,15 @@ internal sealed class MilestoneHost : IDisposable
         }
     }
 
-    private void StartServer(string repositoryRoot, string serverDll, MilestoneHostOptions options)
+    /// <summary>The start every host shares: start the server, wait for it, sign the Owner in.</summary>
+    protected async Task StartCoreAsync(string repositoryRoot, string serverDll, MilestoneHostOptions options)
+    {
+        StartServer(repositoryRoot, serverDll, options);
+        ServerUrl = await WaitForServerAsync(TestContext.Current.CancellationToken);
+        Owner = await SignInOwnerAsync(ServerUrl);
+    }
+
+    protected void StartServer(string repositoryRoot, string serverDll, MilestoneHostOptions options)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -238,9 +259,83 @@ internal sealed class MilestoneHost : IDisposable
                 minutes.ToString(CultureInfo.InvariantCulture);
         }
 
+        // Q-004: compressed F-010 timing (the real WorkerOfflineMonitor drives it) - a worker whose
+        // heartbeat goes stale is flipped Offline and its Running runs become Lost, at test scale.
+        if (options.OfflineAfterSeconds is { } offlineAfterSeconds)
+        {
+            startInfo.Environment["Workers__OfflineAfterSeconds"] =
+                offlineAfterSeconds.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (options.WorkerMonitorIntervalSeconds is { } monitorIntervalSeconds)
+        {
+            startInfo.Environment["Workers__MonitorIntervalSeconds"] =
+                monitorIntervalSeconds.ToString(CultureInfo.InvariantCulture);
+        }
+
         _server = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The Server process could not be started.");
         _serverLogs = new ProcessLog(_server);
+        _repositoryRoot = repositoryRoot;
+        _serverDll = serverDll;
+        _startOptions = options;
+    }
+
+    /// <summary>
+    /// Stops the running server (as a tree, waited for) and forgets it, so a later
+    /// <see cref="StartServerAgainAsync"/> starts a fresh process over the <b>same</b> database, key
+    /// ring and store. The Owner's session cookie survives the restart because the key ring does -
+    /// which is itself part of the restart story a recovery test asserts. A no-op when the server is
+    /// already stopped (a test may stop and restart in steps).
+    /// </summary>
+    public void StopServer()
+    {
+        if (_server is null)
+        {
+            return;
+        }
+
+        Kill(_server);
+        _server = null;
+        _serverLogs?.Dispose();
+        _serverLogs = null;
+    }
+
+    /// <summary>
+    /// Starts the server again after <see cref="StopServer"/> - the same binaries and the same options
+    /// as the first start, over the same database (the queue must survive the restart, not the
+    /// process). <see cref="ServerUrl"/> is updated: a restarted server takes the port the OS picks.
+    /// </summary>
+    public async Task StartServerAgainAsync()
+    {
+        if (_server is not null)
+        {
+            throw new InvalidOperationException("the server is still running; stop it first.");
+        }
+
+        StartServer(_repositoryRoot, _serverDll, _startOptions);
+        ServerUrl = await WaitForServerAsync(TestContext.Current.CancellationToken);
+
+        // The restarted server took a new port; the Owner's session outlives the process because the
+        // Data Protection key ring does - the same cookie jar is re-pointed at the new address, so the
+        // Owner keeps the identity (and the organization membership) the first server issued. This is
+        // part of what a restart asserts, not a harness shortcut.
+        if (Owner is not null)
+        {
+            Owner.Dispose();
+            Owner = CreateOwnerClient(ServerUrl);
+        }
+    }
+
+    /// <summary>
+    /// Registers a child process (and its log) into this host's tracked set, so <see cref="Dispose"/>
+    /// kills it as a tree even if the test already killed or abandoned it. Recovery's restart path
+    /// starts workers through this seam.
+    /// </summary>
+    protected internal void TrackWorker(Process worker, ProcessLog logs)
+    {
+        _workers.Add(worker);
+        _workerLogs.Add(logs);
     }
 
     /// <summary>Starts the real worker against this host (one worker per host; started late by one test).</summary>
@@ -318,7 +413,7 @@ internal sealed class MilestoneHost : IDisposable
     }
 
     /// <summary>Kills a child and its tree, waits, and records whether it really exited.</summary>
-    private void Kill(Process process)
+    protected void Kill(Process process)
     {
         var exited = false;
         try
@@ -685,7 +780,7 @@ internal sealed class MilestoneHost : IDisposable
     }
 
     /// <summary>The process-table lookup by id (an independent handle, not the one this host keeps).</summary>
-    private static Process LookUpProcess(int processId)
+    protected internal static Process LookUpProcess(int processId)
     {
         try
         {
@@ -699,7 +794,7 @@ internal sealed class MilestoneHost : IDisposable
     }
 
     /// <summary>The <c>Os</c> string the worker reports for this host's platform.</summary>
-    private static string ExpectedWorkerOs() =>
+    protected internal static string ExpectedWorkerOs() =>
         OperatingSystem.IsWindows() ? "Windows"
         : OperatingSystem.IsLinux() ? "Linux"
         : OperatingSystem.IsMacOS() ? "macOS"
@@ -860,7 +955,7 @@ internal sealed class MilestoneHost : IDisposable
     // SQLite plumbing
     // -------------------------------------------------------------------------------------------
 
-    private async Task<IReadOnlyList<T>> ReadAsync<T>(string sql, Func<SqliteDataReader, T> map)
+    protected internal async Task<IReadOnlyList<T>> ReadAsync<T>(string sql, Func<SqliteDataReader, T> map)
     {
         var lockDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         while (true)
@@ -919,7 +1014,7 @@ internal sealed class MilestoneHost : IDisposable
     // Process plumbing
     // -------------------------------------------------------------------------------------------
 
-    private async Task<string> WaitForServerAsync(CancellationToken cancellationToken)
+    protected async Task<string> WaitForServerAsync(CancellationToken cancellationToken)
     {
         var server = ServerProcess;
         if (server.HasExited)
@@ -955,18 +1050,21 @@ internal sealed class MilestoneHost : IDisposable
         return url;
     }
 
-    private static async Task<HttpClient> SignInOwnerAsync(string serverUrl)
-    {
-        var cookies = new CookieContainer();
-        var client = new HttpClient(new HttpClientHandler
+    /// <summary>An Owner client over this host's shared cookie jar (so a restarted server keeps the session).</summary>
+    protected HttpClient CreateOwnerClient(string serverUrl) =>
+        new(new HttpClientHandler
         {
-            CookieContainer = cookies,
+            CookieContainer = _ownerCookies,
             AllowAutoRedirect = false,
             UseCookies = true,
         })
         {
             BaseAddress = new Uri(serverUrl.TrimEnd('/') + "/"),
         };
+
+    private async Task<HttpClient> SignInOwnerAsync(string serverUrl)
+    {
+        var client = CreateOwnerClient(serverUrl);
 
         var response = await AuthTestHost.RegisterAsync(client, $"owner-{Guid.NewGuid():N}@example.test");
         Assert.True(
@@ -975,7 +1073,7 @@ internal sealed class MilestoneHost : IDisposable
         return client;
     }
 
-    private static string FindRepositoryRoot()
+    protected internal static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Zenkins.slnx")))
@@ -987,7 +1085,7 @@ internal sealed class MilestoneHost : IDisposable
             ?? throw new InvalidOperationException("Could not locate the Zenkins repository root from the test output.");
     }
 
-    private static string FindBuiltBinary(string repositoryRoot, string binRelative, string fileName)
+    protected internal static string FindBuiltBinary(string repositoryRoot, string binRelative, string fileName)
     {
         var binRoot = Path.Combine(repositoryRoot, binRelative);
         var releaseMarker = $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}";
@@ -1010,7 +1108,7 @@ internal sealed class MilestoneHost : IDisposable
     /// The dotnet host that can <c>exec</c> an app DLL: under xunit v3 <see cref="Environment.ProcessPath"/>
     /// is the test host's own apphost, which does not understand <c>exec</c>.
     /// </summary>
-    private static string ResolveDotnetPath()
+    protected internal static string ResolveDotnetPath()
     {
         var processPath = Environment.ProcessPath;
         if (processPath is not null
@@ -1044,7 +1142,7 @@ internal sealed class MilestoneHost : IDisposable
     private static string HostFileName() => OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
 
     /// <summary>Collects a child's stdout/stderr lines (thread-safe) and waits for markers in them.</summary>
-    private sealed class ProcessLog : IDisposable
+    internal sealed class ProcessLog : IDisposable
     {
         private readonly object _lock = new();
         private readonly List<string> _lines = [];

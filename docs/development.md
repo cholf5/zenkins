@@ -4,7 +4,9 @@ Everything needed to go from a clean machine to a signed-in dashboard: prerequis
 run, configuration, repository layout, and troubleshooting.
 
 > **Verified on:** macOS 26.5 (arm64) with .NET SDK **10.0.403**, on 2026-11-12; re-verified after
-> project CRUD landed. Every command in the POSIX (macOS/Linux) form below was run in that order from
+> project CRUD landed. The test suites (§2) were re-verified on 2026-11-14, when the recovery
+> acceptance suite (Q-004) added a third category and the fast filter grew its second exclusion.
+> Every command in the POSIX (macOS/Linux) form below was run in that order from
 > a fresh `git clone`; the expected outputs quoted here are the ones those runs produced. PowerShell
 > equivalents differ only in shell syntax (`$env:`, `Remove-Item`, `Tee-Object`) and are given
 > wherever they differ.
@@ -64,44 +66,67 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-### Two suites: the fast one, and the milestone acceptance harness
+### Three suites: the fast one, and two acceptance harnesses
 
-The test project has a second, deliberately slow category. **`Category=Milestone`** is the milestone
-acceptance harness: it starts a real Server process, a real Worker process, a real Git repository (with
-a real `pipeline.lua`), a real webhook delivery and a real artifact download, so it proves the product
-end to end instead of proving its parts. It is not part of the fast loop:
+The test project has two deliberately slow categories, and both are acceptance harnesses that prove
+the product end to end instead of proving its parts:
+
+- **`Category=Milestone`** (Q-002) starts a real Server process, a real Worker process, a real Git
+  repository (with a real `pipeline.lua`), a real webhook delivery and a real artifact download.
+- **`Category=Recovery`** (Q-004) reuses the same launcher and adds restarts: the server is stopped and
+  started again over the same database, workers are killed and restarted as processes, and the real
+  lease sweeper and offline monitor run against compressed configuration (a one-second sweep interval,
+  a five-second offline threshold against the production sixty - time compressed, never faked) to
+  prove what a crash really does: a queued run survives the restart, a killed worker's run becomes
+  `Lost` with the offline reason, the killed worker's late report is refused, and a restarted worker
+  claims new work instead of resuming the abandoned one.
+
+Neither harness is part of the fast loop, so the fast filter has to exclude **two** categories. The
+runner accepts the `&`-joined double exclusion - verified on 2026-11-14: the combination runs (931
+tests, 0 failed, 0 skipped), and the single exclusion `Category!=Milestone` alone would now pull the
+four recovery tests in (it answers 935 with them, 931 without):
 
 ```bash
-dotnet build -c Release                                  # the harness runs the built binaries
-dotnet test -c Release --filter "Category!=Milestone"    # the fast suite
-dotnet test -c Release --filter "Category=Milestone"     # the milestone acceptance harness
+dotnet build -c Release                                                  # the harnesses run the built binaries
+dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery" # the fast suite
+dotnet test -c Release --filter "Category=Milestone"                     # the milestone acceptance harness
+dotnet test -c Release --filter "Category=Recovery"                      # the recovery acceptance harness
 ```
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone` | `dotnet build -c Release` | the normal seconds-scale run |
-| Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s on the reference machine (6 tests) |
+| Fast | `Category!=Milestone&Category!=Recovery` | `dotnet build -c Release` | ~1½–2 min on the reference machine (931 tests, snapshot of the revision) |
+| Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (6 tests) |
+| Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 
-`dotnet test` with no filter runs **both**. That is why the harness carries its own category, so the
-fast loop is one flag away and a machine without the Release build never pays for it: the milestone
-tests only ever launch the Release-build output of `Zenkins.Server.dll` and `Zenkins.Worker.dll` from
-the `src` project trees, and fail fast with a message naming `dotnet build -c Release` if those
-binaries are absent (the same rule the F-005/F-007 process E2Es follow).
+`dotnet test` with no filter runs **all three** (941 at the time of writing, ~2 min). That is why each
+harness carries its own category, so the fast loop is one flag away and a machine without the Release
+build never pays for it: both harnesses only ever launch the Release-build output of
+`Zenkins.Server.dll` and `Zenkins.Worker.dll` from the `src` project trees, and fail fast with a
+message naming `dotnet build -c Release` if those binaries are absent (the same rule the F-005/F-007
+process E2Es follow).
 
-What the harness needs, and what it does not:
+What the harnesses need, and what they do not:
 
-- **A Release build first.** It runs the real binaries; it never compiles on the fly.
+- **A Release build first.** They run the real binaries; they never compile on the fly.
 - **`git`** on `PATH` (the fixture builds a real bare repository) and the **dotnet host** next to the
   running runtime. **No network**: the fixture repository is a local `file://` bare clone, the Server
   listens on a port the OS picks (`http://127.0.0.1:0`), and the webhook is delivered to that loopback
   address by the test itself.
 - **Nothing in the repository.** Each test gets its own temporary root - SQLite database, Data
   Protection key ring, artifact store, worker data directory and work root - and the harness deletes it
-  on dispose, after killing the Server and Worker process trees.
-- **One worker per host.** The no-worker case starts with none and starts it later on purpose.
+  on dispose, after killing the Server and Worker process trees. The recovery harness kills workers
+  mid-test as well, and every killed process stays tracked so dispose can never leak one.
+- **One worker per host (milestone).** The no-worker case starts with none and starts it later on
+  purpose. The recovery harness deliberately holds several workers over its lifetime and restarts
+  them - with the same name and the same data directory, so the restarted process loads the persisted
+  token, which is the product's real reconnect path.
 
-The harness asserts only observable state (database rows, HTTP responses, files on disk, process exit
-codes); it does not read worker-internal objects, so it cannot pass because of a mocked seam.
+The harnesses assert only observable state (database rows, HTTP responses, files on disk, process
+ids and exit codes); they do not read worker-internal objects, so they cannot pass because of a
+mocked seam. (One deliberate file read belongs to that set: the late-report test reads the worker
+token file the worker itself persisted under its own data directory, because the replayed report must
+present exactly the credential the dead worker would have presented.)
 
 ## 3. First run
 
