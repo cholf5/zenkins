@@ -67,17 +67,26 @@ Candidate tasks:
 Not in this milestone, deliberately: per-step log viewer controls (pause/search) stay v0.9; artifact
 retention and git object caching are parking-lot items.
 
+### Carried over from v0.3
+
+- The accepted v0.3 cards each recorded their follow-ups rather than leaving them silent. The
+  test-shaped ones are collected in `Q-003` (rate-limiter properties, a snapshot flake, the
+  URL-to-clone product path, two loop-level definitions tests, one key-ring branch).
+
 ### v0.9 — Management UI (Phase 5)
 
 Goal:
 - The whole product is usable from the browser without touching the API.
 
 Candidate tasks:
-- Dashboard: recent runs, running, queued, worker status, recent failures.
-- Project detail: overview / pipelines / runs / settings tabs.
+- Dashboard: recent runs, running, queued, worker status, recent failures. → `D-002`
+- Project detail: overview / pipelines / runs / settings tabs. → `D-003` (also the git-credential page
+  that F-013 left without one)
 - Build run detail: step list, live log viewer (pause auto-scroll, search, download), artifacts.
-- Workers page: OS, arch, tags, status, current runs, concurrency, last heartbeat.
-- Secrets page.
+  → `D-004`
+- Workers page: OS, arch, tags, status, current runs, concurrency, last heartbeat. → `D-005`
+- Secrets page. → `F-012` shipped the minimal Owner-only page (list, create, rotate, delete, no reveal);
+  the remaining polish (creator column, "which pipelines reference this name") is parked, not lost.
 
 ### v1.0 — Stable release (Phase 6)
 
@@ -86,7 +95,7 @@ Goal:
 
 Candidate tasks:
 - Multi-worker concurrency and no-double-assignment tests.
-- Worker disconnect recovery, Server restart recovery.
+- Worker disconnect recovery, Server restart recovery. → `Q-004`
 - Cross-tenant isolation audit (data, logs, artifacts, git credentials).
 - Self-contained publish + Windows Service / systemd / launchd packaging.
 - Install guide and upgrade notes.
