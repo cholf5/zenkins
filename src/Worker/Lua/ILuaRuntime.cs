@@ -35,21 +35,72 @@ public enum LuaExecutionOutcome
 }
 
 /// <summary>
-/// The outcome of one script execution. <see cref="Value"/> is the script's returned value rendered
-/// for a log line (<c>return 'pipeline-ok'</c> → <c>pipeline-ok</c>); it is <see langword="null"/>
-/// for every non-completed outcome and for a script that returns nothing.
+/// The outcome of one script execution (card F-011, extended by F-014).
+/// <para>
+/// <see cref="Value"/> is the script's result rendered for a log line (<c>return 'pipeline-ok'</c> →
+/// <c>pipeline-ok</c>); it is <see langword="null"/> for every non-completed outcome and for a script
+/// that returns nothing. <see cref="Result"/> is the same result <b>structurally</b>: the scalar it
+/// returned, or - for F-014's definition phase - the <see cref="LuaHostTable"/> the script built, so
+/// the host can validate and serialise a spec table instead of parsing a string the script rendered
+/// (<c>docs/lua-runtime.md</c> §6.1). Both are engine-free values from the seam.
+/// </para>
 /// </summary>
-public sealed record LuaExecutionResult(LuaExecutionOutcome Outcome, string? Value = null)
+public sealed record LuaExecutionResult(
+    LuaExecutionOutcome Outcome,
+    string? Value = null,
+    LuaHostValue? Result = null)
 {
     /// <summary>Whether the script ran to completion.</summary>
     public bool IsCompleted => Outcome == LuaExecutionOutcome.Completed;
 }
 
 /// <summary>
+/// Per-execution extras the driver honours (card F-014): a chunk run before the script, and the name
+/// of a global to read the result from when the script returns nothing.
+/// <para>
+/// <b>Why a prelude chunk instead of string concatenation.</b> The pipeline prelude
+/// (<c>src/Worker/Lua/prelude.lua</c>) defines <c>pipeline</c>/<c>step</c>/<c>log</c>/<c>is_*</c> as
+/// ordinary Lua functions; loading it as its own chunk keeps every position in a script error relative
+/// to <em>the user's</em> file (<c>pipeline.lua:(2,10-11)</c>), which concatenation would shift by the
+/// prelude's length. It also keeps the prelude out of the user's <c>_G</c> iteration order and out of a
+/// syntax error's blame.
+/// </para>
+/// <para>
+/// <b>Why <see cref="ResultGlobal"/>.</b> The declarative form in PRD §3.3.2 is a bare
+/// <c>pipeline { … }</c> statement with no <c>return</c>, so the host needs a place to read the table
+/// from. The prelude's <c>pipeline()</c> stores it under that global; a script that does
+/// <c>return pipeline { … }</c> works too - a returned value wins over the global.
+/// </para>
+/// </summary>
+public sealed record LuaExecutionOptions
+{
+    /// <summary>The chunk loaded (and run to completion) before the script, or <see langword="null"/>.</summary>
+    public string? PreludeSource { get; init; }
+
+    /// <summary>The prelude's chunk name in an error message; defaults to <c>prelude.lua</c>.</summary>
+    public string PreludeName { get; init; } = "prelude.lua";
+
+    /// <summary>
+    /// The global whose value becomes <see cref="LuaExecutionResult.Result"/> when the script returns
+    /// nothing, or <see langword="null"/> to require an explicit return.
+    /// </summary>
+    public string? ResultGlobal { get; init; }
+
+    /// <summary>
+    /// Globals the host defines before the prelude runs (card F-014): the pipeline prelude is ordinary
+    /// Lua with no host access, so the platform it reports through <c>is_windows</c>/<c>is_linux</c>/
+    /// <c>is_macos</c> is handed to it as one string global. Values are strings only - there is no
+    /// general bridge, and nothing here is script-writable before the prelude reads it.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Globals { get; init; }
+}
+
+/// <summary>
 /// The kind of value a host primitive exchanges with a script (card F-011, <c>docs/lua-runtime.md</c>
-/// §5.2). A closed set of scalars: <c>nil</c>, string, number, boolean - the SDK's public surface.
-/// Tables and engine objects never cross the seam, so a primitive cannot hand a live CLR object to a
-/// script and a script cannot hand a table to a primitive as if it were a scalar.
+/// §5.2). The primitive answer direction is a closed set of scalars plus tables: <c>nil</c>, string,
+/// number, boolean and - since F-014's definition phase - a <see cref="LuaHostTable"/> description that
+/// the runtime materialises as a real Lua table. No engine object ever crosses the seam, and no live
+/// CLR object is ever handed to a script.
 /// </summary>
 public enum LuaHostValueKind
 {
@@ -299,7 +350,9 @@ public sealed class LuaHostTable
 /// <c>Boolean</c> or <c>Nil</c>). The argument direction carries scalars only - the SDK primitives take
 /// names, text and numbers - so a table/function/user-data argument is delivered as
 /// <see cref="LuaHostValue.Nil"/> rather than coerced into a string a primitive could mistake for a
-/// scalar. Tables travel the other way, host → script, where §5.2 defines them.
+/// scalar. Tables travel in the two host-controlled directions: host → script as a primitive's answer
+/// (§5.2), and script → host as a definition's result (F-014's structured return channel, which is how
+/// <c>pipeline { … }</c> reaches the host as data instead of as a JSON string the script rendered).
 /// </summary>
 public sealed record LuaHostCall(string Name, IReadOnlyList<LuaHostValue> Arguments)
 {
@@ -318,11 +371,13 @@ public sealed class LuaHostResult
 {
     private readonly LuaHostValue _value;
     private readonly Func<LuaHostValue>? _answer;
+    private readonly string? _failure;
 
-    private LuaHostResult(LuaHostValue value, Func<LuaHostValue>? answer)
+    private LuaHostResult(LuaHostValue value, Func<LuaHostValue>? answer, string? failure = null)
     {
         _value = value;
         _answer = answer;
+        _failure = failure;
     }
 
     /// <summary>
@@ -346,6 +401,22 @@ public sealed class LuaHostResult
 
     /// <summary>Whether this result suspends the script (as opposed to answering immediately).</summary>
     public bool IsSuspended => _answer is not null;
+
+    /// <summary>
+    /// The primitive refused the call (card F-014): the engine raises a Lua error at the call site with
+    /// <paramref name="message"/>, so the script's own <c>pcall</c> can catch it and the run log reports
+    /// it with a position - never a silent <c>nil</c> that later fails somewhere unrelated. This is the
+    /// engine-free way to say "this call is the script's mistake": no exception type from the engine
+    /// crosses the seam.
+    /// </summary>
+    public static LuaHostResult Fail(string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        return new LuaHostResult(default, null, message);
+    }
+
+    /// <summary>The refusal's message; <see langword="null"/> unless the primitive refused.</summary>
+    internal string? Failure => _failure;
 
     /// <summary>The immediate answer; only meaningful when <see cref="IsSuspended"/> is false.</summary>
     internal LuaHostValue ImmediateValue => _value;
@@ -396,9 +467,15 @@ public interface ILuaRuntime
     /// The script did not compile or raised at runtime. The exception's message is one
     /// <c>source:(line,col-col): message</c> line - no CLR stack trace.
     /// </exception>
+    /// <param name="options">
+    /// The per-execution extras (a prelude chunk and the global a definition is read from).
+    /// <see langword="null"/> keeps F-011's behaviour exactly: the source runs alone and only its
+    /// return value is reported.
+    /// </param>
     LuaExecutionResult Execute(
         string source,
         string name,
         DateTimeOffset deadline,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        LuaExecutionOptions? options = null);
 }

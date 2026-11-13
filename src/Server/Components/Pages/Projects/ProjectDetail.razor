@@ -98,23 +98,23 @@
             <BbCardHeader>
                 <BbCardTitle As="h2">Start run</BbCardTitle>
                 <BbCardDescription>
-                    The command reaches the worker as raw argv - one argument per line, no shell quoting
-                    interpretation. Optional required tags restrict which worker may claim the run.
+                    A run executes this project's pipeline file on the branch you choose. Leave the
+                    branch blank to build the default branch. Optional required tags restrict which
+                    worker may claim the run.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <form method="post" action="@($"/projects/{_project.Id}/runs/start")" data-zenkins-antiforgery>
                     <div class="bb:space-y-4">
                         <div>
-                            <label for="run-command" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Command</label>
-                            <textarea id="run-command"
-                                      name="Command"
-                                      rows="3"
-                                      class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
-                                      placeholder="dotnet&#10;--version"></textarea>
-                            @if (CommandError is { } commandError)
+                            <label for="run-branch" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branch (optional)</label>
+                            <input id="run-branch"
+                                   name="Branch"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
+                                   placeholder="@_project.DefaultBranch" />
+                            @if (BranchError is { } branchError)
                             {
-                                <p id="run-command-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@commandError</p>
+                                <p id="run-branch-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@branchError</p>
                             }
                         </div>
                         <div>
@@ -174,11 +174,9 @@
         _ => null,
     };
 
-    private string? CommandError => RunErrorCode switch
+    private string? BranchError => RunErrorCode switch
     {
-        RunErrorCodes.ArgvEmpty => "The command needs at least one argument - enter one argument per line.",
-        RunErrorCodes.ArgvTooManyArguments => "A run accepts at most 100 arguments.",
-        RunErrorCodes.ArgvArgumentTooLong => "Each argument may be at most 32 KiB.",
+        RunErrorCodes.BranchInvalid => "That is not a valid branch name; leave it blank to build the default branch.",
         _ => null,
     };
 

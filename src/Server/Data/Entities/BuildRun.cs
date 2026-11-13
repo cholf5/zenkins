@@ -77,9 +77,19 @@ public sealed class BuildRun : ITenantOwned
     /// <summary>Comma-separated tags a claimant worker must cover (empty when unrestricted).</summary>
     public required string RequiredTags { get; set; } = string.Empty;
 
-    /// <summary>The command as a JSON array of argv strings. Never a shell line: there is no
-    /// quoting interpretation anywhere in the pipeline (PRD §8 constraint 6).</summary>
-    public required string CommandJson { get; set; }
+    /// <summary>
+    /// The project's pipeline file, relative to the repository root, snapshotted when the run was
+    /// triggered (card F-014). A snapshot, not a join: editing the project later must not change where
+    /// an existing run looked for its definition - and a historical run must stay readable after the
+    /// project is edited.
+    /// </summary>
+    public required string PipelinePath { get; set; }
+
+    /// <summary>
+    /// The branch this run builds (card F-014): the trigger form's branch, or the project's default
+    /// branch when the form left it blank. Also a snapshot - the project's default may move later.
+    /// </summary>
+    public required string GitBranch { get; set; }
 
     /// <summary>The worker the run is leased to (claim) or executing on (accepted). Null when
     /// queued and never claimed.</summary>
@@ -106,6 +116,19 @@ public sealed class BuildRun : ITenantOwned
     /// </para>
     /// </summary>
     public string? GitCommit { get; set; }
+
+    /// <summary>
+    /// The frozen, validated pipeline spec (card F-014): the JSON the worker produced from the
+    /// definition phase and the server stored verbatim.
+    /// <para>
+    /// <b>Written once, then authoritative.</b> The definition report is the only writer and the
+    /// compare-and-set in <c>ZenkinsDbContext.FreezePipelineDefinitionAsync</c> refuses a second write,
+    /// so what the run executed is exactly what is stored. The run page renders the step list from it,
+    /// which is why a run that is only just starting already shows its steps. Null until the worker
+    /// reported the definition (a queued run, or a run that failed before defining anything).
+    /// </para>
+    /// </summary>
+    public string? PipelineSpecJson { get; set; }
 
     /// <summary>Set when the run reaches a terminal state. Duration is derived on display.</summary>
     public DateTimeOffset? EndedAt { get; set; }

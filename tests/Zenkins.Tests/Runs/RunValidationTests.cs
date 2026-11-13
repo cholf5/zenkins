@@ -4,76 +4,63 @@ using Zenkins.Server.Runs;
 namespace Zenkins.Tests.Runs;
 
 /// <summary>
-/// The pure trigger-form rules (card F-006): one argument per line, no shell quoting
-/// interpretation, the card's argv limits, and tag parsing/covering.
+/// The pure trigger-form rules (cards F-006 + F-014): the branch a run builds (blank = the project's
+/// default, otherwise a valid git ref), and tag parsing/covering. The argv rules this file used to pin
+/// went away with the argv trigger itself.
 /// </summary>
 [Trait("Category", "Runs")]
 public sealed class RunValidationTests
 {
-    [Fact]
-    public void Command_lines_are_trimmed_and_blank_lines_are_dropped()
-    {
-        var argv = RunValidation.ParseArguments("  dotnet \r\n\r\n   --version  \n");
-
-        Assert.Equal(["dotnet", "--version"], argv);
-    }
-
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("   \n  \r\n ")]
-    public void An_empty_command_is_rejected(string? command)
+    [InlineData("   ")]
+    public void A_blank_branch_means_the_projects_default(string? branch)
     {
-        var error = RunValidation.ValidateArguments(command, out var argv);
-
-        Assert.Equal(RunErrorCodes.ArgvEmpty, error);
-        Assert.Empty(argv);
+        Assert.Null(RunValidation.ValidateBranch(branch, out var normalized));
+        Assert.Equal(string.Empty, normalized);
     }
 
     [Fact]
-    public void Exactly_100_arguments_are_accepted_and_101_are_rejected()
+    public void A_branch_is_trimmed_and_kept_verbatim()
     {
-        var ok = string.Join('\n', Enumerable.Repeat("arg", RunValidation.MaxArguments));
-        Assert.Null(RunValidation.ValidateArguments(ok, out var argv));
-        Assert.Equal(RunValidation.MaxArguments, argv.Length);
+        Assert.Null(RunValidation.ValidateBranch("  release/1.0  ", out var normalized));
+        Assert.Equal("release/1.0", normalized);
+    }
 
-        var tooMany = ok + "\narg";
+    [Theory]
+    [InlineData("-leading-dash")]
+    [InlineData("/leading-slash")]
+    [InlineData("has space")]
+    [InlineData("has..dots")]
+    [InlineData("nested//slash")]
+    [InlineData("trailing/")]
+    [InlineData("colon:inside")]
+    [InlineData("question?mark")]
+    public void An_invalid_branch_is_a_field_error(string branch)
+    {
+        Assert.Equal(RunErrorCodes.BranchInvalid, RunValidation.ValidateBranch(branch, out _));
+    }
+
+    [Fact]
+    public void A_branch_of_exactly_the_maximum_length_is_accepted_and_one_character_more_is_not()
+    {
+        // The run's snapshot goes into a character varying(200) column: the boundary the run form must
+        // enforce is the project's, so a value the project accepts is a value the run can store.
+        var boundary = new string('a', Zenkins.Server.Projects.ProjectValidation.MaxDefaultBranchLength);
+        Assert.Null(RunValidation.ValidateBranch(boundary, out var normalized));
+        Assert.Equal(boundary, normalized);
+
+        var overLong = boundary + "a";
+        Assert.Equal(RunErrorCodes.BranchInvalid, RunValidation.ValidateBranch(overLong, out _));
+    }
+
+    [Fact]
+    public void A_branch_with_a_control_character_is_a_field_error()
+    {
         Assert.Equal(
-            RunErrorCodes.ArgvTooManyArguments,
-            RunValidation.ValidateArguments(tooMany, out _));
-    }
-
-    [Fact]
-    public void An_argument_of_exactly_32_kib_is_accepted_and_one_more_character_is_rejected()
-    {
-        var boundary = new string('a', RunValidation.MaxArgumentLength);
-        Assert.Null(RunValidation.ValidateArguments(boundary, out var argv));
-        Assert.Single(argv);
-
-        var over = boundary + "a";
-        Assert.Equal(
-            RunErrorCodes.ArgvArgumentTooLong,
-            RunValidation.ValidateArguments(over, out _));
-    }
-
-    [Fact]
-    public void Quotes_are_literal_characters_of_an_argument()
-    {
-        // No shell interpretation anywhere: quotes survive into the argv verbatim.
-        var error = RunValidation.ValidateArguments("echo \"hello world\"\n--flag=a;b|c", out var argv);
-
-        Assert.Null(error);
-        Assert.Equal(["echo \"hello world\"", "--flag=a;b|c"], argv);
-    }
-
-    [Fact]
-    public void Command_json_round_trips_unicode_and_quotes()
-    {
-        var argv = new[] { "echo", "he said \"hi\"", "日本語", string.Empty };
-
-        var json = RunValidation.EncodeCommandJson(argv);
-
-        Assert.Equal(argv, RunValidation.DecodeCommandJson(json));
+            RunErrorCodes.BranchInvalid,
+            RunValidation.ValidateBranch("main\u0007next", out _));
     }
 
     [Fact]

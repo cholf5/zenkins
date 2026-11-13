@@ -1,24 +1,22 @@
 using System.Globalization;
-using System.Text.Json;
+using Zenkins.Server.Projects;
 
 namespace Zenkins.Server.Runs;
 
 /// <summary>
-/// Pure rules for the run trigger form (card F-006): the command arrives as a textarea with one
-/// argument per line and is stored as an argv JSON array - <b>no shell quoting interpretation</b>
-/// anywhere (PRD §8 constraint 6): quotes are literal characters of an argument, exactly as
-/// <see cref="System.Diagnostics.ProcessStartInfo.ArgumentList"/> would receive them from F-007.
+/// Pure rules for the run trigger form (cards F-006 + F-014): a manual run selects a <b>branch</b> (blank
+/// means the project's default branch), required tags and an optional timeout. There is no command line
+/// any more - a run executes the project's pipeline, so nothing here has a quoting rule to state (PRD §8
+/// constraint 6 holds by construction: a pipeline's argv arrays are data).
 /// <para>
-/// Limits: at most 100 arguments and at most 32 KiB per argument (decisions on the card). Blank
-/// lines are dropped after trimming - a trailing newline in a textarea must not become an empty
-/// argument. Required tags are comma-separated; existence among the organization's workers is
-/// checked by <see cref="RunService"/> (it needs the database), everything else is here.
+/// Limits: required tags are comma-separated and bounded (<see cref="MaxRequiredTagsLength"/>); the
+/// branch is validated with the same git ref rules the project's default branch uses, so the two can
+/// never disagree. Existence among the organization's workers is checked by <see cref="RunService"/> (it
+/// needs the database); everything else is here.
 /// </para>
 /// </summary>
 public static class RunValidation
 {
-    public const int MaxArguments = 100;
-    public const int MaxArgumentLength = 32 * 1024;
     public const int MaxRequiredTagsLength = 400;
     public const int MaxTagLength = 64;
 
@@ -52,48 +50,23 @@ public static class RunValidation
     }
 
     /// <summary>
-    /// Validates the command textarea and yields the argv. Returns an error code
-    /// (<see cref="RunErrorCodes.ArgvEmpty"/>, <see cref="RunErrorCodes.ArgvTooManyArguments"/>,
-    /// <see cref="RunErrorCodes.ArgvArgumentTooLong"/>) or <c>null</c> when the argv is usable.
+    /// Validates the optional branch the trigger form selected and yields it trimmed. Blank is legal
+    /// and means "the project's default branch" (<see cref="RunService"/> resolves it, because that is
+    /// a row read). A non-blank branch must be a valid git ref for the same reasons the project's
+    /// default branch must be (see <see cref="ProjectValidation.ValidateDefaultBranch"/>); the returned
+    /// code is <see cref="RunErrorCodes.BranchInvalid"/>.
     /// </summary>
-    public static string? ValidateArguments(string? commandText, out string[] argv)
+    public static string? ValidateBranch(string? branchText, out string normalized)
     {
-        argv = ParseArguments(commandText);
-
-        if (argv.Length == 0)
+        normalized = branchText?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
         {
-            return RunErrorCodes.ArgvEmpty;
+            return null;
         }
 
-        if (argv.Length > MaxArguments)
-        {
-            return RunErrorCodes.ArgvTooManyArguments;
-        }
-
-        if (argv.Any(argument => argument.Length > MaxArgumentLength))
-        {
-            return RunErrorCodes.ArgvArgumentTooLong;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// One argument per line, trimmed; blank lines are dropped. Splitting happens on CR and LF
-    /// before trimming, so CRLF textareas parse the same as LF ones.
-    /// </summary>
-    public static string[] ParseArguments(string? commandText)
-    {
-        if (string.IsNullOrEmpty(commandText))
-        {
-            return [];
-        }
-
-        return commandText
-            .Split(['\r', '\n'], StringSplitOptions.None)
-            .Select(line => line.Trim())
-            .Where(line => line.Length > 0)
-            .ToArray();
+        return ProjectValidation.ValidateDefaultBranch(normalized, out normalized) is null
+            ? null
+            : RunErrorCodes.BranchInvalid;
     }
 
     /// <summary>
@@ -189,26 +162,4 @@ public static class RunValidation
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return required.All(available.Contains);
     }
-
-    /// <summary>Decodes the stored argv JSON. Corrupt rows cannot happen through the product path.</summary>
-    public static string[] DecodeCommandJson(string commandJson)
-    {
-        if (string.IsNullOrEmpty(commandJson))
-        {
-            return [];
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<string[]>(commandJson) ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
-
-    /// <summary>Encodes the argv as the JSON array stored in <c>CommandJson</c>.</summary>
-    public static string EncodeCommandJson(IReadOnlyList<string> argv) =>
-        System.Text.Json.JsonSerializer.Serialize(argv);
 }

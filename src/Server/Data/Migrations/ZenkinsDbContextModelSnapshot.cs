@@ -156,10 +156,6 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<DateTimeOffset?>("CancelRequestedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("CommandJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -176,6 +172,11 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<string>("GitBranch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.Property<string>("GitCommit")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
@@ -185,6 +186,14 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("PipelinePath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("PipelineSpecJson")
+                        .HasColumnType("text");
 
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("uuid");

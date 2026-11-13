@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Zenkins.Shared.RunCancellation;
+using Zenkins.Worker.Git;
 
 namespace Zenkins.Worker;
 
@@ -37,12 +38,39 @@ public sealed record WorkerHeartbeatResponse(
     DateTimeOffset LastHeartbeatAt,
     WorkerCancelRequest[]? CancelRequestedRuns = null);
 
-/// <summary>A queued run handed over by the claim endpoint (F-006 contract; camelCase on the wire).</summary>
+/// <summary>
+/// A queued run handed over by the claim endpoint (F-006 contract, extended by F-014; camelCase on the
+/// wire). Everything the worker needs to execute a pipeline: where the repository is, which branch this
+/// run builds, and which pipeline file inside it declares the steps.
+/// </summary>
 public sealed record WorkerClaimResponse(
     Guid RunId,
     Guid ProjectId,
-    IReadOnlyList<string> Command,
+    string RepositoryUrl,
+    string Branch,
+    string PipelinePath,
     DateTimeOffset LeaseExpiresAt);
+
+/// <summary>
+/// The accepted report's answer (card F-014 extends the bodyless answer): the run's execution deadline,
+/// frozen by the server at accept time (F-009). The worker's definition phase runs against it, so the
+/// script's budget is the run's own wall clock rather than a worker-side guess.
+/// </summary>
+public sealed record WorkerAcceptResponse(string Status, DateTimeOffset? DeadlineAt = null);
+
+/// <summary>
+/// The definition report (card F-014): the commit the worker checked out, and - once the definition
+/// phase ran - the validated spec it froze on the run.
+/// <para>
+/// <b>Two sends, one endpoint.</b> The commit goes first (immediately after the clone) with a
+/// <see langword="null"/> spec, so a run whose definition turns out to be missing, broken or timed out
+/// still records what it checked out. The second send adds the spec, before the first step starts.
+/// </para>
+/// </summary>
+public sealed record WorkerDefinitionRequest(string? GitCommit, string? PipelineSpecJson);
+
+/// <summary>The definition report's answer.</summary>
+public sealed record WorkerDefinitionResponse(string Status);
 
 /// <summary>
 /// The accepted report payload (card F-013 extends the bodyless accepted report): the exact commit the
@@ -51,8 +79,13 @@ public sealed record WorkerClaimResponse(
 /// </summary>
 public sealed record WorkerAcceptRequest(string? GitCommit);
 
-/// <summary>The completed report payload: exit 0 → Success on the server, anything else → Failed.</summary>
-public sealed record WorkerCompleteRequest(int ExitCode);
+/// <summary>
+/// The completed report payload: exit 0 → Success on the server, anything else → Failed. F-014 adds
+/// <paramref name="FailureReason"/>: the closed vocabulary of <c>PipelineFailureReasons</c>, so a run
+/// that failed before any process ran (<c>pipeline-missing</c>) or at a step (<c>step-failed</c>, with
+/// the step's own exit code) is recorded honestly instead of as a bare exit code.
+/// </summary>
+public sealed record WorkerCompleteRequest(int? ExitCode, string? FailureReason = null);
 
 /// <summary>The canceled report payload (F-009): <c>canceled</c> or <c>timeout</c>; the server owns
 /// the mapping to the terminal state.</summary>
@@ -149,15 +182,22 @@ public sealed class WorkerApiClient(HttpClient httpClient)
     }
 
     /// <summary>
-    /// Reports a claimed run accepted (the single Queued → Running edge). Any 4xx is a definitive
-    /// per-run outcome (not-my-lease / expired / foreign id): it is surfaced as a
-    /// <see cref="WorkerApiRejectedException"/> and the run is given up, never retried.
+    /// Reports a claimed run accepted (the single Queued → Running edge). Only the run-report
+    /// definitive set (not-my-lease / gone / foreign id) is surfaced as a
+    /// <see cref="WorkerApiRejectedException"/> and the run is given up, never retried; 408/425/429 stay
+    /// transient like everywhere else (review m14).
+    /// <para>
+    /// F-014: the answer carries the run's frozen deadline, which bounds the definition phase. A server
+    /// that predates the field answers without it; the caller then falls back to the runtime's own
+    /// ceiling.
+    /// </para>
     /// </summary>
     /// <param name="gitCommit">
     /// The exact commit the worker checked out (card F-013), or <see langword="null"/> for a run with no
-    /// repository. The server writes it once and never rewrites it.
+    /// repository. The server writes it once and never rewrites it. F-014 reports the commit with the
+    /// definition report instead (the clone happens after the accept), so this stays optional.
     /// </param>
-    public async Task AcceptAsync(
+    public async Task<WorkerAcceptResponse> AcceptAsync(
         string workerToken,
         Guid runId,
         string? gitCommit,
@@ -175,18 +215,62 @@ public sealed class WorkerApiClient(HttpClient httpClient)
             inFlight.Response,
             "reporting the run accepted",
             inFlight.Timeout,
-            treatAllClientErrorsAsDefinitive: true);
+            isRunReport: true);
+        return await inFlight.Response.Content
+            .ReadFromJsonAsync(WorkerJsonContext.Default.WorkerAcceptResponse, inFlight.Timeout)
+            ?? new WorkerAcceptResponse("Running");
     }
 
     /// <summary>
-    /// Reports a finished run with its exit code (0 → Success, non-zero → Failed on the server).
-    /// Any 4xx is definitive per-run: a 409 invalid-transition after a lost response means the
-    /// first report already landed, so giving up is correct in every case.
+    /// Reports the run's definition (card F-014): the resolved commit, and the frozen validated spec
+    /// when <paramref name="pipelineSpecJson"/> is not null. Its definitive 4xx answers (the run is gone,
+    /// not ours any more, or the spec was refused) surface as <see cref="WorkerApiRejectedException"/> and
+    /// the run is given up; a throttling 429 or a request timeout is retried (review m14).
+    /// </summary>
+    public async Task ReportDefinitionAsync(
+        string workerToken,
+        Guid runId,
+        string? gitCommit,
+        string? pipelineSpecJson,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/runs/{runId}/definition",
+                workerToken,
+                new WorkerDefinitionRequest(gitCommit, pipelineSpecJson),
+                WorkerJsonContext.Default.WorkerDefinitionRequest),
+            cancellationToken);
+        await EnsureSuccessAsync(
+            inFlight.Response,
+            "reporting the run's pipeline definition",
+            inFlight.Timeout,
+            isRunReport: true);
+    }
+
+    /// <summary>
+    /// Fetches the run's Git credential material through F-013's client (one run-scoped request,
+    /// answered by the server for the worker currently executing the run). <c>null</c> means "no
+    /// material": the clone proceeds anonymously.
+    /// </summary>
+    public Task<GitCredentialMaterial?> FetchGitCredentialAsync(
+        string workerToken,
+        Guid runId,
+        CancellationToken cancellationToken) =>
+        new GitCredentialClient(httpClient).FetchAsync(workerToken, runId, cancellationToken);
+
+    /// <summary>
+    /// Reports a finished run with its exit code (0 → Success, non-zero → Failed on the server) and,
+    /// when nothing produced one, the closed <paramref name="failureReason"/>. A 400/404/409/410 is
+    /// definitive per-run: a 409 invalid-transition after a lost response means the first report already
+    /// landed, so giving up is correct; 408/425/429 are retried like any other transient answer (m14).
     /// </summary>
     public async Task CompleteAsync(
         string workerToken,
         Guid runId,
-        int exitCode,
+        int? exitCode,
+        string? failureReason,
         CancellationToken cancellationToken)
     {
         using var inFlight = await SendAsync(
@@ -194,23 +278,23 @@ public sealed class WorkerApiClient(HttpClient httpClient)
                 HttpMethod.Post,
                 $"api/workers/runs/{runId}/completed",
                 workerToken,
-                new WorkerCompleteRequest(exitCode),
+                new WorkerCompleteRequest(exitCode, failureReason),
                 WorkerJsonContext.Default.WorkerCompleteRequest),
             cancellationToken);
         await EnsureSuccessAsync(
             inFlight.Response,
             "reporting the run completed",
             inFlight.Timeout,
-            treatAllClientErrorsAsDefinitive: true);
+            isRunReport: true);
     }
 
     /// <summary>
     /// Reports that a server-requested cancellation killed the run (F-009). The outcome selects
     /// the server-side mapping: <c>canceled</c> → Canceled with the recorded cancel reason,
-    /// <c>timeout</c> → Failed with reason <c>timeout</c> - one kill, one endpoint. Any 4xx is a
-    /// definitive per-run outcome (a 409 means the run already reached a terminal state, e.g. a
-    /// Lost transition won the race): it is surfaced as a
-    /// <see cref="WorkerApiRejectedException"/> and the run is given up, never retried.
+    /// <c>timeout</c> → Failed with reason <c>timeout</c> - one kill, one endpoint. Its definitive 4xx
+    /// answers (a 409 means the run already reached a terminal state, e.g. a Lost transition won the
+    /// race) are surfaced as a <see cref="WorkerApiRejectedException"/> and the run is given up;
+    /// 408/425/429 are retried (review m14).
     /// </summary>
     public async Task ReportCanceledAsync(
         string workerToken,
@@ -230,7 +314,7 @@ public sealed class WorkerApiClient(HttpClient httpClient)
             inFlight.Response,
             "reporting the run canceled",
             inFlight.Timeout,
-            treatAllClientErrorsAsDefinitive: true);
+            isRunReport: true);
     }
 
     private static HttpRequestMessage CreateRequest(HttpMethod method, string path, string token)
@@ -300,7 +384,7 @@ public sealed class WorkerApiClient(HttpClient httpClient)
         HttpResponseMessage response,
         string what,
         CancellationToken cancellationToken,
-        bool treatAllClientErrorsAsDefinitive = false)
+        bool isRunReport = false)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -324,17 +408,20 @@ public sealed class WorkerApiClient(HttpClient httpClient)
                 statusCode);
         }
 
-        // A (second review fix): 408/409/425/429 are transient answers, not definitive ones.
-        // A 409 on register is exactly what the loser of a same-name first-start race receives
-        // (WorkerEndpoints maps name-duplicate to 409); the winner's row is already committed,
-        // so the loser's retry succeeds. These stay on the retryable path below - except on the
-        // run reporting calls (accepted/completed pass the flag), where every 4xx is a definitive
-        // per-run outcome. The flag must genuinely widen the definitive set: without it a 409
-        // after a lost completed response is retried into a 409 forever (and a throttling 429
-        // likewise), starving a concurrency-1 worker until shutdown (F-007 review fix; pinned by
-        // the stub-server tests in WorkerApiDefinitiveReportingTests).
+        // A (second review fix): 408/409/425/429 are transient answers for the polling calls. A 409 on
+        // register is exactly what the loser of a same-name first-start race receives (WorkerEndpoints
+        // maps name-duplicate to 409); the winner's row is already committed, so the loser's retry
+        // succeeds.
+        //
+        // Run reporting is the one place the classification changes, and it changes narrowly: a
+        // 400/404/409/410 answers "this report will never be accepted for this run" (the payload is
+        // wrong, the run is gone, another worker owns it, or it is already terminal), so the run is
+        // given up. Everything else in the 4xx range stays transient even there - 408 (request
+        // timeout), 425 (too early) and 429 (throttling) are answers a retry can fix, and treating a
+        // 429 as definitive would starve a concurrency-1 worker over a rate limit (F-014 review m14:
+        // the earlier flag widened the set to *every* 4xx, contradicting IsTransientStatus below).
         if (statusCode is >= 400 and < 500
-            && (!IsTransientStatus(statusCode) || treatAllClientErrorsAsDefinitive))
+            && (isRunReport ? IsDefinitiveRunReportStatus(statusCode) : !IsTransientStatus(statusCode)))
         {
             throw new WorkerApiRejectedException(
                 $"the server rejected the request with {statusCode} while {what} "
@@ -356,6 +443,14 @@ public sealed class WorkerApiClient(HttpClient httpClient)
 
     /// <summary>The 4xx answers whose retry can succeed (request timeout, race loser, throttling).</summary>
     private static bool IsTransientStatus(int statusCode) => statusCode is 408 or 409 or 425 or 429;
+
+    /// <summary>
+    /// The 4xx answers that end a run-reporting call for good: the payload is invalid (400), the run
+    /// does not exist for this tenant (404), it is not this worker's any more or already terminal
+    /// (409/410). Every other 4xx - 408, 425, 429 in particular - is retried with backoff, exactly like
+    /// the same status on the polling calls.
+    /// </summary>
+    private static bool IsDefinitiveRunReportStatus(int statusCode) => statusCode is 400 or 404 or 409 or 410;
 }
 
 /// <summary>Source-generated JSON (trim-safe; the Worker must stay small and AOT-friendly).</summary>
@@ -366,6 +461,9 @@ public sealed class WorkerApiClient(HttpClient httpClient)
 [JsonSerializable(typeof(WorkerHeartbeatResponse))]
 [JsonSerializable(typeof(WorkerClaimResponse))]
 [JsonSerializable(typeof(WorkerAcceptRequest))]
+[JsonSerializable(typeof(WorkerAcceptResponse))]
+[JsonSerializable(typeof(WorkerDefinitionRequest))]
+[JsonSerializable(typeof(WorkerDefinitionResponse))]
 [JsonSerializable(typeof(WorkerCompleteRequest))]
 [JsonSerializable(typeof(WorkerCanceledRequest))]
 [JsonSerializable(typeof(WorkerCancelRequest))]

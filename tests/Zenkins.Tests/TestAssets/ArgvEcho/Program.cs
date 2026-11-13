@@ -15,6 +15,8 @@ namespace Zenkins.Tests.TestAssets.ArgvEcho;
 /// The slow-output probe: lets a test observe the stream file growing before the process exits.</item>
 /// <item><c>probe &lt;file&gt; &lt;text&gt;</c> — writes text into the file (cwd-relative) and
 /// prints <c>probe-written</c>. The working-directory probe for per-run isolation.</item>
+/// <item><c>append &lt;file&gt; &lt;text&gt;</c> — appends a line to the file (cwd-relative) and
+/// prints <c>appended</c>. The F-014 step-order marker: one line per executed step.</item>
 /// <item><c>write-slow &lt;ms&gt; &lt;text&gt;</c> — prints <c>stream-first</c> to stdout, sleeps
 /// ms, prints text to stderr, sleeps ms again, prints <c>stream-second</c> to stdout, exits 0.
 /// The streaming-before-exit probe (stdout and stderr, ordered per stream).</item>
@@ -72,6 +74,17 @@ internal static class Program
 
                 File.WriteAllText(args[1], args[2] + Environment.NewLine);
                 Console.Out.WriteLine("probe-written");
+                return 0;
+
+            case "append":
+                // F-014: a marker file that records the order steps ran in (one line per step).
+                if (args.Length != 3)
+                {
+                    return Usage("append <file> <text>");
+                }
+
+                File.AppendAllText(args[1], args[2] + Environment.NewLine);
+                Console.Out.WriteLine("appended");
                 return 0;
 
             case "write-slow":

@@ -2,20 +2,20 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Zenkins.Server.Workers;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.RunCancellation;
 
 namespace Zenkins.Server.Runs;
 
 /// <summary>
-/// HTTP endpoints for card F-006: the trigger form on the project page (F-003's form shape) and
-/// the token-authenticated worker run API under <c>/api/workers/*</c>.
+/// HTTP endpoints for cards F-006 and F-014: the trigger form on the project page (F-003's form shape)
+/// and the token-authenticated worker run API under <c>/api/workers/*</c>.
 /// <para>
 /// <b>Trigger form.</b> Form-bound (so <c>UseAntiforgery</c> validates the token), authenticated
-/// (anonymous POSTs are redirected to sign-in), Owner <em>or</em> Member in the service. Success
-/// is a PRG redirect to the new run's detail page; validation failures redirect back to the
-/// project page with <c>?runError=&lt;code&gt;</c>. The submitted command is deliberately
-/// <b>not</b> echoed into the redirect URL - an argument may be 32 KiB, which cannot ride a URL
-/// (F-003 echoes its small fields; here the field error names the problem instead).
+/// (anonymous POSTs are redirected to sign-in), Owner <em>or</em> Member in the service. F-014 replaced
+/// the argv textarea with a branch: a run executes the project's pipeline. Success is a PRG redirect to
+/// the new run's detail page; validation failures redirect back to the project page with
+/// <c>?runError=&lt;code&gt;</c>.
 /// </para>
 /// <para>
 /// <b>Worker run API.</b> Deliberately NOT <c>RequireAuthorization</c> (same as register and
@@ -45,6 +45,7 @@ public static class RunEndpoints
         var api = endpoints.MapGroup("/api/workers");
         api.MapPost("/claim", ClaimAsync);
         api.MapPost("/runs/{runId:guid}/accepted", AcceptAsync);
+        api.MapPost("/runs/{runId:guid}/definition", ReportDefinitionAsync);
         api.MapPost("/runs/{runId:guid}/completed", CompleteAsync);
         api.MapPost("/runs/{runId:guid}/canceled", ReportCanceledAsync);
 
@@ -128,7 +129,9 @@ public static class RunEndpoints
             _ => Results.Json(new RunClaimResponse(
                 result.RunId!.Value,
                 result.ProjectId!.Value,
-                result.Command!,
+                result.RepositoryUrl!,
+                result.Branch!,
+                result.PipelinePath!,
                 result.LeaseExpiresAt!.Value)),
         };
     }
@@ -156,6 +159,19 @@ public static class RunEndpoints
             WorkerEndpoints.BearerToken(httpContext),
             runId,
             request.ExitCode,
+            request.FailureReason,
+            httpContext.RequestAborted));
+
+    private static async Task<IResult> ReportDefinitionAsync(
+        Guid runId,
+        [FromBody] RunDefinitionRequest request,
+        HttpContext httpContext,
+        RunService runs) =>
+        MapReport(await runs.ReportDefinitionAsync(
+            WorkerEndpoints.BearerToken(httpContext),
+            runId,
+            request.GitCommit,
+            request.PipelineSpecJson,
             httpContext.RequestAborted));
 
     private static async Task<IResult> ReportCanceledAsync(
@@ -204,7 +220,8 @@ public static class RunEndpoints
 
     private static IResult MapReport(RunReportResult result) => result.Status switch
     {
-        RunOperationStatus.Success => Results.Json(new RunReportResponse(result.RunStatus!)),
+        RunOperationStatus.Success => Results.Json(
+            new RunReportResponse(result.RunStatus!, result.DeadlineAt)),
         RunOperationStatus.InvalidToken => Results.Unauthorized(),
         RunOperationStatus.NotFound => Results.NotFound(),
         RunOperationStatus.InvalidInput =>
@@ -217,8 +234,11 @@ public static class RunEndpoints
     /// <summary>The trigger form. No project id field: the route is the only target selector.</summary>
     public sealed class StartRunForm
     {
-        /// <summary>The command textarea: one argument per line.</summary>
-        public string? Command { get; set; }
+        /// <summary>
+        /// The branch to build (card F-014 replaced the argv textarea). Blank means the project's
+        /// default branch - the service resolves it, so the form needs no project read of its own.
+        /// </summary>
+        public string? Branch { get; set; }
 
         /// <summary>Optional comma-separated tags a claimant worker must cover.</summary>
         public string? RequiredTags { get; set; }
@@ -226,7 +246,7 @@ public static class RunEndpoints
         /// <summary>Optional per-run timeout override in minutes (blank = the server default).</summary>
         public string? TimeoutMinutes { get; set; }
 
-        public RunTriggerInput ToInput() => new(Command, RequiredTags, TimeoutMinutes);
+        public RunTriggerInput ToInput() => new(Branch, RequiredTags, TimeoutMinutes);
     }
 
     /// <summary>Empty form binding: the parameter makes the cancel POST form-bound (antiforgery).</summary>
@@ -246,7 +266,22 @@ public static class RunEndpoints
 
     public sealed class CompleteRunRequest
     {
+        /// <summary>The failing step's exit code (or 0). Null when nothing produced one.</summary>
         public int? ExitCode { get; set; }
+
+        /// <summary>A <see cref="PipelineFailureReasons"/> value; the server refuses anything else.</summary>
+        public string? FailureReason { get; set; }
+    }
+
+    /// <summary>
+    /// The definition report (card F-014): the commit the worker resolved and the frozen, validated
+    /// spec. The spec is the worker's own JSON string, stored verbatim once the envelope checks pass.
+    /// </summary>
+    public sealed class RunDefinitionRequest
+    {
+        public string? GitCommit { get; set; }
+
+        public string? PipelineSpecJson { get; set; }
     }
 
     /// <summary>The canceled report: <c>canceled</c> (user cancel) or <c>timeout</c> (deadline).
@@ -259,8 +294,11 @@ public static class RunEndpoints
     public sealed record RunClaimResponse(
         Guid RunId,
         Guid ProjectId,
-        IReadOnlyList<string> Command,
+        string RepositoryUrl,
+        string Branch,
+        string PipelinePath,
         DateTimeOffset LeaseExpiresAt);
 
-    public sealed record RunReportResponse(string Status);
+    /// <param name="DeadlineAt">F-014: the accepted answer carries the run's frozen deadline.</param>
+    public sealed record RunReportResponse(string Status, DateTimeOffset? DeadlineAt = null);
 }

@@ -6,6 +6,7 @@ using Microsoft.Data.Sqlite;
 using Xunit;
 using Zenkins.Tests.Auth;
 using Zenkins.Tests.Organizations;
+using Zenkins.Tests.Pipelines;
 using Zenkins.Tests.Workers;
 
 namespace Zenkins.Tests.WorkerRuntime;
@@ -54,7 +55,15 @@ public sealed class WorkerRunProcessE2ETests
         {
             using var owner = await SignInOwnerAsync(serverUrl, cancellationToken);
             var registrationToken = await MintRegistrationTokenAsync(owner, cancellationToken);
+
+            // F-014: a run executes the project's pipeline from its Git repository, so the fixture is a
+            // real repository (a clone the worker really performs) and the project row is pointed at it.
+            using var repository = PipelineRepository.Create(
+                PipelineTestData.Pipeline(
+                    "e2e",
+                    PipelineTestData.Step("Echo", "echo-each", "2000", "first", "second", "third")));
             var projectId = await CreateProjectAsync(owner, $"e2e-run-{Guid.NewGuid():N}".ToLowerInvariant());
+            await SetProjectRepositoryAsync(databasePath, projectId, repository.FileUrl, cancellationToken);
 
             using var worker = StartWorker(
                 dotnet, workerDll, serverUrl, registrationToken, workerName, workerDataDir, workRoot);
@@ -65,11 +74,7 @@ public sealed class WorkerRunProcessE2ETests
                 cancellationToken);
 
             // ----- Run 1: slow echoed output, then exit 0 → Success. -----
-            var run1 = await TriggerRunAsync(
-                owner,
-                projectId,
-                $"dotnet\n{argvEchoDll}\necho-each\n2000\nfirst\nsecond\nthird",
-                cancellationToken);
+            var run1 = await TriggerRunAsync(owner, projectId, cancellationToken);
             var work1 = Path.Combine(workRoot, run1.ToString("D"));
 
             await WaitForRunStatusAsync(databasePath, run1, "Running", RunTerminalTimeout, cancellationToken);
@@ -92,25 +97,25 @@ public sealed class WorkerRunProcessE2ETests
 
             // F-008: the three lines were streamed upstream over SignalR and persisted
             // incrementally - the database holds them in Seq order by the time the run is terminal.
-            var logRows = await WaitForLogRowsAsync(
-                databasePath,
-                run1,
-                expectedCount: 3,
-                cancellationToken);
-            Assert.Equal(
-                new[] { (1L, "StdOut", "first"), (2L, "StdOut", "second"), (3L, "StdOut", "third") },
-                logRows.Select(row => (row.Seq, row.Stream, row.Message)).ToArray());
+            // F-014 added the run's own step lines, so the assertion is on the echoed lines' order
+            // (they must appear as the child produced them), not on the row count.
+            var logRows = await WaitForLogRowsAsync(databasePath, run1, cancellationToken);
+            var echoed = logRows
+                .Where(row => row.Message is "first" or "second" or "third")
+                .Select(row => row.Message)
+                .ToArray();
+            Assert.Equal(new[] { "first", "second", "third" }, echoed);
+            Assert.Contains(logRows, row => row.Message.StartsWith("zenkins: step 1/1", StringComparison.Ordinal));
 
             // The trio exists per run; temp is cleaned (ZENKINS_CLEANUP_TEMP default true), the
             // repository and artifacts directories stay.
             AssertWorkDirectoryTrio(work1, tempCleaned: true);
 
             // ----- Run 2: exit code 3 → Failed, reported verbatim. -----
-            var run2 = await TriggerRunAsync(
-                owner,
-                projectId,
-                $"dotnet\n{argvEchoDll}\nexit\n3",
-                cancellationToken);
+            // The branch moves: the next run must pick the new definition up from a fresh clone.
+            repository.CommitPipeline(
+                PipelineTestData.Pipeline("e2e-fail", PipelineTestData.Step("Build", "exit", "3")));
+            var run2 = await TriggerRunAsync(owner, projectId, cancellationToken);
             var work2 = Path.Combine(workRoot, run2.ToString("D"));
 
             var (status2, exitCode2) = await WaitUntilTerminalAsync(databasePath, run2, cancellationToken);
@@ -205,30 +210,31 @@ public sealed class WorkerRunProcessE2ETests
     }
 
     /// <summary>
-    /// Polls the server's SQLite file for the run's persisted log rows (F-008) until the expected
-    /// count is present; the ingest flushes within 250 ms, so a short wait covers the tail.
+    /// Polls the server's SQLite file until the run is terminal and its log rows contain the three
+    /// echoed lines, then returns every row in Seq order. F-014 added the run's own step lines, so the
+    /// count is no longer fixed - the caller asserts on the lines it cares about.
     /// </summary>
     private static async Task<IReadOnlyList<(long Seq, string Stream, string Message)>> WaitForLogRowsAsync(
         string databasePath,
         Guid runId,
-        int expectedCount,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        IReadOnlyList<(long Seq, string Stream, string Message)> last = [];
         while (DateTime.UtcNow < deadline)
         {
-            var rows = await ReadLogRowsAsync(databasePath, runId, cancellationToken);
-            if (rows.Count >= expectedCount)
+            last = await ReadLogRowsAsync(databasePath, runId, cancellationToken);
+            if (last.Count >= 3
+                && last.Count(row => row.Message is "first" or "second" or "third") == 3)
             {
-                return rows;
+                return last;
             }
 
             await Task.Delay(250, cancellationToken);
         }
 
-        var last = await ReadLogRowsAsync(databasePath, runId, cancellationToken);
         throw new TimeoutException(
-            $"Run {runId} never persisted {expectedCount} log rows (last seen: {last.Count}).");
+            $"Run {runId} never persisted the echoed log rows (last seen: {last.Count}).");
     }
 
     private static async Task<IReadOnlyList<(long Seq, string Stream, string Message)>> ReadLogRowsAsync(
@@ -373,10 +379,25 @@ public sealed class WorkerRunProcessE2ETests
         return Guid.Parse(location["/projects/".Length..].Split('?')[0]);
     }
 
+    /// <summary>Points an existing project row at the local repository fixture (F-014).</summary>
+    private static async Task SetProjectRepositoryAsync(
+        string databasePath,
+        Guid projectId,
+        string repositoryUrl,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite");
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE \"Projects\" SET \"RepositoryUrl\" = $url WHERE \"Id\" = $id";
+        command.Parameters.AddWithValue("$url", repositoryUrl);
+        command.Parameters.AddWithValue("$id", projectId.ToString().ToUpperInvariant());
+        Assert.Equal(1, await command.ExecuteNonQueryAsync(cancellationToken));
+    }
+
     private static async Task<Guid> TriggerRunAsync(
         HttpClient owner,
         Guid projectId,
-        string command,
         CancellationToken cancellationToken)
     {
         _ = cancellationToken;
@@ -386,7 +407,7 @@ public sealed class WorkerRunProcessE2ETests
             $"/projects/{projectId}/runs/start",
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["Command"] = command,
+                ["Branch"] = string.Empty,
                 ["RequiredTags"] = string.Empty,
             });
         Assert.True((int)response.StatusCode is 302 or 303,

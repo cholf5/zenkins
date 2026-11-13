@@ -1,24 +1,33 @@
 using System.Net.Sockets;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.RunCancellation;
+using Zenkins.Worker.Pipelines;
 
 namespace Zenkins.Worker;
 
 /// <summary>
-/// One claim→execute→report loop of the worker (card F-007, consuming F-006's endpoints):
+/// One claim→execute→report loop of the worker (card F-007, consuming F-006's endpoints; card F-014
+/// replaces the argv execution with a pipeline run):
 /// claim (<c>POST /api/workers/claim</c>, 204 → wait <see cref="WorkerConfiguration.ClaimPollInterval"/>
 /// and poll again; transport failures retry with the existing capped-exponential backoff) → report
-/// <c>accepted</c> (clears the lease) → prepare the run's work directory → execute the run's argv as
-/// a native process with <c>work/{run-id}/repository</c> as its cwd → stream stdout/stderr line by
-/// line into per-stream log files under the run's <c>temp/</c> (F-007's local files, kept through
-/// the transition as a debugging aid) <b>and</b> upstream over SignalR (F-008): every line is
-/// emitted into the run's bounded <see cref="RunLogBuffer"/> with a per-run monotonic Seq and a
-/// drain task ships flush-sized batches to <c>/hubs/worker-logs</c> while the process runs →
-/// delete <c>temp/</c> when configured (keeping <c>repository/</c> and <c>artifacts/</c>) →
-/// report <c>completed {'{'}exitCode{'}'}</c> (0 → Success, non-zero → Failed on the server).
-/// Cleanup precedes the report, and the drain precedes it too: when the server records the
-/// terminal state, the run's temp is already gone and its captured lines are on their way to the
-/// database (the drain retries across reconnects; the (RunId, Seq) key absorbs any overlap).
+/// <c>accepted</c> (clears the lease, answers the run's frozen deadline) → prepare the run's work
+/// directory → clone the project's repository at the run's branch (F-013) → run the project's
+/// <c>pipeline.lua</c> definition once under F-011's sandbox, validate it and report the resolved
+/// commit and the frozen spec → execute the frozen steps in order with the existing
+/// <see cref="ProcessRunner"/> - the first non-zero exit stops the run.
+/// <para>
+/// Every line a run produces (the pipeline's own step lines, the definition's <c>log()</c>, a step's
+/// stdout/stderr) lands in the run's <c>temp/</c> logs (F-007's local files, kept through the
+/// transition as a debugging aid) <b>and</b> upstream over SignalR (F-008): every line is emitted into
+/// the run's bounded <see cref="RunLogBuffer"/> with a per-run monotonic Seq and a drain task ships
+/// flush-sized batches to <c>/hubs/worker-logs</c> while the run executes → delete <c>temp/</c> when
+/// configured (keeping <c>repository/</c> and <c>artifacts/</c>) → report
+/// <c>completed {'{'}exitCode, failureReason{'}'}</c> (0 → Success, non-zero → Failed, a closed reason
+/// for a run that failed before any process ran). Cleanup precedes the report, and the drain precedes
+/// it too: when the server records the terminal state, the run's temp is already gone and its captured
+/// lines are on their way to the database.
+/// </para>
 /// <para>
 /// <b>Concurrency.</b> The worker runs exactly <see cref="WorkerConfiguration.MaxConcurrency"/>
 /// instances of this loop, so it never executes more runs than it registered for; each loop's run
@@ -180,14 +189,10 @@ public sealed class WorkerRunLoop(
 
         // 1. Accept first: it is the lease-clearing Queued → Running edge. A definitive 4xx (the
         //    lease expired, the run is not ours, or the run was canceled while leased - F-009's
-        //    race-window semantic) gives the run up before anything is executed.
-        if (!await ReportAsync(
-                runId,
-                "accepted",
-                // F-013: the accepted report can carry the commit the run cloned. The clone itself is
-                // wired here by F-014; this card ships the report contract and the git layer.
-                (token, cancellationToken) => api.AcceptAsync(token, runId, gitCommit: null, cancellationToken),
-                shutdown))
+        //    race-window semantic) gives the run up before anything is executed. F-014: the answer
+        //    carries the run's frozen deadline, which bounds the definition phase.
+        var deadline = await AcceptAsync(runId, shutdown);
+        if (deadline is null)
         {
             return;
         }
@@ -204,7 +209,7 @@ public sealed class WorkerRunLoop(
             await errorLog.WriteLineAsync(
                 $"Zenkins Worker: run {runId} cannot prepare its work directory ({failure.Message}). "
                 + $"Reporting exit code {InfrastructureFailureExitCode}.");
-            await ReportCompletionAsync(runId, InfrastructureFailureExitCode, shutdown);
+            await ReportCompletionAsync(runId, InfrastructureFailureExitCode, failureReason: null, shutdown);
             return;
         }
 
@@ -231,7 +236,13 @@ public sealed class WorkerRunLoop(
         using var cancelSubscription = cancelSignal?.Subscribe(OnCancelRequested);
         try
         {
-            var result = await ExecuteProcessAsync(claim, work, shutdown, cancelScope.Token, cancelRequested.Task);
+            var result = await ExecutePipelineAsync(
+                claim,
+                work,
+                deadline.Value,
+                shutdown,
+                cancelScope.Token,
+                cancelRequested.Task);
 
             if (result.CancelOutcome is { } outcome)
             {
@@ -259,7 +270,7 @@ public sealed class WorkerRunLoop(
                 return;
             }
 
-            if (result.ExitCode is null)
+            if (result.ExitCode is null && result.FailureReason is null)
             {
                 // Shutdown arrived mid-run; the process tree was killed. No completed report: F-010's
                 // offline detection owns this run's Lost transition.
@@ -281,8 +292,9 @@ public sealed class WorkerRunLoop(
                 }
             }
 
-            // 5. Report the exit code (0 → Success, non-zero → Failed, server-side mapping).
-            await ReportCompletionAsync(runId, result.ExitCode.Value, shutdown);
+            // 5. Report the outcome: exit 0 → Success, a non-zero step exit → Failed with that code,
+            //    and a run that failed before any process ran → Failed with its closed failure reason.
+            await ReportCompletionAsync(runId, result.ExitCode, result.FailureReason, shutdown);
         }
         finally
         {
@@ -290,31 +302,37 @@ public sealed class WorkerRunLoop(
         }
     }
 
-    /// <summary>How one execution ended: a real exit code, a server-requested cancellation (with
-    /// the outcome to report), or a shutdown kill (both null - no report, F-010's business).</summary>
-    private sealed record RunExecutionResult(int? ExitCode, string? CancelOutcome, string? CancelReason = null);
+    /// <summary>How one execution ended: a real exit code, a closed failure reason, a server-requested
+    /// cancellation (with the outcome to report), or nothing at all (a shutdown kill - F-010's
+    /// business).</summary>
+    private sealed record RunExecutionResult(
+        int? ExitCode,
+        string? FailureReason,
+        string? CancelOutcome = null,
+        string? CancelReason = null);
 
     /// <summary>
-    /// Starts the run's process and waits for its exit, streaming stdout/stderr lines into
-    /// <c>temp/stdout.log</c> and <c>temp/stderr.log</c> as they are produced. Returns the exit
-    /// code, the cancel outcome when the server requested the kill, or both null when shutdown
-    /// killed the run.
+    /// Executes one claimed run as a pipeline (card F-014): F-013's clone at the run's branch, the
+    /// definition phase under F-011's sandbox, the definition report (resolved commit + frozen spec),
+    /// then the frozen steps in order with <see cref="ProcessRunner"/> - the first non-zero exit stops
+    /// the run. Every line, the pipeline's own and the steps', flows into
+    /// <c>temp/stdout.log</c>/<c>temp/stderr.log</c> (F-007's debugging aid) and upstream through
+    /// <see cref="RunLogBuffer"/> (F-008).
+    /// <para>
+    /// The kill token is the linked shutdown + server-cancel pair, so a cancellation during the
+    /// definition phase abandons the script at its next yield point and one during a step kills that
+    /// step's process tree - both end through F-009's canceled report, exactly like the pre-pipeline
+    /// path did.
+    /// </para>
     /// </summary>
-    private async Task<RunExecutionResult> ExecuteProcessAsync(
+    private async Task<RunExecutionResult> ExecutePipelineAsync(
         WorkerClaimResponse claim,
         RunWorkDirectory work,
+        DateTimeOffset deadline,
         CancellationToken shutdown,
         CancellationToken cancelKill,
         Task<RunCancelRequest> cancelRequested)
     {
-        if (claim.Command.Count == 0)
-        {
-            await errorLog.WriteLineAsync(
-                $"Zenkins Worker: run {claim.RunId} was claimed with an empty command. "
-                + $"Reporting exit code {InfrastructureFailureExitCode}.");
-            return new RunExecutionResult(InfrastructureFailureExitCode, null);
-        }
-
         // Fresh empty logs per execution (a retried claim of the same run must not append stale
         // output); AutoFlush so an observer sees lines as they are produced.
         Directory.CreateDirectory(work.TempPath);
@@ -332,115 +350,213 @@ public sealed class WorkerRunLoop(
         var pump = logBuffer.DrainAsync(logStreams, shutdown);
 
         // The kill token: shutdown OR the server's cancel request for this run. ProcessRunner
-        // kills the whole tree on cancellation either way (F-007's kill path, reused verbatim).
+        // kills the whole tree on cancellation, and the Lua driver abandons the script.
         using var killTokens = CancellationTokenSource.CreateLinkedTokenSource(shutdown, cancelKill);
 
-        using var runner = new ProcessRunner(
-            new ProcessRunnerOptions
+        void Emit(string line)
+        {
+            stdOutWriter.WriteLine(line);
+            logBuffer.Emit(LogStream.StdOut, line);
+        }
+
+        void OnOutput(ProcessOutputLine line)
+        {
+            if (line.Stream == ProcessOutputStream.StdOut)
             {
-                FileName = claim.Command[0],
-                Arguments = [.. claim.Command.Skip(1)],
-                WorkingDirectory = work.RepositoryPath,
-                EnvironmentVariables = new Dictionary<string, string?>
+                stdOutWriter.WriteLine(line.Line);
+                logBuffer.Emit(LogStream.StdOut, line.Line);
+            }
+            else
+            {
+                stdErrorWriter.WriteLine(line.Line);
+                logBuffer.Emit(LogStream.StdErr, line.Line);
+            }
+        }
+
+        // The pipeline layer's own dependencies: the run's log sink (the prelude's print/log), F-013's
+        // git layer (credential per run, clone into repository/) and the definition report.
+        var definitions = new PipelineDefinitionRunner(
+            PipelineDefinitionRunner.CreateRuntime(PipelineRunner.CreateLogSink(Emit)));
+        var runner = new PipelineRunner(
+            new PipelineRunOptions
+            {
+                Work = work,
+                RepositoryUrl = claim.RepositoryUrl,
+                Branch = claim.Branch,
+                PipelinePath = claim.PipelinePath,
+                Deadline = deadline,
+                GitDepth = configuration.GitDepth,
+                KnownHostsPath = configuration.GitKnownHostsPath,
+                GitOperationTimeout = configuration.GitOperationTimeout
+                    ?? WorkerConfiguration.DefaultGitOperationTimeout,
+                StepEnvironment = new Dictionary<string, string?>
                 {
                     ["ZENKINS_RUN_ID"] = claim.RunId.ToString(),
                     ["ZENKINS_WORKER_NAME"] = configuration.WorkerName,
                     ["ZENKINS_PROJECT_ID"] = claim.ProjectId.ToString(),
                 },
+                Log = Emit,
+                OnProcessOutput = OnOutput,
             },
-            line =>
-            {
-                var stream = line.Stream == ProcessOutputStream.StdOut ? LogStream.StdOut : LogStream.StdErr;
-                if (line.Stream == ProcessOutputStream.StdOut)
-                {
-                    stdOutWriter.WriteLine(line.Line);
-                }
-                else
-                {
-                    stdErrorWriter.WriteLine(line.Line);
-                }
+            definitions,
+            cancellationToken => api.FetchGitCredentialAsync(workerToken, claim.RunId, cancellationToken),
+            (commit, specJson, cancellationToken) =>
+                ReportDefinitionAsync(claim.RunId, commit, specJson, shutdown));
 
-                logBuffer.Emit(stream, line.Line);
-            });
-
+        PipelineRunOutcome outcome;
         try
         {
-            var exitCode = await runner.RunAsync(killTokens.Token);
-            return new RunExecutionResult(await FinishDrainAsync(logBuffer, pump, exitCode), null);
+            outcome = await runner.RunAsync(killTokens.Token);
         }
-        catch (OperationCanceledException) when (cancelKill.IsCancellationRequested && !shutdown.IsCancellationRequested)
+        catch (Exception failure)
         {
-            // The server asked for this run's cancellation (user cancel or deadline): the tree is
-            // killed and the pipes drained (the F-007 cancellation path). Drain the log buffer so
-            // the partial output is on its way upstream, then report through the canceled endpoint
-            // - the server maps the outcome (timeout → Failed, otherwise Canceled).
-            var request = await cancelRequested;
-            await log.WriteLineAsync(
-                $"Zenkins Worker: run {claim.RunId} received the server's cancel request "
-                + $"(reason: {request.Reason ?? "canceled"}); the process tree was killed.");
+            // A bug in the pipeline layer must not leave the run Running forever: report it as a
+            // failed step and keep the message in the run log (the server-side log shows why).
+            var message = $"zenkins-worker: the run could not be executed: {failure.Message}";
+            await stdErrorWriter.WriteLineAsync(message);
+            logBuffer.Emit(LogStream.StdErr, message);
             logBuffer.CompleteInput();
             if (logStreams.HasEverConnected)
             {
                 await pump;
             }
 
-            var outcome = RunCancelReasons.IsTimeout(request.Reason)
-                ? RunCanceledOutcomes.Timeout
-                : RunCanceledOutcomes.Canceled;
-            return new RunExecutionResult(null, outcome, request.Reason);
+            await errorLog.WriteLineAsync(
+                $"Zenkins Worker: run {claim.RunId} could not be executed ({failure.Message}).");
+            return new RunExecutionResult(null, PipelineFailureReasons.StepFailed);
         }
-        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+
+        if (outcome.Abandoned)
         {
+            // The server refused a report: the run is already terminal there (canceled, Lost, or
+            // another worker's). Nothing ran and nothing is reported - but the run's own log must still
+            // be handed upstream, so the drain happens exactly as on every other path.
             await log.WriteLineAsync(
-                $"Zenkins Worker: run {claim.RunId} was killed by shutdown (whole process tree); no completed report.");
+                $"Zenkins Worker: run {claim.RunId} was given up (the server refused a report); "
+                + "no further execution and no completion report.");
             logBuffer.CompleteInput();
+            if (logStreams.HasEverConnected)
+            {
+                await pump;
+            }
+
+            return new RunExecutionResult(null, null);
+        }
+
+        if (outcome.Canceled)
+        {
+            logBuffer.CompleteInput();
+            if (cancelKill.IsCancellationRequested && !shutdown.IsCancellationRequested)
+            {
+                // A server cancel request (user cancel or deadline): the process tree/script is gone,
+                // the partial output drains upstream, and the server maps the outcome (timeout →
+                // Failed, otherwise Canceled).
+                var request = await cancelRequested;
+                await log.WriteLineAsync(
+                    $"Zenkins Worker: run {claim.RunId} received the server's cancel request "
+                    + $"(reason: {request.Reason ?? "canceled"}); execution stopped.");
+                if (logStreams.HasEverConnected)
+                {
+                    await pump;
+                }
+
+                var cancelOutcome = RunCancelReasons.IsTimeout(request.Reason)
+                    ? RunCanceledOutcomes.Timeout
+                    : RunCanceledOutcomes.Canceled;
+                return new RunExecutionResult(null, null, cancelOutcome, request.Reason);
+            }
+
+            await log.WriteLineAsync(
+                $"Zenkins Worker: run {claim.RunId} was stopped by shutdown; no completed report.");
             await pump;
             return new RunExecutionResult(null, null);
         }
-        catch (Exception failure)
-        {
-            // The process never produced an exit code (bad argv[0], unusable cwd, ...). Report the
-            // run failed so it does not hang in Running forever; the reason is in the logs - and
-            // upstream too, so the server-side log shows why the run produced nothing.
-            var message = $"zenkins-worker: the process could not be executed: {failure.Message}";
-            await stdErrorWriter.WriteLineAsync(message);
-            logBuffer.Emit(LogStream.StdErr, message);
-            logBuffer.CompleteInput();
-            await pump;
-            await errorLog.WriteLineAsync(
-                $"Zenkins Worker: run {claim.RunId} could not be executed ({failure.Message}). "
-                + $"Reporting exit code {InfrastructureFailureExitCode}.");
-            return new RunExecutionResult(InfrastructureFailureExitCode, null);
-        }
-    }
 
-    /// <summary>
-    /// Closes the run's input and, when the upstream ever came up in this process, waits for the
-    /// drain to hand every buffered line to the server before the completed report goes out (the
-    /// same cleanup-before-report discipline F-007 established for temp files). When the upstream
-    /// never connected at all, the pump keeps retrying in the background and the report proceeds
-    /// - a connection that may not exist must not starve the run's terminal transition.
-    /// </summary>
-    private async Task<int?> FinishDrainAsync(RunLogBuffer logBuffer, Task pump, int exitCode)
-    {
         logBuffer.CompleteInput();
         if (logStreams.HasEverConnected)
         {
             await pump;
         }
 
-        return exitCode;
+        return new RunExecutionResult(outcome.ExitCode, outcome.FailureReason);
     }
 
     // -------------------------------------------------------------------
-    // Reporting (accepted / completed) with transport retries
+    // Reporting (accepted / definition / completed) with transport retries
     // -------------------------------------------------------------------
 
-    private Task ReportCompletionAsync(Guid runId, int exitCode, CancellationToken shutdown) =>
+    /// <summary>
+    /// Reports the run accepted and returns its frozen deadline (F-009's <c>DeadlineAt</c>, computed
+    /// server-side at the accept edge). <see langword="null"/> means the report was rejected or
+    /// shutdown arrived - the caller must give the run up.
+    /// </summary>
+    private async Task<DateTimeOffset?> AcceptAsync(Guid runId, CancellationToken shutdown)
+    {
+        while (!shutdown.IsCancellationRequested)
+        {
+            try
+            {
+                // F-013: the commit is reported with the definition report below - the clone happens
+                // after the accept, so nothing has been resolved yet at this point.
+                var response = await api.AcceptAsync(workerToken, runId, gitCommit: null, shutdown);
+                return response.DeadlineAt ?? DateTimeOffset.MaxValue;
+            }
+            catch (WorkerApiRejectedException rejection)
+            {
+                await errorLog.WriteLineAsync(
+                    $"Zenkins Worker: reporting run {runId} accepted was rejected ({rejection.Message}) "
+                    + "- giving the run up; the server owns its state.");
+                return null;
+            }
+            catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+            {
+                return null;
+            }
+            catch (Exception failure) when (IsTransient(failure) || failure is OperationCanceledException)
+            {
+                var delay = backoff.NextDelay();
+                await errorLog.WriteLineAsync(
+                    $"Zenkins Worker: could not reach the server to report run {runId} accepted "
+                    + $"({Describe(failure)}). Retrying in {delay.TotalSeconds:0.#}s.");
+                if (!await WaitAsync(delay, shutdown))
+                {
+                    return null;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reports the definition (card F-014): the resolved commit and the frozen spec, before the first
+    /// step starts. A rejection is logged and the run is given up server-side anyway; a transport
+    /// failure retries with backoff so a brief outage does not lose a validated definition.
+    /// </summary>
+    /// <returns><see langword="true"/> when the server accepted the report, <see langword="false"/>
+    /// when it refused definitively (the caller then gives the run up without executing anything).</returns>
+    private Task<bool> ReportDefinitionAsync(
+        Guid runId,
+        string? gitCommit,
+        string? pipelineSpecJson,
+        CancellationToken shutdown) =>
+        ReportAsync(
+            runId,
+            pipelineSpecJson is null ? "commit" : "definition",
+            (token, cancellationToken) => api.ReportDefinitionAsync(
+                token, runId, gitCommit, pipelineSpecJson, cancellationToken),
+            shutdown);
+
+    private Task ReportCompletionAsync(
+        Guid runId,
+        int? exitCode,
+        string? failureReason,
+        CancellationToken shutdown) =>
         ReportAsync(
             runId,
             "completed",
-            (token, cancellationToken) => api.CompleteAsync(token, runId, exitCode, cancellationToken),
+            (token, cancellationToken) => api.CompleteAsync(
+                token, runId, exitCode, failureReason, cancellationToken),
             shutdown);
 
     /// <summary>Reports a server-requested cancellation (F-009): one endpoint, the outcome selects

@@ -486,7 +486,6 @@ public sealed class RunCancellationTests
             using var response = await RunTestHost.StartRunAsync(
                 owner,
                 projectId,
-                "dotnet\n--version",
                 requiredTags: null,
                 timeoutMinutes: invalid);
             var location = response.Headers.Location!.OriginalString;
@@ -496,14 +495,13 @@ public sealed class RunCancellationTests
         var created = await RunTestHost.TriggerRunAsync(
             owner,
             projectId,
-            "dotnet\n--version",
             timeoutMinutes: "45");
         var run = await host.ReadRunAsync(created);
         Assert.Equal(45 * 60, run.TimeoutSeconds);
 
         // Blank means the server default: no override stored, the deadline derives from
         // Runs:DefaultTimeoutMinutes at accept time.
-        var defaultRun = await RunTestHost.TriggerRunAsync(owner, projectId, "dotnet\n--version");
+        var defaultRun = await RunTestHost.TriggerRunAsync(owner, projectId);
         var stored = await host.ReadRunAsync(defaultRun);
         Assert.Null(stored.TimeoutSeconds);
         Assert.Null(stored.DeadlineAt);

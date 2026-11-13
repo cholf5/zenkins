@@ -163,7 +163,8 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
                 ProjectId = TwoOrgsFixture.ProjectAId,
                 TriggerType = BuildRunTriggerType.Manual,
                 RequiredTags = string.Empty,
-                CommandJson = """["echo","smuggled"]""",
+                GitBranch = "main",
+                PipelinePath = "pipeline.lua",
             },
             CancellationToken);
 

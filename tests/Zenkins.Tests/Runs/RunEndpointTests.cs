@@ -38,7 +38,7 @@ public sealed class RunEndpointTests
         var ownerUserId = (await host.Inner.Inner.ReadUserAsync(OrganizationTestHost.OwnerEmail)).Id;
 
         // 1. Trigger: a Queued run with the exact argv, no shell interpretation anywhere.
-        var runId = await RunTestHost.TriggerRunAsync(owner, projectId, "dotnet\n--version");
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
 
         var queued = await host.ReadRunAsync(runId);
         Assert.Equal(BuildRunStatus.Queued, queued.Status);
@@ -46,7 +46,11 @@ public sealed class RunEndpointTests
         Assert.Equal(projectId, queued.ProjectId);
         Assert.Equal(BuildRunTriggerType.Manual, queued.TriggerType);
         Assert.Equal(ownerUserId, queued.TriggerUserId);
-        Assert.Equal("""["dotnet","--version"]""", queued.CommandJson);
+        // F-014: a run is a pipeline execution - the branch and pipeline path are snapshots of the
+        // project's own values, taken at trigger time.
+        Assert.Equal("main", queued.GitBranch);
+        Assert.Equal("pipeline.lua", queued.PipelinePath);
+        Assert.Null(queued.PipelineSpecJson);
         Assert.Equal(string.Empty, queued.RequiredTags);
         Assert.Null(queued.WorkerId);
         Assert.Null(queued.LeaseExpiresAt);
@@ -93,8 +97,11 @@ public sealed class RunEndpointTests
         var detail = await AuthTestHost.GetStringAsync(owner, $"/runs/{runId}");
         Assert.Contains("build-agent-1", detail, StringComparison.Ordinal);
         Assert.Contains("Success", detail, StringComparison.Ordinal);
-        Assert.Contains("dotnet", detail, StringComparison.Ordinal);
-        Assert.Contains("--version", detail, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-branch\"", detail, StringComparison.Ordinal);
+        Assert.Contains(">main</dd>", detail, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-pipeline-path\"", detail, StringComparison.Ordinal);
+        Assert.Contains(">pipeline.lua</dd>", detail, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-steps-pending\"", detail, StringComparison.Ordinal);
         Assert.Contains("alice@example.test", detail, StringComparison.Ordinal);
         Assert.Contains("id=\"run-exit-code\">0</dd>", detail, StringComparison.Ordinal);
         Assert.Contains("id=\"run-started\"", detail, StringComparison.Ordinal);
@@ -103,22 +110,18 @@ public sealed class RunEndpointTests
     }
 
     [Fact]
-    public async Task Command_arguments_are_stored_verbatim_without_shell_interpretation()
+    public async Task The_trigger_snapshots_the_branch_and_pipeline_path_from_the_project()
     {
         using var host = await RunTestHost.CreateAsync();
         var (projectId, owner) = await host.CreateProjectAsync();
 
-        var runId = await RunTestHost.TriggerRunAsync(
-            owner,
-            projectId,
-            "echo \"hello world\"\n--flag=a;b|c");
+        // The form left the branch blank: the run takes the project's default branch, and the pipeline
+        // path the project declared - both as copies, so editing the project later cannot move it.
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId, branch: "release/1.0");
 
         var stored = await host.ReadRunAsync(runId);
-        // The stored JSON is machine-encoded (the default JSON encoder escapes quotes as \u0022);
-        // what matters is that the argv decodes back to the exact literal strings, quotes included.
-        Assert.Equal(
-            new[] { "echo \"hello world\"", "--flag=a;b|c" },
-            RunValidation.DecodeCommandJson(stored.CommandJson));
+        Assert.Equal("release/1.0", stored.GitBranch);
+        Assert.Equal("pipeline.lua", stored.PipelinePath);
     }
 
     // ------------------------------------------------------------------
@@ -177,7 +180,7 @@ public sealed class RunEndpointTests
         var (projectId, owner) = await host.CreateProjectAsync();
         var (workerToken, _) = await host.RegisterWorkerAsync(name: "single-slot", maxConcurrency: 1);
 
-        var firstRunId = await RunTestHost.TriggerRunAsync(owner, projectId, "dotnet\n--version");
+        var firstRunId = await RunTestHost.TriggerRunAsync(owner, projectId);
         using var workerClient = host.Host.CreateClient();
         using var firstClaim = await RunTestHost.ClaimAsync(workerClient, workerToken);
         Assert.Equal(HttpStatusCode.OK, firstClaim.StatusCode);
@@ -185,7 +188,7 @@ public sealed class RunEndpointTests
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
 
         // The worker's single slot is busy (Running): the queued run stays queued.
-        var secondRunId = await RunTestHost.TriggerRunAsync(owner, projectId, "dotnet\n--info");
+        var secondRunId = await RunTestHost.TriggerRunAsync(owner, projectId, branch: "dev");
         using var busy = await RunTestHost.ClaimAsync(workerClient, workerToken);
         Assert.Equal(HttpStatusCode.NoContent, busy.StatusCode);
         Assert.Null((await host.ReadRunAsync(secondRunId)).WorkerId);
@@ -208,7 +211,7 @@ public sealed class RunEndpointTests
         // Claim without accepting: the run stays Queued but leased, and the lease must occupy the
         // worker's only slot - a claim storm must not oversubscribe MaxConcurrency through leases
         // (the assigned count covers Running *and* queued-but-leased runs).
-        var firstRunId = await RunTestHost.TriggerRunAsync(owner, projectId, "dotnet\n--version");
+        var firstRunId = await RunTestHost.TriggerRunAsync(owner, projectId);
         using var workerClient = host.Host.CreateClient();
         using var firstClaim = await RunTestHost.ClaimAsync(workerClient, workerToken);
         Assert.Equal(HttpStatusCode.OK, firstClaim.StatusCode);
@@ -218,7 +221,7 @@ public sealed class RunEndpointTests
         Assert.NotNull(leased.LeaseExpiresAt);
 
         // The next claim is a 204 and the second run keeps no worker: no second lease.
-        var secondRunId = await RunTestHost.TriggerRunAsync(owner, projectId, "dotnet\n--info");
+        var secondRunId = await RunTestHost.TriggerRunAsync(owner, projectId, branch: "dev");
         using var secondClaim = await RunTestHost.ClaimAsync(workerClient, workerToken);
         Assert.Equal(HttpStatusCode.NoContent, secondClaim.StatusCode);
         var secondRun = await host.ReadRunAsync(secondRunId);
@@ -275,7 +278,7 @@ public sealed class RunEndpointTests
         var (projectId, owner) = await host.CreateProjectAsync();
         var organizationId = await host.OrganizationIdAsync();
         var (workerToken, _) = await host.RegisterWorkerAsync(name: "agent", maxConcurrency: 2);
-        var runningRunId = await RunTestHost.TriggerRunAsync(owner, projectId, "dotnet\n--version");
+        var runningRunId = await RunTestHost.TriggerRunAsync(owner, projectId);
         var leasedRunId = await host.AddRunAsync(projectId, organizationId: organizationId);
 
         using var client = host.Host.CreateClient();
@@ -546,7 +549,7 @@ public sealed class RunEndpointTests
             $"/projects/{bravoProjectId}/runs/start",
             new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["Command"] = "dotnet",
+                ["Branch"] = "main",
                 ["__RequestVerificationToken"] = token,
             }),
             CancellationToken);
@@ -571,7 +574,7 @@ public sealed class RunEndpointTests
             $"/projects/{projectId}/runs/start",
             new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["Command"] = "dotnet",
+                ["Branch"] = "main",
             }),
             CancellationToken);
 
@@ -586,57 +589,20 @@ public sealed class RunEndpointTests
     }
 
     [Fact]
-    public async Task An_empty_command_is_a_field_error_and_creates_no_run()
+    public async Task An_invalid_branch_is_a_field_error_and_creates_no_run()
     {
         using var host = await RunTestHost.CreateAsync();
         var (projectId, owner) = await host.CreateProjectAsync();
         var organizationId = await host.OrganizationIdAsync();
 
-        var response = await RunTestHost.StartRunAsync(owner, projectId, "   \n  \r\n ");
+        var response = await RunTestHost.StartRunAsync(owner, projectId, branch: "-not-a-branch");
 
         Assert.True((int)response.StatusCode is 302 or 303);
         var location = response.Headers.Location!.OriginalString;
         Assert.StartsWith($"/projects/{projectId}?", location, StringComparison.Ordinal);
-        Assert.Contains("runError=argv-empty", location, StringComparison.Ordinal);
+        Assert.Contains("runError=branch-invalid", location, StringComparison.Ordinal);
         var page = await AuthTestHost.GetStringAsync(owner, location);
-        Assert.Contains("id=\"run-command-error\"", page, StringComparison.Ordinal);
-        Assert.Contains("one argument per line", page, StringComparison.Ordinal);
-        Assert.Empty(await host.ReadRunsAsync(organizationId));
-    }
-
-    [Fact]
-    public async Task More_than_100_arguments_is_a_field_error_and_creates_no_run()
-    {
-        using var host = await RunTestHost.CreateAsync();
-        var (projectId, owner) = await host.CreateProjectAsync();
-        var organizationId = await host.OrganizationIdAsync();
-        var command = string.Join('\n', Enumerable.Repeat("arg", 101));
-
-        var response = await RunTestHost.StartRunAsync(owner, projectId, command);
-
-        var location = response.Headers.Location!.OriginalString;
-        Assert.Contains("runError=argv-too-many-arguments", location, StringComparison.Ordinal);
-        var page = await AuthTestHost.GetStringAsync(owner, location);
-        Assert.Contains("id=\"run-command-error\"", page, StringComparison.Ordinal);
-        Assert.Empty(await host.ReadRunsAsync(organizationId));
-    }
-
-    [Fact]
-    public async Task An_argument_over_32_kib_is_a_field_error_and_creates_no_run()
-    {
-        using var host = await RunTestHost.CreateAsync();
-        var (projectId, owner) = await host.CreateProjectAsync();
-        var organizationId = await host.OrganizationIdAsync();
-
-        var response = await RunTestHost.StartRunAsync(
-            owner,
-            projectId,
-            new string('a', 32 * 1024 + 1));
-
-        var location = response.Headers.Location!.OriginalString;
-        Assert.Contains("runError=argv-argument-too-long", location, StringComparison.Ordinal);
-        var page = await AuthTestHost.GetStringAsync(owner, location);
-        Assert.Contains("id=\"run-command-error\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-branch-error\"", page, StringComparison.Ordinal);
         Assert.Empty(await host.ReadRunsAsync(organizationId));
     }
 
@@ -648,7 +614,7 @@ public sealed class RunEndpointTests
         var organizationId = await host.OrganizationIdAsync();
         await host.RegisterWorkerAsync(name: "agent", tags: "linux");
 
-        var response = await RunTestHost.StartRunAsync(owner, projectId, "dotnet", requiredTags: "windows");
+        var response = await RunTestHost.StartRunAsync(owner, projectId, requiredTags: "windows");
 
         var location = response.Headers.Location!.OriginalString;
         Assert.Contains("runError=tag-unknown", location, StringComparison.Ordinal);
@@ -670,7 +636,6 @@ public sealed class RunEndpointTests
         var response = await RunTestHost.StartRunAsync(
             owner,
             projectId,
-            "dotnet",
             requiredTags: new string('x', RunValidation.MaxTagLength + 1));
 
         var location = response.Headers.Location!.OriginalString;
@@ -700,7 +665,6 @@ public sealed class RunEndpointTests
         var runId = await RunTestHost.TriggerRunAsync(
             memberClient,
             projectId,
-            "dotnet\n--version",
             requiredTags: "linux");
 
         var run = await host.ReadRunAsync(runId);

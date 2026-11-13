@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Git;
+using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Tenancy;
@@ -413,6 +414,68 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     }
 
     /// <summary>
+    /// F-014: the single <c>Queued → Running</c> transition as a guarded compare-and-set. The WHERE
+    /// restates what a legal accept needs - still <c>Queued</c>, still leased to this worker, still
+    /// carrying a lease - so two concurrent accepted reports for the same run can never both win: the
+    /// loser updates zero rows and answers a conflict (before this card the write was an unguarded
+    /// entity update, which made the check-then-act window between two accepts a real race).
+    /// <para>
+    /// The lease's expiry instant is deliberately <b>not</b> in the WHERE: SQLite cannot compare
+    /// <c>DateTimeOffset</c> values in SQL (the same constraint the lease sweeper documents), so the
+    /// caller checks it in memory against the row it read. The predicate still keeps that from being
+    /// the whole story: whichever accept arrives second sees <c>Status != Queued</c> and stops.
+    /// </para>
+    /// </summary>
+    /// <returns>1 when this call won the transition, 0 when another accept (or a cancel) got there first.</returns>
+    public Task<int> TryAcceptBuildRunAsync(
+        Guid runId,
+        Guid workerId,
+        DateTimeOffset startedAt,
+        DateTimeOffset deadlineAt,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        BuildRuns
+            .Where(run => run.Id == runId
+                && run.WorkerId == workerId
+                && run.Status == BuildRunStatus.Queued
+                && run.LeaseExpiresAt != null)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.Status, BuildRunStatus.Running)
+                .SetProperty(run => run.StartedAt, (DateTimeOffset?)startedAt)
+                .SetProperty(run => run.LeaseExpiresAt, (DateTimeOffset?)null)
+                .SetProperty(run => run.DeadlineAt, (DateTimeOffset?)deadlineAt)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+
+    /// <summary>
+    /// F-014: freezes the validated pipeline spec on a running run - the definition report's write.
+    /// The WHERE is <c>PipelineSpecJson IS NULL</c>, so the spec is written exactly once: a re-delivered
+    /// report, or a second one, cannot rewrite what the run executed. The WHERE also restates the
+    /// caller's authority (still <c>Running</c>, still assigned to this worker), so a report racing a
+    /// Lost transition updates nothing.
+    /// </summary>
+    /// <returns>1 when this call froze the spec, 0 when the run already had one or had left Running.</returns>
+    public Task<int> FreezePipelineDefinitionAsync(
+        Guid runId,
+        Guid workerId,
+        string pipelineSpecJson,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipelineSpecJson);
+
+        return BuildRuns
+            .Where(run => run.Id == runId
+                && run.WorkerId == workerId
+                && run.Status == BuildRunStatus.Running
+                && run.PipelineSpecJson == null)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.PipelineSpecJson, pipelineSpecJson)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+    }
+
+    /// <summary>
     /// F-010: the offline monitor's Online → Offline flip of one stale worker, as a guarded
     /// compare-and-set. Only the sweep that wins this statement may mark the worker's runs Lost,
     /// which is what makes the Lost transition exactly once even when monitor ticks race.
@@ -600,8 +663,18 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             entity.Property(run => run.TriggerUserId).HasMaxLength(450);
             entity.Property(run => run.RequiredTags).IsRequired().HasMaxLength(400);
 
-            // No max length on purpose: an argv can be 100 x 32 KiB, so the column is text.
-            entity.Property(run => run.CommandJson).IsRequired();
+            // F-014: every run is a pipeline run. The pipeline path and branch are snapshots taken at
+            // trigger time (a later project edit must not move an existing run's target), bounded like
+            // the project fields they were copied from.
+            entity.Property(run => run.PipelinePath).IsRequired()
+                .HasMaxLength(ProjectValidation.MaxPipelinePathLength);
+            entity.Property(run => run.GitBranch).IsRequired()
+                .HasMaxLength(ProjectValidation.MaxDefaultBranchLength);
+
+            // F-014: the frozen spec. No max length on purpose (the column is text): the size cap is
+            // enforced when the definition is accepted (PipelineSpecSchema.MaxJsonBytes), where an
+            // over-long spec is a clear 400 rather than a storage error.
+            entity.Property(run => run.PipelineSpecJson);
             entity.Property(run => run.FailureReason).HasMaxLength(200);
 
             // F-009: the reason a cancellation was requested (canceled-by-user <user>, timeout),

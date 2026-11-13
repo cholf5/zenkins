@@ -7,7 +7,7 @@ using Zenkins.Server.Runs;
 using Zenkins.Shared.RunCancellation;
 using Zenkins.Tests.Organizations;
 using Zenkins.Tests.Runs;
-using Zenkins.Tests.WorkerRuntime;
+using Zenkins.Tests.Pipelines;
 
 namespace Zenkins.Tests.RunLifecycle;
 
@@ -39,13 +39,15 @@ public sealed class RunWorkerCancellationTests
     public async Task Canceling_a_running_run_kills_the_process_and_preserves_the_partial_log()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
+        // F-014: the run executes the project's pipeline, so the long-lived child is a step of a real
+        // repository fixture instead of an argv command.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline("Stream", PipelineTestData.Step("Stream", "stream", "120000")));
         using var host = await RunLifecycleHost.CreateAsync();
-        var (projectId, owner) = await host.CreateProjectAsync();
+        var projectId = await host.SeedProjectAsync($"cancel-{Guid.NewGuid():N}", repository.FileUrl);
+        var owner = await host.SignInOwnerAsync();
         var (memberClient, memberEmail) = await AddMemberAsync(host);
-        var runId = await RunTestHost.TriggerRunAsync(
-            owner,
-            projectId,
-            $"dotnet\n{ArgvEchoBinary.DllPath}\nstream\n120000");
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
 
         await using var worker = await InProcessWorker.StartAsync(host, $"cancel-agent-{Guid.NewGuid():N}");
         var running = await WaitUntilStatusAsync(host, runId, BuildRunStatus.Running);
@@ -94,17 +96,17 @@ public sealed class RunWorkerCancellationTests
 
         // Sub-minute default timeout (the card's "config allows sub-minute test values"): the
         // deadline lands three seconds after accept, and the child sleeps far beyond it.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline("Stream", PipelineTestData.Step("Stream", "stream", "120000")));
         using var host = await RunLifecycleHost.CreateAsync(
             configuration => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
                     [RunOptions.DefaultTimeoutMinutesConfigurationKey] = "0.05",
                 }));
-        var (projectId, owner) = await host.CreateProjectAsync();
-        var runId = await RunTestHost.TriggerRunAsync(
-            owner,
-            projectId,
-            $"dotnet\n{ArgvEchoBinary.DllPath}\nstream\n120000");
+        var projectId = await host.SeedProjectAsync($"timeout-{Guid.NewGuid():N}", repository.FileUrl);
+        var owner = await host.SignInOwnerAsync();
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
 
         // The fallback E2E: the worker's upstream is deliberately unreachable, so the SignalR
         // cancel channel is down for the whole run. The kill can only arrive through the

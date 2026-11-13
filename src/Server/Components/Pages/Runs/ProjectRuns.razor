@@ -31,7 +31,7 @@
             <BbCardHeader>
                 <BbCardTitle As="h2">Build runs</BbCardTitle>
                 <BbCardDescription>
-                    Every execution of this project's command, newest first. Workers pull queued runs
+                    Every execution of this project's pipeline, newest first. Workers pull queued runs
                     through an atomic claim; a claimed run must be accepted inside its lease window.
                 </BbCardDescription>
             </BbCardHeader>
@@ -55,7 +55,12 @@
                                     <p class="bb:font-medium">
                                         <a href="/runs/@run.Id" class="bb:underline bb:underline-offset-4">Run @run.Id.ToString("N")[..8]</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
-                                            @(string.Join(' ', run.Command.Take(3)))@(run.Command.Length > 3 ? " …" : "")
+                                            @* F-014: a run is a pipeline execution on a branch, not a command line. *@
+                                            @run.GitBranch · @run.PipelinePath
+                                            @if (run.PipelineName is { } pipelineName)
+                                            {
+                                                <span> · @pipelineName</span>
+                                            }
                                         </span>
                                     </p>
                                     <p class="bb:text-xs bb:text-muted-foreground">

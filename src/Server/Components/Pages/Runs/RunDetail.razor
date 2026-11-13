@@ -44,18 +44,53 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Command</BbCardTitle>
+                <BbCardTitle As="h2">Pipeline</BbCardTitle>
                 <BbCardDescription>
-                    The exact argv the worker executes - one argument per line, no shell quoting
-                    interpretation.
+                    The branch and pipeline file this run executed, the exact commit the worker
+                    resolved, and the frozen step list it ran. @*F-014*@ The steps come from the
+                    spec the worker validated before the first one started, so a later commit never
+                    changes what this run shows.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
-                <pre id="run-command" class="bb:overflow-x-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-sm"><code>@foreach (var argument in _run.Command)
-{
-    <text>@argument
-</text>
-}</code></pre>
+                <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branch</dt>
+                        <dd id="run-branch" class="bb:break-all">@_run.GitBranch</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                        <dd id="run-pipeline-path" class="bb:break-all">@_run.PipelinePath</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Git commit</dt>
+                        <dd id="run-git-commit" class="bb:break-all">@(_run.GitCommit ?? "-")</dd>
+                    </div>
+                </dl>
+
+                @if (_run.Pipeline is { } pipeline)
+                {
+                    <p class="bb:mt-4 bb:text-sm">
+                        <span class="bb:font-medium">Pipeline:</span> <span id="run-pipeline-name">@pipeline.Name</span>
+                        <span class="bb:text-muted-foreground">(@pipeline.Steps.Length step(s))</span>
+                    </p>
+                    <ol id="run-steps" class="bb:mt-2 bb:list-decimal bb:space-y-1 bb:pl-6 bb:text-sm">
+                        @foreach (var step in pipeline.Steps)
+                        {
+                            <li id="@($"run-step-{step.Name}")" class="bb:break-all">
+                                <span class="bb:font-medium">@step.Name</span>
+                                <code class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@string.Join(' ', step.Argv)</code>
+                            </li>
+                        }
+                    </ol>
+                }
+                else
+                {
+                    <p id="run-steps-pending" class="bb:mt-4 bb:text-sm bb:text-muted-foreground">
+                        No pipeline definition was reported for this run.
+                    </p>
+                }
+
                 @if (_run.RequiredTags.Length > 0)
                 {
                     <p class="bb:mt-3 bb:text-sm bb:text-muted-foreground">

@@ -358,7 +358,8 @@ public sealed class TwoOrgsFixture : IDisposable
                 TriggerType = BuildRunTriggerType.Manual,
                 TriggerUserId = OrgAOwnerUserId,
                 RequiredTags = string.Empty,
-                CommandJson = """["dotnet","--version"]""",
+                GitBranch = "main",
+                PipelinePath = "pipeline.lua",
             },
             new BuildRun
             {
@@ -368,7 +369,8 @@ public sealed class TwoOrgsFixture : IDisposable
                 TriggerType = BuildRunTriggerType.Manual,
                 TriggerUserId = OrgBOwnerUserId,
                 RequiredTags = "dotnet",
-                CommandJson = """["dotnet","build"]""",
+                GitBranch = "main",
+                PipelinePath = "pipeline.lua",
             });
 
         // F-008: one log line per organization's run, the row every log probe reads.

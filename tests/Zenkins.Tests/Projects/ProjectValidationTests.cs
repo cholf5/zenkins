@@ -123,6 +123,30 @@ public sealed class ProjectValidationTests
             new[] { ProjectErrorCodes.DefaultBranchRequired, ProjectErrorCodes.DefaultBranchInvalid });
     }
 
+    [Fact]
+    public void A_branch_of_exactly_the_maximum_length_passes_and_one_character_more_is_rejected()
+    {
+        // F-014 stores the branch in a character varying(200) column, so this boundary is what keeps a
+        // run's snapshot storable. Both layers (project default, run branch) share the same rule.
+        var boundary = new string('a', ProjectValidation.MaxDefaultBranchLength);
+        Assert.Null(ProjectValidation.ValidateDefaultBranch(boundary, out var normalized));
+        Assert.Equal(boundary, normalized);
+
+        var overLong = boundary + "a";
+        Assert.Equal(
+            ProjectErrorCodes.DefaultBranchInvalid,
+            ProjectValidation.ValidateDefaultBranch(overLong, out _));
+    }
+
+    [Fact]
+    public void A_branch_with_a_control_character_is_rejected()
+    {
+        // A control character would reach git argv and the stored column; it is refused at the boundary.
+        Assert.Equal(
+            ProjectErrorCodes.DefaultBranchInvalid,
+            ProjectValidation.ValidateDefaultBranch("main\u0007next", out _));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

@@ -10,6 +10,7 @@ using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Workers;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.RunCancellation;
 using Zenkins.Shared.Tenancy;
 
@@ -42,13 +43,14 @@ public sealed record RunFieldError(string Field, string Code);
 /// <summary>Field names the trigger form's errors render against.</summary>
 public static class RunFields
 {
-    public const string Command = "command";
+    /// <summary>F-014: the branch the run builds (blank means the project's default branch).</summary>
+    public const string Branch = "branch";
     public const string RequiredTags = "requiredTags";
     public const string Timeout = "timeoutMinutes";
 }
 
 /// <summary>The raw trigger-form values, before trimming and validation.</summary>
-public sealed record RunTriggerInput(string? Command, string? RequiredTags, string? TimeoutMinutes = null);
+public sealed record RunTriggerInput(string? Branch, string? RequiredTags, string? TimeoutMinutes = null);
 
 /// <summary>Result of triggering a run. <see cref="RunId"/> is the redirect target on success.</summary>
 public sealed record RunTriggerResult(
@@ -69,6 +71,10 @@ public sealed record RunTriggerResult(
 }
 
 /// <summary>A run as the pages display it. Records keep disposed contexts out of the UI.</summary>
+/// <param name="PipelinePath">The pipeline file the run looked for (snapshot at trigger time).</param>
+/// <param name="GitBranch">The branch the run built (snapshot at trigger time).</param>
+/// <param name="GitCommit">The commit the worker resolved, once it reported one.</param>
+/// <param name="Pipeline">The frozen spec, when the definition was reported; null before that.</param>
 public sealed record RunView(
     Guid Id,
     Guid ProjectId,
@@ -76,7 +82,10 @@ public sealed record RunView(
     string TriggerType,
     string? TriggerUserEmail,
     string? WorkerName,
-    string[] Command,
+    string PipelinePath,
+    string GitBranch,
+    string? GitCommit,
+    PipelineSpec? Pipeline,
     string[] RequiredTags,
     DateTimeOffset? StartedAt,
     DateTimeOffset? EndedAt,
@@ -85,7 +94,14 @@ public sealed record RunView(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     int? TimeoutSeconds = null,
-    DateTimeOffset? DeadlineAt = null);
+    DateTimeOffset? DeadlineAt = null)
+{
+    /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
+    public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
+
+    /// <summary>The pipeline's declared name, or null while no definition was reported.</summary>
+    public string? PipelineName => Pipeline?.Name;
+}
 
 /// <summary>The failure reasons the server itself records (the worker's exit code needs none).</summary>
 public static class RunFailureReasons
@@ -133,7 +149,9 @@ public sealed record RunClaimResult(
     RunOperationStatus Status,
     Guid? RunId = null,
     Guid? ProjectId = null,
-    IReadOnlyList<string>? Command = null,
+    string? RepositoryUrl = null,
+    string? Branch = null,
+    string? PipelinePath = null,
     DateTimeOffset? LeaseExpiresAt = null)
 {
     /// <summary>The 204 answer: nothing eligible right now. Same for every other rejection reason -
@@ -141,14 +159,17 @@ public sealed record RunClaimResult(
     public static RunClaimResult NoRun() => new(RunOperationStatus.Success);
 }
 
-/// <summary>Outcome of the accepted/completed reporting endpoints.</summary>
+/// <summary>Outcome of the accepted/completed/definition reporting endpoints.</summary>
+/// <param name="DeadlineAt">F-014: the run's frozen deadline, answered by the accept edge so the
+/// worker's definition phase runs against the run's own wall clock.</param>
 public sealed record RunReportResult(
     RunOperationStatus Status,
     string? ErrorCode = null,
-    string? RunStatus = null)
+    string? RunStatus = null,
+    DateTimeOffset? DeadlineAt = null)
 {
-    public static RunReportResult Success(string runStatus) =>
-        new(RunOperationStatus.Success, RunStatus: runStatus);
+    public static RunReportResult Success(string runStatus, DateTimeOffset? deadlineAt = null) =>
+        new(RunOperationStatus.Success, RunStatus: runStatus, DeadlineAt: deadlineAt);
 
     public static RunReportResult InvalidToken() => new(RunOperationStatus.InvalidToken);
 
@@ -208,10 +229,11 @@ public sealed class RunService(
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Creates a <c>Queued</c> run for a project of the active organization. Any member may
-    /// trigger (PRD §3.1.2). The command is parsed as one-argument-per-line (no shell quoting
-    /// interpretation); required tags must exist among the organization's workers, so a typo
-    /// cannot queue a run no worker will ever take.
+    /// Creates a <c>Queued</c> run for a project of the active organization. Any member may trigger
+    /// (PRD §3.1.2). F-014 replaced the argv command with a branch: blank means the project's default
+    /// branch, and the run snapshots the branch and the pipeline path it will use so a later project
+    /// edit cannot move it. Required tags must exist among the organization's workers, so a typo cannot
+    /// queue a run no worker will ever take.
     /// </summary>
     public async Task<RunTriggerResult> TriggerAsync(
         string actingUserId,
@@ -246,10 +268,10 @@ public sealed class RunService(
             return RunTriggerResult.NotFound();
         }
 
-        var argvError = RunValidation.ValidateArguments(input.Command, out var argv);
-        if (argvError is not null)
+        var branchError = RunValidation.ValidateBranch(input.Branch, out var requestedBranch);
+        if (branchError is not null)
         {
-            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Command, argvError));
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Branch, branchError));
         }
 
         var tagsError = RunValidation.ValidateRequiredTags(input.RequiredTags, out var requiredTags);
@@ -286,17 +308,23 @@ public sealed class RunService(
             TriggerType = BuildRunTriggerType.Manual,
             TriggerUserId = actingUserId,
             RequiredTags = requiredTags,
-            CommandJson = RunValidation.EncodeCommandJson(argv),
+
+            // F-014 snapshots: the branch the form chose (or the project's default) and the project's
+            // pipeline path. Both are copies, so editing the project later never moves this run.
+            GitBranch = requestedBranch.Length > 0 ? requestedBranch : project.DefaultBranch,
+            PipelinePath = project.PipelinePath,
             TimeoutSeconds = timeoutMinutes is { } minutes ? minutes * 60 : null,
         };
         context.BuildRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(
-            "Run queued. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} ByUserId={UserId}",
+            "Run queued. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} PipelinePath={PipelinePath} ByUserId={UserId}",
             activeOrganizationId,
             project.Id,
             run.Id,
+            run.GitBranch,
+            run.PipelinePath,
             actingUserId);
         return RunTriggerResult.Success(run.Id);
     }
@@ -411,8 +439,10 @@ public sealed class RunService(
         //    ORDER BY DateTimeOffset columns. An expired lease is NOT claimable here: the lease
         //    sweeper is the single authority on expiry, and SQLite cannot compare DateTimeOffset
         //    values in SQL, so the claim never needs a time predicate (see TryLeaseBuildRunAsync).
+        //    F-014: the project is included because the pipeline layer needs its repository URL.
         var queued = await context.BuildRuns
             .AsNoTracking()
+            .Include(run => run.Project)
             .Where(run => run.Status == BuildRunStatus.Queued && run.LeaseExpiresAt == null)
             .ToListAsync(cancellationToken);
         var candidates = queued
@@ -441,11 +471,16 @@ public sealed class RunService(
                     candidate.Id,
                     worker.Id,
                     leaseExpiresAt);
+
+                // F-014: the claim carries what the pipeline layer executes - the repository, the
+                // branch this run snapshotted and the pipeline path it snapshotted.
                 return new RunClaimResult(
                     RunOperationStatus.Success,
                     candidate.Id,
                     candidate.ProjectId,
-                    RunValidation.DecodeCommandJson(candidate.CommandJson),
+                    candidate.Project.RepositoryUrl,
+                    candidate.GitBranch,
+                    candidate.PipelinePath,
                     leaseExpiresAt);
             }
         }
@@ -490,7 +525,9 @@ public sealed class RunService(
 
         try
         {
-            var run = await context.BuildRuns.SingleOrDefaultAsync(
+            // AsNoTracking on purpose: the transition below is a single guarded UPDATE, so the
+            // tracked entity must never be able to write a stale status afterwards.
+            var run = await context.BuildRuns.AsNoTracking().SingleOrDefaultAsync(
                 candidate => candidate.Id == runId,
                 cancellationToken);
             if (run is null)
@@ -526,28 +563,48 @@ public sealed class RunService(
                 return RunReportResult.Conflict(RunErrorCodes.LeaseExpired);
             }
 
-            run.Status = BuildRunStatus.Running;
-            run.StartedAt = now;
-            run.LeaseExpiresAt = null;
-
-            // F-009: the execution deadline is frozen at accept - the run's per-run override or
-            // the server default. The deadline sweeper never touches the run before this instant,
-            // and a later configuration change never moves an accepted run's deadline.
+            // F-009: the execution deadline is frozen at accept - the run's per-run override or the
+            // server default. The deadline sweeper never touches the run before this instant, and a
+            // later configuration change never moves an accepted run's deadline.
             var timeout = run.TimeoutSeconds is { } seconds
                 ? TimeSpan.FromSeconds(seconds)
                 : options.DefaultTimeout;
-            run.DeadlineAt = now + timeout;
+            var deadlineAt = now + timeout;
 
-            // F-013 + review M6: the status transition and the commit stamp are ONE unit of work.
-            // They are two statements (an entity update and a guarded ExecuteUpdate), so without a
-            // transaction an interruption between them would leave the run Running with
-            // GitCommit NULL - and the run's own state guard (Running -> Running is not a legal
-            // transition, so every retry is a 409) would make that state permanently unrecoverable.
-            // Inside one transaction either both land or neither does; a failed attempt leaves the
-            // run Queued and still leased, so the worker's retried accepted report completes it.
+            // F-013 + review M6: the transition and the commit stamp are ONE unit of work, or an
+            // interruption between them would leave the run Running with GitCommit NULL - a state its
+            // own guard (Running -> Running is not a legal transition, so every retry is a 409) makes
+            // permanently unrecoverable. A failed attempt therefore changes nothing at all: the run
+            // stays Queued with its lease intact, so the worker's retry completes it.
+            //
+            // F-014 closes F-013's check-then-act window: the transition itself is now the guarded
+            // compare-and-set TryAcceptBuildRunAsync (WHERE restates Queued + this worker + a live
+            // lease), so two concurrent accepted reports for one run cannot both win - the loser
+            // updates zero rows and answers a conflict, exactly as the queued cancel does.
             await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
 
-            await context.SaveChangesAsync(cancellationToken);
+            var accepted = await context.TryAcceptBuildRunAsync(
+                run.Id,
+                worker.Id,
+                now,
+                deadlineAt,
+                now,
+                cancellationToken);
+            if (accepted == 0)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+
+                // Why did the CAS lose? A run that is no longer Queued was accepted (or canceled)
+                // concurrently - a conflict either way; one that is still Queued lost its lease.
+                var currentStatus = await context.BuildRuns
+                    .AsNoTracking()
+                    .Where(candidate => candidate.Id == run.Id)
+                    .Select(candidate => candidate.Status)
+                    .SingleOrDefaultAsync(cancellationToken);
+                return currentStatus == BuildRunStatus.Queued
+                    ? RunReportResult.Conflict(RunErrorCodes.LeaseExpired)
+                    : RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
+            }
 
             string? recordedCommit = null;
             if (gitCommit is not null)
@@ -572,9 +629,12 @@ public sealed class RunService(
                 workerToken.OrganizationId,
                 run.Id,
                 worker.Id,
-                run.DeadlineAt,
+                deadlineAt,
                 recordedCommit);
-            return RunReportResult.Success(BuildRunStatus.Running);
+
+            // F-014: the answer carries the frozen deadline, so the worker's definition phase runs
+            // against the run's own wall clock instead of a worker-side guess.
+            return RunReportResult.Success(BuildRunStatus.Running, deadlineAt);
         }
         finally
         {
@@ -583,13 +643,166 @@ public sealed class RunService(
     }
 
     /// <summary>
-    /// Reports the exit code of a run this worker executes: exit 0 → <c>Success</c>, anything else
-    /// → <c>Failed</c>, end time recorded (duration is derived from start and end on display).
+    /// Reports the definition of a run this worker executes (card F-014): the commit it resolved and
+    /// the validated spec it froze - sent once, before the first step starts, so the run page can show
+    /// the step list of a run that is only just beginning.
+    /// <para>
+    /// <b>Server-side gate, Worker-side strictness.</b> The Worker owns the field-path validation (it is
+    /// the only side holding the Lua table); this method re-checks the envelope the issue asks for - the
+    /// JSON parses, the schema version is known, the step list is 1..200 and the payload is under the
+    /// size cap - so a buggy or hostile worker cannot store something the page would then have to
+    /// trust.
+    /// </para>
+    /// <para>
+    /// <b>Idempotent.</b> Both writes are compare-and-sets (the commit's <c>IS NULL</c>, the spec's
+    /// <c>IS NULL</c>): a re-delivered report after a lost response updates nothing and still answers
+    /// success while the run is Running with a spec - it must not turn a completed report into a 409.
+    /// </para>
+    /// </summary>
+    public async Task<RunReportResult> ReportDefinitionAsync(
+        string? plaintextToken,
+        Guid runId,
+        string? gitCommit,
+        string? pipelineSpecJson,
+        CancellationToken cancellationToken = default)
+    {
+        var (workerToken, worker, context) = await AuthenticateWithWorkerAsync(plaintextToken, cancellationToken);
+        if (workerToken is null || worker is null)
+        {
+            return RunReportResult.InvalidToken();
+        }
+
+        try
+        {
+            // F-014: two reports share this endpoint. The commit-only one (a null spec) lands right
+            // after the clone, so a run whose definition fails still records what it checked out; the
+            // second one adds the frozen spec before the first step starts.
+            var hasSpec = !string.IsNullOrWhiteSpace(pipelineSpecJson);
+            if (gitCommit is null && !hasSpec)
+            {
+                return RunReportResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            if (gitCommit is not null && !GitCommitValidation.IsValid(gitCommit))
+            {
+                return RunReportResult.Invalid(GitCommitValidation.InvalidCode);
+            }
+
+            if (hasSpec && !PipelineSpecJson.TryRead(pipelineSpecJson, out _, out var specError))
+            {
+                logger.LogWarning(
+                    "Run definition refused. RunId={RunId} WorkerId={WorkerId} Reason={Reason}",
+                    runId,
+                    worker.Id,
+                    specError);
+                return RunReportResult.Invalid(RunErrorCodes.PipelineSpecInvalid);
+            }
+
+            var run = await context.BuildRuns.AsNoTracking().SingleOrDefaultAsync(
+                candidate => candidate.Id == runId,
+                cancellationToken);
+            if (run is null)
+            {
+                return RunReportResult.NotFound();
+            }
+
+            if (run.WorkerId != worker.Id)
+            {
+                return RunReportResult.Conflict(RunErrorCodes.RunNotAssignedToWorker);
+            }
+
+            if (run.Status != BuildRunStatus.Running)
+            {
+                // A definition can only be frozen on a running run; anything else is a stale or
+                // misdirected report.
+                return RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+
+            if (gitCommit is not null)
+            {
+                // The same once-only stamp the accept report uses (F-013): the first value - the commit
+                // this run actually built - survives.
+                await context.TryStampGitCommitAsync(run.Id, gitCommit, now, cancellationToken);
+            }
+
+            if (!hasSpec)
+            {
+                // Commit only: nothing was defined yet, so no spec is frozen.
+                await transaction.CommitAsync(cancellationToken);
+                logger.LogInformation(
+                    "Run commit recorded. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} GitCommit={GitCommit}",
+                    workerToken.OrganizationId,
+                    run.Id,
+                    worker.Id,
+                    gitCommit);
+                return RunReportResult.Success(BuildRunStatus.Running, run.DeadlineAt);
+            }
+
+            var frozen = await context.FreezePipelineDefinitionAsync(
+                run.Id,
+                worker.Id,
+                pipelineSpecJson!,
+                now,
+                cancellationToken);
+            if (frozen == 0)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+
+                // The spec column is write-once. A re-delivery of the SAME report (a retry after a lost
+                // response) is the idempotent success; a DIFFERENT spec for the same run is refused -
+                // answering 200 would silently accept a second, contradictory definition.
+                var existing = await context.BuildRuns
+                    .AsNoTracking()
+                    .Where(candidate => candidate.Id == run.Id)
+                    .Select(candidate => candidate.PipelineSpecJson)
+                    .SingleOrDefaultAsync(cancellationToken);
+                if (existing is null)
+                {
+                    return RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
+                }
+
+                return string.Equals(existing, pipelineSpecJson, StringComparison.Ordinal)
+                    ? RunReportResult.Success(BuildRunStatus.Running, run.DeadlineAt)
+                    : RunReportResult.Conflict(RunErrorCodes.PipelineSpecFrozen);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+
+            logger.LogInformation(
+                "Run definition frozen. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} GitCommit={GitCommit} SpecBytes={SpecBytes}",
+                workerToken.OrganizationId,
+                run.Id,
+                worker.Id,
+                gitCommit,
+                pipelineSpecJson!.Length);
+            return RunReportResult.Success(BuildRunStatus.Running, run.DeadlineAt);
+        }
+        finally
+        {
+            await context.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Reports the end of a run this worker executes (card F-014 extends F-006's exit code with a
+    /// closed failure reason):
+    /// <list type="bullet">
+    /// <item>exit 0, no reason → <c>Success</c>.</item>
+    /// <item>a non-zero exit (optionally with <c>step-failed</c>) → <c>Failed</c> with the code recorded
+    /// - the code is the record, and the reason adds which phase produced it.</item>
+    /// <item>no exit code but a reason (<c>pipeline-missing</c>, <c>git-unavailable</c>, …) →
+    /// <c>Failed</c> with no invented code: nothing ran, so there is no code to record.</item>
+    /// </list>
+    /// End time is recorded; duration is derived from start and end on display.
     /// </summary>
     public async Task<RunReportResult> CompleteAsync(
         string? plaintextToken,
         Guid runId,
         int? exitCode,
+        string? failureReason,
         CancellationToken cancellationToken = default)
     {
         // Authentication before payload validation (F-004 review fix): a tokenless caller gets
@@ -602,7 +815,21 @@ public sealed class RunService(
 
         try
         {
-            if (exitCode is null)
+            if (exitCode is null && failureReason is null)
+            {
+                return RunReportResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            // The vocabulary is closed: a reason the server does not know is a contract mismatch, not
+            // something to store and hope the UI can render.
+            if (failureReason is not null && !PipelineFailureReasons.IsWorkerReportable(failureReason))
+            {
+                return RunReportResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            // A successful exit with a failure reason contradicts itself; refuse it rather than guess
+            // which half the worker meant.
+            if (exitCode == 0 && failureReason is not null)
             {
                 return RunReportResult.Invalid(RunErrorCodes.FieldInvalid);
             }
@@ -621,7 +848,9 @@ public sealed class RunService(
                 return RunReportResult.Conflict(RunErrorCodes.RunNotAssignedToWorker);
             }
 
-            var target = exitCode.Value == 0 ? BuildRunStatus.Success : BuildRunStatus.Failed;
+            var target = exitCode == 0 && failureReason is null
+                ? BuildRunStatus.Success
+                : BuildRunStatus.Failed;
             if (!BuildRunStateMachine.CanTransition(run.Status, target))
             {
                 return RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
@@ -630,6 +859,7 @@ public sealed class RunService(
             var now = DateTimeOffset.UtcNow;
             run.Status = target;
             run.ExitCode = exitCode;
+            run.FailureReason = failureReason;
             run.EndedAt = now;
             await context.SaveChangesAsync(cancellationToken);
 
@@ -639,12 +869,13 @@ public sealed class RunService(
             await runLogIngest.CompleteRunAsync(run.Id);
 
             logger.LogInformation(
-                "Run completed. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Status={Status} ExitCode={ExitCode}",
+                "Run completed. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Status={Status} ExitCode={ExitCode} FailureReason={FailureReason}",
                 workerToken.OrganizationId,
                 run.Id,
                 worker.Id,
                 target,
-                exitCode);
+                exitCode,
+                failureReason);
             return RunReportResult.Success(target);
         }
         finally
@@ -1206,7 +1437,10 @@ public sealed class RunService(
             run.WorkerId is not null && workerNames.TryGetValue(run.WorkerId.Value, out var name)
                 ? name
                 : null,
-            RunValidation.DecodeCommandJson(run.CommandJson),
+            run.PipelinePath,
+            run.GitBranch,
+            run.GitCommit,
+            ReadPipeline(run.PipelineSpecJson),
             RunValidation.ParseTags(run.RequiredTags),
             run.StartedAt,
             run.EndedAt,
@@ -1217,4 +1451,11 @@ public sealed class RunService(
             run.TimeoutSeconds,
             run.DeadlineAt)).ToList();
     }
+
+    /// <summary>
+    /// The frozen spec as the page reads it (card F-014). A row whose JSON no longer parses is rendered
+    /// as "no definition" rather than failing the page: the run's status and log are still the record.
+    /// </summary>
+    private static PipelineSpec? ReadPipeline(string? pipelineSpecJson) =>
+        PipelineSpecJson.TryRead(pipelineSpecJson, out var spec, out _) ? spec : null;
 }

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
 using Xunit;
+using Zenkins.Tests.Pipelines;
 using Zenkins.Worker;
 
 namespace Zenkins.Tests.WorkerRuntime;
@@ -24,12 +25,16 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
     private readonly string _workRoot = Path.Combine(
         Path.GetTempPath(), $"zenkins-f007-stub-{Guid.NewGuid():N}");
 
+    /// <summary>F-014: every claim is a pipeline run, so the stub hands out a real repository fixture.</summary>
+    private readonly PipelineRepository _repository = PipelineRepository.Create(
+        PipelineTestData.Pipeline("stub", PipelineTestData.Step("Echo", "echo", "ok")));
+
     [Fact]
     public async Task A_409_on_the_completed_report_gives_the_run_up_and_the_loop_claims_the_next_run()
     {
         var run1 = Guid.NewGuid();
         var run2 = Guid.NewGuid();
-        using var stub = new StubWorkerApiServer();
+        using var stub = new StubWorkerApiServer(_repository.FileUrl);
         stub.QueueClaim(run1);
         stub.QueueClaim(run2);
         // The pre-fix starvation scenario: the first completed report landed but its response was
@@ -69,7 +74,7 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
     {
         var run1 = Guid.NewGuid();
         var run2 = Guid.NewGuid();
-        using var stub = new StubWorkerApiServer();
+        using var stub = new StubWorkerApiServer(_repository.FileUrl);
         stub.QueueClaim(run1);
         stub.QueueClaim(run2);
         // A 409 on the accepted edge (expired/foreign lease) is a definitive per-run answer.
@@ -180,7 +185,7 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
     /// completed answer 200 per run unless that run is pinned to a status, and every attempt is
     /// counted so the tests can prove give-up (one attempt) versus retry (many).
     /// </summary>
-    private sealed class StubWorkerApiServer : HttpMessageHandler
+    private sealed class StubWorkerApiServer(string repositoryUrl) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<Guid> _claims = new();
         private readonly ConcurrentDictionary<Guid, int> _accepted = [];
@@ -214,7 +219,7 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
                     return Json(
                         HttpStatusCode.OK,
                         $$"""
-                        {"runId":"{{runId}}","projectId":"{{Guid.NewGuid()}}","command":["dotnet","--version"],"leaseExpiresAt":"2026-11-13T12:00:00Z"}
+                        {"runId":"{{runId}}","projectId":"{{Guid.NewGuid()}}","repositoryUrl":"{{repositoryUrl}}","branch":"main","pipelinePath":"pipeline.lua","leaseExpiresAt":"2026-11-13T12:00:00Z"}
                         """);
                 }
 
@@ -231,7 +236,17 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
                 if (segments[4] == "accepted")
                 {
                     _accepted.AddOrUpdate(reportedRun, 1, (_, count) => count + 1);
-                    return new HttpResponseMessage(AcceptStatus.GetValueOrDefault(reportedRun, HttpStatusCode.OK));
+                    var acceptStatus = AcceptStatus.GetValueOrDefault(reportedRun, HttpStatusCode.OK);
+                    return acceptStatus is HttpStatusCode.OK
+                        ? Json(acceptStatus, """{"status":"Running","deadlineAt":"2026-11-13T13:00:00Z"}""")
+                        : new HttpResponseMessage(acceptStatus);
+                }
+
+                if (segments[4] == "definition")
+                {
+                    // F-014: two sends share this endpoint - the commit-only one right after the clone,
+                    // then the spec. Both are accepted here; the card's own tests pin the refusals.
+                    return Json(HttpStatusCode.OK, """{"status":"Running"}""");
                 }
 
                 if (segments[4] == "completed")
@@ -273,6 +288,7 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
 
     public void Dispose()
     {
+        _repository.Dispose();
         try
         {
             Directory.Delete(_workRoot, recursive: true);

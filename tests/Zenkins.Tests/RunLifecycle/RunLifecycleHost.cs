@@ -50,6 +50,14 @@ public sealed class RunLifecycleHost : IDisposable
 
     public Task<Guid> OrganizationIdAsync() => Inner.OrganizationIdAsync();
 
+    /// <summary>Seeds a project pointed at a local repository fixture (F-014).</summary>
+    public Task<Guid> SeedProjectAsync(
+        string name,
+        string repositoryUrl,
+        string defaultBranch = "main",
+        string pipelinePath = "pipeline.lua") =>
+        Inner.SeedProjectAsync(name, repositoryUrl, defaultBranch, pipelinePath);
+
     public Task<(Guid ProjectId, HttpClient Owner)> CreateProjectAsync(string name = "lifecycle-project") =>
         Inner.CreateProjectAsync(name);
 

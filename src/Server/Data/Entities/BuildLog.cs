@@ -33,7 +33,7 @@ public sealed class BuildLog : ITenantOwned
     public string Stream { get; set; } = LogStream.StdOut;
 
     /// <summary>The line's content without its newline. Deliberately no max length: a child
-    /// process may emit arbitrarily long lines (same reasoning as <c>BuildRun.CommandJson</c>).</summary>
+    /// process may emit arbitrarily long lines (the same reasoning as the run's frozen spec text).</summary>
     public string Message { get; set; } = string.Empty;
 
     /// <summary>When the Worker captured the line (worker clock, monotonic per line).</summary>

@@ -9,9 +9,9 @@ namespace Zenkins.Server.Runs;
 public static class RunErrorCodes
 {
     // Trigger-form validation (field-level, PRG ?error=).
-    public const string ArgvEmpty = "argv-empty";
-    public const string ArgvTooManyArguments = "argv-too-many-arguments";
-    public const string ArgvArgumentTooLong = "argv-argument-too-long";
+
+    /// <summary>F-014: the trigger form's optional branch is not a valid git ref.</summary>
+    public const string BranchInvalid = "branch-invalid";
     public const string TagUnknown = "tag-unknown";
     public const string TagInvalid = "tag-invalid";
     public const string TimeoutInvalid = "timeout-invalid";
@@ -24,6 +24,14 @@ public static class RunErrorCodes
 
     // Reporting payload validation (400).
     public const string FieldInvalid = "field-invalid";
+
+    /// <summary>F-014: the definition report's spec was refused (bad version, empty/too-long step
+    /// list, over-long JSON).</summary>
+    public const string PipelineSpecInvalid = "pipeline-spec-invalid";
+
+    /// <summary>F-014: the run already has a frozen spec and the report carried a different one. The
+    /// spec is immutable, so a second, different definition is refused rather than silently ignored.</summary>
+    public const string PipelineSpecFrozen = "pipeline-spec-frozen";
 }
 
 /// <summary>

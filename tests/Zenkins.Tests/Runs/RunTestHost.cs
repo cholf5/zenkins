@@ -55,6 +55,31 @@ public sealed class RunTestHost : IDisposable
         return (projectId, owner);
     }
 
+    /// <summary>
+    /// Seeds a project whose repository is <paramref name="repositoryUrl"/> (card F-014): the pipeline
+    /// tests point at a local <c>file://</c> fixture repository, which the project form deliberately
+    /// refuses - the form protects a product path, a test needs a repository it can actually clone.
+    /// </summary>
+    public Task<Guid> SeedProjectAsync(
+        string name,
+        string repositoryUrl,
+        string defaultBranch = "main",
+        string pipelinePath = "pipeline.lua") =>
+        InSystemScopeAsync(async context =>
+        {
+            var project = new Project
+            {
+                OrganizationId = await OrganizationIdAsync(),
+                Name = name,
+                RepositoryUrl = repositoryUrl,
+                DefaultBranch = defaultBranch,
+                PipelinePath = pipelinePath,
+            };
+            context.Projects.Add(project);
+            await context.SaveChangesAsync();
+            return project.Id;
+        });
+
     /// <summary>Registers a worker through the real API; returns (worker token plaintext, worker id).</summary>
     public async Task<(string Token, Guid WorkerId)> RegisterWorkerAsync(
         string name = "build-agent-1",
@@ -120,11 +145,14 @@ public sealed class RunTestHost : IDisposable
     }
 
     /// <summary>Seeds a queued run directly (fast path for the queue-heavy tests).</summary>
+    /// <param name="branch">F-014: the branch the run builds.</param>
+    /// <param name="pipelinePath">F-014: the pipeline file this run looks for (snapshot at trigger time).</param>
     public async Task<Guid> AddRunAsync(
         Guid projectId,
         string requiredTags = "",
-        string command = "dotnet --version",
-        Guid organizationId = default)
+        string branch = "main",
+        Guid organizationId = default,
+        string pipelinePath = "pipeline.lua")
     {
         var runId = await Host.InScopeAsync(async services =>
         {
@@ -138,7 +166,8 @@ public sealed class RunTestHost : IDisposable
                 ProjectId = projectId,
                 TriggerType = BuildRunTriggerType.Manual,
                 RequiredTags = requiredTags,
-                CommandJson = RunValidation.EncodeCommandJson(command.Split(' ')),
+                GitBranch = branch,
+                PipelinePath = pipelinePath,
             };
             context.BuildRuns.Add(run);
             await context.SaveChangesAsync();
@@ -155,7 +184,7 @@ public sealed class RunTestHost : IDisposable
     public static Task<HttpResponseMessage> StartRunAsync(
         HttpClient client,
         Guid projectId,
-        string? command,
+        string? branch = null,
         string? requiredTags = null,
         string? timeoutMinutes = null) =>
         OrganizationTestHost.PostFormAsync(
@@ -164,7 +193,8 @@ public sealed class RunTestHost : IDisposable
             $"/projects/{projectId}/runs/start",
             new Dictionary<string, string>
             {
-                ["Command"] = command ?? string.Empty,
+                // F-014: a run selects a branch, never a command line. Blank means the project default.
+                ["Branch"] = branch ?? string.Empty,
                 ["RequiredTags"] = requiredTags ?? string.Empty,
                 ["TimeoutMinutes"] = timeoutMinutes ?? string.Empty,
             });
@@ -173,11 +203,11 @@ public sealed class RunTestHost : IDisposable
     public static async Task<Guid> TriggerRunAsync(
         HttpClient client,
         Guid projectId,
-        string command = "dotnet\n--version",
+        string? branch = null,
         string? requiredTags = null,
         string? timeoutMinutes = null)
     {
-        var response = await StartRunAsync(client, projectId, command, requiredTags, timeoutMinutes);
+        var response = await StartRunAsync(client, projectId, branch, requiredTags, timeoutMinutes);
         Assert.True((int)response.StatusCode is 302 or 303,
             $"Expected a redirect, got {(int)response.StatusCode}.");
         var location = response.Headers.Location!.OriginalString;
@@ -195,16 +225,30 @@ public sealed class RunTestHost : IDisposable
             $"/api/workers/runs/{runId}/accepted",
             new { });
 
+    /// <summary>Posts the F-014 definition report (resolved commit + frozen spec).</summary>
+    public static Task<HttpResponseMessage> ReportDefinitionAsync(
+        HttpClient client,
+        string workerToken,
+        Guid runId,
+        string? pipelineSpecJson,
+        string? gitCommit = null) =>
+        WorkerTestHost.SendWorkerJsonAsync(
+            client,
+            workerToken,
+            $"/api/workers/runs/{runId}/definition",
+            new { gitCommit, pipelineSpecJson });
+
     public static Task<HttpResponseMessage> CompleteAsync(
         HttpClient client,
         string workerToken,
         Guid runId,
-        int exitCode) =>
+        int? exitCode,
+        string? failureReason = null) =>
         WorkerTestHost.SendWorkerJsonAsync(
             client,
             workerToken,
             $"/api/workers/runs/{runId}/completed",
-            new { exitCode });
+            new { exitCode, failureReason });
 
     public static async Task<Guid> ReadClaimedRunIdAsync(HttpResponseMessage response)
     {
@@ -212,6 +256,16 @@ public sealed class RunTestHost : IDisposable
         var body = await response.Content.ReadAsStringAsync();
         using var document = JsonDocument.Parse(body);
         return document.RootElement.GetProperty("runId").GetGuid();
+    }
+
+    /// <summary>Reads one property of the claim payload (F-014's repository/branch/pipeline path).</summary>
+    public static async Task<string> ReadClaimStringAsync(HttpResponseMessage response, string property)
+    {
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty(property).GetString()
+            ?? throw new InvalidOperationException($"The claim response's {property} was null.");
     }
 
     public static async Task<string> ReadReportStatusAsync(HttpResponseMessage response)

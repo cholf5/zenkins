@@ -20,6 +20,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- F-014: the Lua prelude (pipeline/step/log/is_*), shipped inside the worker binary and loaded
+         as its own chunk before pipeline.lua. The logical name is what the loader reads; a golden
+         test asserts the resource really is embedded in the built worker. -->
+    <EmbeddedResource Include="Lua/prelude.lua" LogicalName="Zenkins.Worker.Lua.prelude.lua" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- F-011 follow-up: the conformance fixture composes one extra engine module through
          LuaRuntimeOptions.AdditionalModules, which stays internal so production cannot opt into
          extra modules by accident. Same pattern as src/Server/Zenkins.Server.csproj. -->

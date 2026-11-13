@@ -131,6 +131,15 @@ public sealed class LuaRuntime : ILuaRuntime
         string name,
         DateTimeOffset deadline,
         CancellationToken cancellationToken)
+        => Execute(source, name, deadline, cancellationToken, options: null);
+
+    /// <inheritdoc />
+    public LuaExecutionResult Execute(
+        string source,
+        string name,
+        DateTimeOffset deadline,
+        CancellationToken cancellationToken,
+        LuaExecutionOptions? options)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -158,11 +167,35 @@ public sealed class LuaRuntime : ILuaRuntime
         DynValue function;
         try
         {
+            if (options?.Globals is { Count: > 0 } globals)
+            {
+                // Host-defined strings the prelude reads (today: the platform). Set after Harden so
+                // a script cannot shadow them before the prelude loads.
+                foreach (var (globalName, globalValue) in globals)
+                {
+                    script.Globals[globalName] = DynValue.NewString(globalValue);
+                }
+            }
+
+            // F-014: the prelude is its own chunk, loaded and run first, so every position in a
+            // user error stays relative to the user's file (§6.1's split between a small C# kernel
+            // and a Lua prelude). It only defines functions, so running it to completion here is
+            // bounded work - never driven by the script.
+            if (!string.IsNullOrEmpty(options?.PreludeSource))
+            {
+                script.Call(script.LoadString(
+                    options!.PreludeSource, null, options.PreludeName));
+            }
+
             function = script.LoadString(source, null, name);
         }
         catch (SyntaxErrorException ex)
         {
-            throw LuaScriptException.FromDecoratedMessage(ex.DecoratedMessage, name);
+            throw LuaScriptException.FromDecoratedMessage(ex.DecoratedMessage, name, LuaScriptErrorKind.Syntax);
+        }
+        catch (ScriptRuntimeException ex)
+        {
+            throw LuaScriptException.FromDecoratedMessage(ex.DecoratedMessage, name, LuaScriptErrorKind.Runtime);
         }
 
         var coroutine = script.CreateCoroutine(function).Coroutine;
@@ -221,15 +254,119 @@ public sealed class LuaRuntime : ILuaRuntime
         }
         catch (ScriptRuntimeException ex)
         {
-            throw LuaScriptException.FromDecoratedMessage(ex.DecoratedMessage, name);
+            throw LuaScriptException.FromDecoratedMessage(ex.DecoratedMessage, name, LuaScriptErrorKind.Runtime);
         }
         catch (SyntaxErrorException ex)
         {
-            throw LuaScriptException.FromDecoratedMessage(ex.DecoratedMessage, name);
+            throw LuaScriptException.FromDecoratedMessage(ex.DecoratedMessage, name, LuaScriptErrorKind.Syntax);
         }
 
-        return new LuaExecutionResult(LuaExecutionOutcome.Completed, RenderValue(result));
+        return new LuaExecutionResult(
+            LuaExecutionOutcome.Completed,
+            RenderValue(result),
+            ReadResult(result, script, options?.ResultGlobal));
     }
+
+    /// <summary>
+    /// The script's result as a seam value (card F-014): the value it returned, or - when it returned
+    /// nothing - the value of <paramref name="resultGlobal"/>. Scalars keep their kind, a table becomes
+    /// a <see cref="LuaHostTable"/> the caller can validate field by field.
+    /// </summary>
+    private static LuaHostValue ReadResult(DynValue result, Script script, string? resultGlobal)
+    {
+        if (result.Type is not (DataType.Nil or DataType.Void))
+        {
+            return ToSeamValue(result, script, depth: 0);
+        }
+
+        if (string.IsNullOrEmpty(resultGlobal))
+        {
+            return LuaHostValue.Nil;
+        }
+
+        return ToSeamValue(script.Globals.Get(resultGlobal), script, depth: 0);
+    }
+
+    /// <summary>
+    /// Converts a Lua value into the seam's structural form, recursing through tables. The shape of a
+    /// table is decided once, not per key: an array is a sequence (integer keys <c>1..n</c>, no holes),
+    /// a map has string keys only. A mixed-key table has no seam equivalent - <see cref="LuaHostTable"/>'
+    /// two shapes exist so a caller can trust what it walks - so it is refused with a script error
+    /// naming the problem instead of being silently lossy.
+    /// </summary>
+    private static LuaHostValue ToSeamValue(DynValue value, Script script, int depth)
+    {
+        if (depth > MaxResultDepth)
+        {
+            throw LuaScriptException.FromHost(
+                $"the script's result nests tables deeper than {MaxResultDepth} levels.");
+        }
+
+        switch (value.Type)
+        {
+            case DataType.Nil:
+            case DataType.Void:
+                return LuaHostValue.Nil;
+            case DataType.String:
+                return LuaHostValue.FromString(value.String);
+            case DataType.Number:
+                return LuaHostValue.FromNumber(value.Number);
+            case DataType.Boolean:
+                return LuaHostValue.FromBoolean(value.Boolean);
+            case DataType.Table:
+                return LuaHostValue.FromTable(ToHostTable(value.Table, script, depth));
+            default:
+                // A function, thread or user-data has no description in the seam; it is nil for the
+                // caller (the definition validator then reports the field it expected as invalid).
+                return LuaHostValue.Nil;
+        }
+    }
+
+    private static LuaHostTable ToHostTable(Table table, Script script, int depth)
+    {
+        var pairs = table.Pairs.ToArray();
+        if (pairs.Length == 0)
+        {
+            // An empty table has no shape of its own. A sequence is the neutral answer: it has a
+            // length of zero, and the definition validator treats "empty" as "nothing declared" for
+            // every field that accepts a map (env, triggers).
+            return LuaHostTable.Sequence();
+        }
+
+        var isSequence = pairs.All(pair => pair.Key.Type == DataType.Number
+            && pair.Key.Number >= 1
+            && pair.Key.Number <= pairs.Length
+            && pair.Key.Number == Math.Floor(pair.Key.Number));
+
+        if (isSequence)
+        {
+            // Keys are 1..n by the test above; a table cannot hold one key twice, so filling by index
+            // is total. A hole cannot exist (a nil value removes its key), which is why #v and ipairs
+            // agree with the description.
+            var items = new LuaHostValue[pairs.Length];
+            foreach (var pair in pairs)
+            {
+                items[(int)pair.Key.Number - 1] = ToSeamValue(pair.Value, script, depth + 1);
+            }
+
+            return LuaHostTable.Sequence(items);
+        }
+
+        if (pairs.Any(pair => pair.Key.Type != DataType.String || pair.Key.String.Length == 0))
+        {
+            throw MixedKeys();
+        }
+
+        return LuaHostTable.Map([.. pairs.Select(pair =>
+            (pair.Key.String, ToSeamValue(pair.Value, script, depth + 1)))]);
+    }
+
+    private static LuaScriptException MixedKeys() => LuaScriptException.FromHost(
+        "a table in the pipeline definition mixes array and map keys (or has a hole); "
+        + "use either a list ({ \"a\", \"b\" }) or a map ({ name = \"x\" }).");
+
+    /// <summary>How deep a result table may nest before the host refuses it (cheap stack guard).</summary>
+    private const int MaxResultDepth = 32;
 
     private static void EnsureOwningThread(int ownerThread)
     {
@@ -308,6 +445,13 @@ public sealed class LuaRuntime : ILuaRuntime
         }
 
         var result = primitive(new LuaHostCall(name, arguments));
+        if (result.Failure is { } failure)
+        {
+            // A refused call (F-014): raised as a Lua error at this call site, so a script's pcall can
+            // catch it and the run log shows source:(line,col) rather than a silent nil.
+            throw new ScriptRuntimeException(failure);
+        }
+
         if (!result.IsSuspended)
         {
             return ToDynValue(result.ImmediateValue, script);
