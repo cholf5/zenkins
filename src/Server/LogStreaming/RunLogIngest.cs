@@ -342,7 +342,7 @@ public sealed class RunLogIngest(
         CancellationToken cancellationToken)
     {
         // Within-batch duplicates (a misbehaving sender) must not poison the insert.
-        var lines = batch.DistinctBy(line => line.Seq).ToArray();
+        var batchLines = batch.DistinctBy(line => line.Seq).ToArray();
 
         // The ingest is a singleton: every flush opens its own DI scope (the LeaseSweeper
         // pattern) - one context and one system scope per flush, never a shared one.
@@ -351,6 +351,12 @@ public sealed class RunLogIngest(
         var systemDataScope = scope.ServiceProvider.GetRequiredService<ISystemDataScope>();
         using var systemScope = systemDataScope.BeginScope();
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        // F-015: a step id is attribution, not something the worker may assert freely. Only the ids of steps
+        // that really belong to this run survive; anything else (another run's step, a fabricated id) is
+        // dropped to null, so a line can never be grouped under a step it did not come from - and the run page
+        // never silently loses a line because its attribution was forged.
+        var lines = await ValidateStepIdsAsync(context, runId, batchLines, cancellationToken);
 
         await InsertWithDedupeAsync(context, runId, organizationId, lines, cancellationToken);
 
@@ -388,6 +394,55 @@ public sealed class RunLogIngest(
                 lines.Length,
                 runId);
         }
+    }
+
+    /// <summary>
+    /// Keeps a line's <c>StepId</c> only when the step row belongs to <b>this run</b> (card F-015).
+    /// <para>
+    /// <b>Why dropping the attribution beats rejecting the line.</b> A forged or stale id is a bug or a hostile
+    /// worker, and either way the line's text is still evidence about the run; rejecting the row would let a
+    /// single bad id erase diagnostic output. Nulling it keeps the line, loses only the grouping, and makes the
+    /// database's step segmentation mean what it says.
+    /// </para>
+    /// <para>
+    /// Cross-tenant by nature (the ingest serves every organization) and already inside a system scope, so the
+    /// read bypasses the tenant filter - the same discipline as the lease sweeper's cross-tenant writes.
+    /// </para>
+    /// </summary>
+    private static async Task<LogLineMessage[]> ValidateStepIdsAsync(
+        ZenkinsDbContext context,
+        Guid runId,
+        LogLineMessage[] lines,
+        CancellationToken cancellationToken)
+    {
+        var claimed = lines
+            .Where(line => line.StepId is not null)
+            .Select(line => line.StepId!.Value)
+            .Distinct()
+            .ToArray();
+        if (claimed.Length == 0)
+        {
+            return lines;
+        }
+
+        var owned = (await context.BuildSteps
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(step => step.RunId == runId && claimed.Contains(step.Id))
+                .Select(step => step.Id)
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+
+        var validated = new LogLineMessage[lines.Length];
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            validated[i] = line.StepId is { } stepId && !owned.Contains(stepId)
+                ? line with { StepId = null }
+                : line;
+        }
+
+        return validated;
     }
 
     /// <summary>
@@ -448,6 +503,10 @@ public sealed class RunLogIngest(
                 Stream = line.Stream,
                 Message = line.Message,
                 Timestamp = line.Timestamp,
+
+                // F-015: the per-step segmentation the worker stamped on the line (null for the
+                // definition phase and the lines between steps).
+                StepId = line.StepId,
             });
         }
     }

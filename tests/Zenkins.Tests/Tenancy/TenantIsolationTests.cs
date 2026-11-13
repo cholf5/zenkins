@@ -5,6 +5,7 @@ using Xunit;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Tests.Tenancy;
@@ -217,6 +218,66 @@ public sealed class TenantIsolationTests : IDisposable
         var secret = Assert.Single(verification.Secrets.ToList());
         Assert.Equal(TwoOrgsFixture.SecretAName, secret.Name);
         Assert.Equal(TwoOrgsFixture.OrgAId, secret.OrganizationId);
+    }
+
+    [Fact]
+    public void Duplicate_step_position_is_rejected_by_the_unique_index_sqlite()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // A's run already has its step 1, so a second row for the same position must be refused by the
+            // database - the (RunId, Index) index is the ordering authority, not a pre-flight query, and it is
+            // what makes a re-delivered step report land on the row that already exists.
+            context.BuildSteps.Add(new BuildStep
+            {
+                RunId = TwoOrgsFixture.BuildRunAId,
+                Index = 1,
+                Name = "Restore",
+                Status = PipelineStepStatus.Success,
+                ExitCode = 0,
+            });
+
+            var exception = Assert.Throws<DbUpdateException>(() => context.SaveChanges());
+
+            var sqlite = Assert.IsType<SqliteException>(exception.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains(
+                "UNIQUE constraint failed: BuildSteps.RunId, BuildSteps.Index",
+                sqlite.Message,
+                StringComparison.Ordinal);
+        }
+
+        using var verification = _fixture.CreateContext();
+        var step = Assert.Single(verification.BuildSteps.ToList());
+        Assert.Equal(TwoOrgsFixture.OrgAId, step.OrganizationId);
+        Assert.Equal(PipelineStepStatus.Success, step.Status);
+    }
+
+    [Fact]
+    public async Task Deleting_a_run_cascades_its_steps_and_leaves_another_runs_steps_alone()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // A step is not meaningful without its run, so the foreign key cascades (card F-015). Deleting the run
+            // through the product's own context is the closest a test gets to a project/organization cascade.
+            context.BuildRuns.Remove(context.BuildRuns.Single(run => run.Id == TwoOrgsFixture.BuildRunAId));
+            context.SaveChanges();
+        }
+
+        var remaining = await _fixture.ReadAcrossTenantsAsync<BuildStep>(_ => true, CancellationToken);
+
+        // A's step went with its run...
+        Assert.DoesNotContain(remaining, step => step.RunId == TwoOrgsFixture.BuildRunAId);
+
+        // ...and the cascade did not reach across runs or tenants.
+        var survivor = Assert.Single(remaining);
+        Assert.Equal(TwoOrgsFixture.BuildStepBId, survivor.Id);
+        Assert.Equal(TwoOrgsFixture.BuildRunBId, survivor.RunId);
+        Assert.Equal(TwoOrgsFixture.OrgBId, survivor.OrganizationId);
     }
 
     [Fact]

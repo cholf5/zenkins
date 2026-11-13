@@ -76,9 +76,10 @@ public static class GitCredentialValidation
     public const int MaxUserNameLength = 200;
 
     /// <summary>
-    /// Shortest accepted value. A short value would be redactable-but-useless and is always a
-    /// misconfiguration (a truncated paste); the worker's log filter also refuses to redact values
-    /// shorter than four characters, so anything accepted here is actually protected there.
+    /// Shortest accepted value. A short value is almost always a misconfiguration (a truncated paste) and
+    /// a real credential is longer than this. The worker's log filter redacts every non-empty value
+    /// regardless of length (F-015 removed its old four-character threshold), so the rule here is about
+    /// rejecting a broken credential, not about what the filter can protect.
     /// </summary>
     public const int MinValueLength = 8;
 

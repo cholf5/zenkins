@@ -7,6 +7,7 @@ using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Tenancy;
 
 // The worker project's namespace is Zenkins.Worker, which shadows the entity type name inside any
@@ -82,6 +83,12 @@ public sealed class TwoOrgsFixture : IDisposable
 
     /// <summary>B's only build run.</summary>
     public static readonly Guid BuildRunBId = new("b0000000-0000-4000-8000-000000000052");
+
+    /// <summary>A's only recorded step (of A's only run), the positive control for the F-015 probes.</summary>
+    public static readonly Guid BuildStepAId = new("a0000000-0000-4000-8000-000000000053");
+
+    /// <summary>B's only recorded step.</summary>
+    public static readonly Guid BuildStepBId = new("b0000000-0000-4000-8000-000000000054");
 
     /// <summary>A's only secret, the positive control for the F-012 probes.</summary>
     public static readonly Guid SecretAId = new("a0000000-0000-4000-8000-000000000061");
@@ -392,6 +399,34 @@ public sealed class TwoOrgsFixture : IDisposable
                 Stream = LogStream.StdErr,
                 Message = "beta-line",
                 Timestamp = DateTimeOffset.UtcNow,
+            });
+
+        // F-015: one recorded step per organization's run, so the read/write/find probes are not vacuous
+        // (and so the unique (RunId, Index) index has a row to collide with).
+        context.BuildSteps.AddRange(
+            new BuildStep
+            {
+                Id = BuildStepAId,
+                OrganizationId = OrgAId,
+                RunId = BuildRunAId,
+                Index = 1,
+                Name = "Restore",
+                Status = PipelineStepStatus.Success,
+                StartedAt = DateTimeOffset.UtcNow,
+                EndedAt = DateTimeOffset.UtcNow,
+                ExitCode = 0,
+            },
+            new BuildStep
+            {
+                Id = BuildStepBId,
+                OrganizationId = OrgBId,
+                RunId = BuildRunBId,
+                Index = 1,
+                Name = "Build",
+                Status = PipelineStepStatus.Failed,
+                StartedAt = DateTimeOffset.UtcNow,
+                EndedAt = DateTimeOffset.UtcNow,
+                ExitCode = 3,
             });
 
         // F-012: one secret per organization (the read/write/unique-index probes need a row on each

@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.RunCancellation;
+using Zenkins.Worker.Git;
 using Zenkins.Worker.Pipelines;
 
 namespace Zenkins.Worker;
@@ -64,9 +65,10 @@ public sealed class WorkerRunLoop(
     public const int InfrastructureFailureExitCode = 70;
 
     /// <summary>The temp log files the run's captured streams land in (transition-period local
-    /// copies; the server's incremental persistence is authoritative since F-008).</summary>
-    public const string StdOutLogFileName = "stdout.log";
-    public const string StdErrorLogFileName = "stderr.log";
+    /// copies; the server's incremental persistence is authoritative since F-008). The names live with the
+    /// writers themselves (F-015), because they are that type's contract now.</summary>
+    public const string StdOutLogFileName = RunLogWriters.StdOutLogFileName;
+    public const string StdErrorLogFileName = RunLogWriters.StdErrorLogFileName;
 
     /// <summary>
     /// Claims and executes runs until shutdown. One iteration is one full claim → execute → report
@@ -333,13 +335,9 @@ public sealed class WorkerRunLoop(
         CancellationToken cancelKill,
         Task<RunCancelRequest> cancelRequested)
     {
-        // Fresh empty logs per execution (a retried claim of the same run must not append stale
-        // output); AutoFlush so an observer sees lines as they are produced.
-        Directory.CreateDirectory(work.TempPath);
-        await using var stdOutWriter = new StreamWriter(
-            Path.Combine(work.TempPath, StdOutLogFileName), append: false) { AutoFlush = true };
-        await using var stdErrorWriter = new StreamWriter(
-            Path.Combine(work.TempPath, StdErrorLogFileName), append: false) { AutoFlush = true };
+        // The run's local log files: fresh per execution (a retried claim of the same run must not append
+        // stale output), written through the type's own gate because three threads feed them (card F-015).
+        using var writers = new RunLogWriters(work.TempPath);
 
         // F-008: every line flows upstream with a per-run monotonic Seq while a drain task ships
         // batches to the server; the temp files stay (transition-period debugging aid). The
@@ -349,28 +347,34 @@ public sealed class WorkerRunLoop(
             claim.RunId, configuration.LogBufferLines, errorLog, isConnected: () => logStreams.IsConnected);
         var pump = logBuffer.DrainAsync(logStreams, shutdown);
 
+        // The run's redaction filter (F-013's Git credential plus F-015's secrets). Every line the run emits
+        // leaves through it - the pipeline layer's own synthesized lines, the definition phase's print/log,
+        // and a child's stdout/stderr - and every value decrypted for this run is registered with it the
+        // instant it is known. It is log hygiene, not a boundary (docs/lua-runtime.md §7).
+        var redactor = new GitLogFilter();
+
+        // The step whose segment the next line belongs to (card F-015). A holder rather than a captured
+        // Guid?: the two output readers run on their own threads, so the value is published as one atomic
+        // reference that a reader can never observe half-written.
+        var currentStep = new StepStampHolder();
+
         // The kill token: shutdown OR the server's cancel request for this run. ProcessRunner
         // kills the whole tree on cancellation, and the Lua driver abandons the script.
         using var killTokens = CancellationTokenSource.CreateLinkedTokenSource(shutdown, cancelKill);
 
         void Emit(string line)
         {
-            stdOutWriter.WriteLine(line);
-            logBuffer.Emit(LogStream.StdOut, line);
+            var redacted = redactor.Redact(line);
+            writers.Write(LogStream.StdOut, redacted);
+            logBuffer.Emit(LogStream.StdOut, redacted, currentStep.Current);
         }
 
         void OnOutput(ProcessOutputLine line)
         {
-            if (line.Stream == ProcessOutputStream.StdOut)
-            {
-                stdOutWriter.WriteLine(line.Line);
-                logBuffer.Emit(LogStream.StdOut, line.Line);
-            }
-            else
-            {
-                stdErrorWriter.WriteLine(line.Line);
-                logBuffer.Emit(LogStream.StdErr, line.Line);
-            }
+            var redacted = redactor.Redact(line.Line);
+            var stream = line.Stream == ProcessOutputStream.StdOut ? LogStream.StdOut : LogStream.StdErr;
+            writers.Write(stream, redacted);
+            logBuffer.Emit(stream, redacted, currentStep.Current);
         }
 
         // The pipeline layer's own dependencies: the run's log sink (the prelude's print/log), F-013's
@@ -397,6 +401,18 @@ public sealed class WorkerRunLoop(
                 },
                 Log = Emit,
                 OnProcessOutput = OnOutput,
+
+                // F-015: the run's redaction filter, the per-run secret cache (a fetch per name at most),
+                // the server-side step sink and the step announcement that stamps the log per step.
+                Redactor = redactor,
+                Secrets = new RunSecretCache(new ServerSecretSource(api, workerToken, claim.RunId)),
+                StepSink = new ServerStepSink(api, workerToken, claim.RunId, backoff, errorLog),
+                OnStepChanged = currentStep.Set,
+
+                // F-015: the killed step records why it died, through the one shared predicate (so a test that
+                // simulates the same cancel cannot drift from this decision).
+                CancellationFailureReason = () => StepCancellationReason.For(
+                    cancelRequested.IsCompletedSuccessfully ? cancelRequested.Result.Reason : null),
             },
             definitions,
             cancellationToken => api.FetchGitCredentialAsync(workerToken, claim.RunId, cancellationToken),
@@ -410,19 +426,26 @@ public sealed class WorkerRunLoop(
         }
         catch (Exception failure)
         {
-            // A bug in the pipeline layer must not leave the run Running forever: report it as a
-            // failed step and keep the message in the run log (the server-side log shows why).
-            var message = $"zenkins-worker: the run could not be executed: {failure.Message}";
-            await stdErrorWriter.WriteLineAsync(message);
-            logBuffer.Emit(LogStream.StdErr, message);
+            // A bug in the pipeline layer must not leave the run Running forever: report it as a failed step and
+            // keep the message in the run log (the server-side log shows why). Even a bug's message is a line of
+            // this run's log, so it goes through the filter and the writer gate like every other line (card
+            // F-015) - the type owns that composition, and its test pins it.
+            // The reporter owns the whole composition: filter, writer gate, streaming buffer and the worker's own
+            // console channel (which receives the same, already-redacted text).
+            new RunCrashReporter(
+                    claim.RunId,
+                    redactor,
+                    writers,
+                    logBuffer,
+                    () => currentStep.Current,
+                    errorLog)
+                .Report(failure);
             logBuffer.CompleteInput();
             if (logStreams.HasEverConnected)
             {
                 await pump;
             }
 
-            await errorLog.WriteLineAsync(
-                $"Zenkins Worker: run {claim.RunId} could not be executed ({failure.Message}).");
             return new RunExecutionResult(null, PipelineFailureReasons.StepFailed);
         }
 
@@ -636,6 +659,22 @@ public sealed class WorkerRunLoop(
     /// <summary>The failures whose retry can succeed (transport, timeouts, hung requests).</summary>
     private static bool IsTransient(Exception failure) =>
         failure is HttpRequestException or SocketException;
+
+    /// <summary>
+    /// The current step's id, read by the log writers. The value is published as one atomic reference so a
+    /// reader thread never observes a torn value: a <see cref="Guid"/> is sixteen bytes, which is not an
+    /// atomic write on every platform.
+    /// </summary>
+    private sealed class StepStampHolder
+    {
+        private volatile object? _value;
+
+        /// <summary>The current step, or null between steps and during the definition phase.</summary>
+        public Guid? Current => _value is Guid id ? id : null;
+
+        /// <summary>Announces the step whose lines follow (null ends the segment).</summary>
+        public void Set(Guid? id) => _value = id;
+    }
 
     private static string Describe(Exception failure) => failure switch
     {

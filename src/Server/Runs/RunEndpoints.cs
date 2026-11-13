@@ -46,6 +46,7 @@ public static class RunEndpoints
         api.MapPost("/claim", ClaimAsync);
         api.MapPost("/runs/{runId:guid}/accepted", AcceptAsync);
         api.MapPost("/runs/{runId:guid}/definition", ReportDefinitionAsync);
+        api.MapPost("/runs/{runId:guid}/steps", ReportStepAsync);
         api.MapPost("/runs/{runId:guid}/completed", CompleteAsync);
         api.MapPost("/runs/{runId:guid}/canceled", ReportCanceledAsync);
 
@@ -174,6 +175,41 @@ public static class RunEndpoints
             request.PipelineSpecJson,
             httpContext.RequestAborted));
 
+    /// <summary>
+    /// F-015: one step transition (before it starts and after it ends). The answer carries the recorded
+    /// step's id, which the worker stamps on the step's log lines. 400 is a payload/position mismatch,
+    /// 404 an unknown or foreign run, and 409 a run that is not this worker's, has left Running, or a
+    /// step whose report arrived out of order.
+    /// </summary>
+    private static async Task<IResult> ReportStepAsync(
+        Guid runId,
+        [FromBody] RunStepRequest request,
+        HttpContext httpContext,
+        RunService runs) =>
+        MapStepReport(await runs.ReportStepAsync(
+            WorkerEndpoints.BearerToken(httpContext),
+            runId,
+            new RunStepReport(
+                request.Index,
+                request.Name,
+                request.Status,
+                request.ExitCode,
+                request.FailureReason),
+            httpContext.RequestAborted));
+
+    private static IResult MapStepReport(RunStepResult result) => result.Status switch
+    {
+        RunOperationStatus.Success => Results.Json(
+            new RunStepResponse(result.StepId!.Value, result.StepStatus!, result.RunStatus!)),
+        RunOperationStatus.InvalidToken => Results.Unauthorized(),
+        RunOperationStatus.NotFound => Results.NotFound(),
+        RunOperationStatus.InvalidInput =>
+            Results.Json(new WorkerEndpoints.WorkerApiError(result.ErrorCode ?? RunErrorCodes.FieldInvalid),
+                statusCode: StatusCodes.Status400BadRequest),
+        _ => Results.Json(new WorkerEndpoints.WorkerApiError(result.ErrorCode ?? RunErrorCodes.InvalidTransition),
+            statusCode: StatusCodes.Status409Conflict),
+    };
+
     private static async Task<IResult> ReportCanceledAsync(
         Guid runId,
         [FromBody] RunCanceledRequest request,
@@ -291,6 +327,25 @@ public static class RunEndpoints
         public string? Outcome { get; set; }
     }
 
+    /// <summary>
+    /// The step report body (card F-015): the 1-based position in the run's frozen spec, the name that
+    /// spec declares there, the state the step reached and - when nothing exited - the closed reason.
+    /// </summary>
+    public sealed class RunStepRequest
+    {
+        public int Index { get; set; }
+
+        public string? Name { get; set; }
+
+        /// <summary>A <see cref="PipelineStepStatus"/> value; the server refuses anything else.</summary>
+        public string? Status { get; set; }
+
+        public int? ExitCode { get; set; }
+
+        /// <summary>A <see cref="PipelineStepFailureReasons"/> value, or null.</summary>
+        public string? FailureReason { get; set; }
+    }
+
     public sealed record RunClaimResponse(
         Guid RunId,
         Guid ProjectId,
@@ -301,4 +356,7 @@ public static class RunEndpoints
 
     /// <param name="DeadlineAt">F-014: the accepted answer carries the run's frozen deadline.</param>
     public sealed record RunReportResponse(string Status, DateTimeOffset? DeadlineAt = null);
+
+    /// <summary>The step report's answer (card F-015): the recorded step's id, its state and the run's.</summary>
+    public sealed record RunStepResponse(Guid StepId, string Status, string RunStatus);
 }

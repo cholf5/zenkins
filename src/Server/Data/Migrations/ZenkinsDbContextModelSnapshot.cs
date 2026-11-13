@@ -125,6 +125,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("StepId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Stream")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -240,6 +243,63 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("BuildRuns", t =>
                         {
                             t.HasCheckConstraint("CK_BuildRuns_Status", "\"Status\" IN ('Queued', 'Running', 'Success', 'Failed', 'Canceled', 'Lost')");
+                        });
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildStep", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ExitCode")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("Index")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("RunId", "Index")
+                        .IsUnique();
+
+                    b.ToTable("BuildSteps", t =>
+                        {
+                            t.HasCheckConstraint("CK_BuildSteps_Status", "\"Status\" IN ('Running', 'Success', 'Failed', 'Skipped')");
                         });
                 });
 
@@ -693,6 +753,23 @@ namespace Zenkins.Server.Data.Migrations
                     b.Navigation("Project");
 
                     b.Navigation("Worker");
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildStep", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.BuildRun", "Run")
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.GitCredential", b =>

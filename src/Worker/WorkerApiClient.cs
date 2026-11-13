@@ -91,6 +91,31 @@ public sealed record WorkerCompleteRequest(int? ExitCode, string? FailureReason 
 /// the mapping to the terminal state.</summary>
 public sealed record WorkerCanceledRequest(string Outcome);
 
+/// <summary>
+/// One step transition's payload (card F-015): the 1-based position in the run's frozen spec, the name that
+/// spec declares there, the state reached and - when nothing exited - the closed reason. Timestamps are the
+/// server's, exactly like the run's own reports.
+/// </summary>
+public sealed record WorkerStepRequest(
+    int Index,
+    string Name,
+    string Status,
+    int? ExitCode = null,
+    string? FailureReason = null);
+
+/// <summary>The step report's answer: the recorded row's id (stamped on the step's log lines), its state
+/// and the run's.</summary>
+public sealed record WorkerStepResponse(Guid StepId, string Status, string RunStatus);
+
+/// <summary>
+/// The run-scoped secret fetch (card F-015). The <b>name</b> travels in the body: a secret name has no
+/// business in a URL or an access log, and the caller is already authenticated and scoped to the run.
+/// </summary>
+public sealed record WorkerSecretRequest(string Name);
+
+/// <summary>The fetched value, for the worker's per-run in-memory cache only - never written to disk.</summary>
+public sealed record WorkerSecretResponse(string Name, string Value);
+
 /// <summary>The server answered with a definitive failure (e.g. 401); retries cannot fix it.</summary>
 public sealed class WorkerApiRejectedException(string message, int statusCode) : Exception(message)
 {
@@ -317,6 +342,70 @@ public sealed class WorkerApiClient(HttpClient httpClient)
             isRunReport: true);
     }
 
+    /// <summary>
+    /// Reports one step transition (card F-015). Its definitive 4xx answers (the run is not this worker's,
+    /// has ended, or a step arrived out of order) surface as <see cref="WorkerApiRejectedException"/> and the
+    /// run is given up; 408/425/429 are retried like every other report.
+    /// </summary>
+    public async Task<WorkerStepResponse> ReportStepAsync(
+        string workerToken,
+        Guid runId,
+        WorkerStepRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/runs/{runId}/steps",
+                workerToken,
+                request,
+                WorkerJsonContext.Default.WorkerStepRequest),
+            cancellationToken);
+        await EnsureSuccessAsync(
+            inFlight.Response,
+            "reporting a run step",
+            inFlight.Timeout,
+            isRunReport: true);
+        return await inFlight.Response.Content
+            .ReadFromJsonAsync(WorkerJsonContext.Default.WorkerStepResponse, inFlight.Timeout)
+            ?? throw new WorkerApiRejectedException(
+                "the server returned an empty step report response.",
+                (int)inFlight.Response.StatusCode);
+    }
+
+    /// <summary>
+    /// Fetches one decrypted secret for the run this worker is executing (card F-015). A 404 means "no value
+    /// for this run" - an unknown name, another organization's name, or a run that is not this worker's are
+    /// deliberately indistinguishable - and answers <see langword="null"/>; a dead token is definitive.
+    /// </summary>
+    public async Task<WorkerSecretResponse?> FetchRunSecretAsync(
+        string workerToken,
+        Guid runId,
+        string name,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/runs/{runId}/secrets",
+                workerToken,
+                new WorkerSecretRequest(name),
+                WorkerJsonContext.Default.WorkerSecretRequest),
+            cancellationToken);
+        if ((int)inFlight.Response.StatusCode == 404)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync(
+            inFlight.Response,
+            "fetching a run secret",
+            inFlight.Timeout,
+            isRunReport: true);
+        return await inFlight.Response.Content
+            .ReadFromJsonAsync(WorkerJsonContext.Default.WorkerSecretResponse, inFlight.Timeout);
+    }
+
     private static HttpRequestMessage CreateRequest(HttpMethod method, string path, string token)
     {
         var request = new HttpRequestMessage(method, path);
@@ -466,6 +555,10 @@ public sealed class WorkerApiClient(HttpClient httpClient)
 [JsonSerializable(typeof(WorkerDefinitionResponse))]
 [JsonSerializable(typeof(WorkerCompleteRequest))]
 [JsonSerializable(typeof(WorkerCanceledRequest))]
+[JsonSerializable(typeof(WorkerStepRequest))]
+[JsonSerializable(typeof(WorkerStepResponse))]
+[JsonSerializable(typeof(WorkerSecretRequest))]
+[JsonSerializable(typeof(WorkerSecretResponse))]
 [JsonSerializable(typeof(WorkerCancelRequest))]
 internal sealed partial class WorkerJsonContext : System.Text.Json.Serialization.JsonSerializerContext
 {

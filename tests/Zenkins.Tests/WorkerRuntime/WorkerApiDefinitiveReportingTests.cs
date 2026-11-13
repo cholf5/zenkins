@@ -242,6 +242,16 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
                         : new HttpResponseMessage(acceptStatus);
                 }
 
+                if (segments[4] == "steps")
+                {
+                    // F-015: the per-step transition reports. Accepted here (the card's own tests pin the
+                    // refusals); the answer carries the recorded row's id, which the worker stamps on the
+                    // step's log lines.
+                    return Json(
+                        HttpStatusCode.OK,
+                        $$"""{"stepId":"{{Guid.NewGuid()}}","status":"Running","runStatus":"Running"}""");
+                }
+
                 if (segments[4] == "definition")
                 {
                     // F-014: two sends share this endpoint - the commit-only one right after the clone,

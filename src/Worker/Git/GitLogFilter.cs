@@ -1,32 +1,39 @@
 namespace Zenkins.Worker.Git;
 
 /// <summary>
-/// The run's redaction filter for Git credentials (card F-013, extending F-015's filter).
+/// One run's redaction filter (card F-013, extended by F-015): every value the worker decrypts for the
+/// run - the Git credential and every <c>secret()</c> value - is registered here, and every log line the
+/// run emits is passed through <see cref="Redact"/> before it leaves the worker.
 /// <para>
-/// <b>Registered before the first git command runs.</b> Every value decrypted for the run is
-/// registered here the instant it is known, so no git output line - and no worker log line written
-/// through this type - can carry it verbatim even if a remote, a credential helper or a proxy echoes
-/// it back. The filter is the last line of defence, not the first: the credential never enters argv
-/// and never enters the environment of a logged command either.
+/// <b>Registered the instant a value is known.</b> The Git credential is registered before the first git
+/// command runs (F-013); a secret is registered at the moment it is decrypted, before the step that
+/// referenced it starts. From then on no line - a child's stdout or stderr, a line the worker synthesized
+/// itself (a step header, an exit-code line), a definition-phase <c>print</c> - can carry it verbatim.
 /// </para>
 /// <para>
-/// <b>Why a replacement token instead of dropping the line.</b> Dropping loses the diagnostic value
-/// of the surrounding text ("fatal: Authentication failed for ..." still tells the operator what
-/// happened); replacing keeps the shape and removes the secret.
+/// <b>This is log hygiene, not a boundary.</b> PRD §3.8 says so and the docs repeat it: the worker holds
+/// each plaintext in memory for the duration of the run, whoever can edit <c>pipeline.lua</c> is treated as
+/// having the build's permissions, and a value that is encoded, split across two writes (no newline) or
+/// otherwise transformed is <b>not</b> caught. Docs: <c>docs/lua-runtime.md</c> §7 lists the known gaps
+/// rather than pretending there are none.
 /// </para>
 /// <para>
-/// Values shorter than <see cref="MinimumRedactableLength"/> are ignored rather than registered:
-/// redacting a one-character value would mangle every line without protecting anything, and the
-/// server refuses to store a Git credential that short (<c>GitCredentialValidation</c>).
+/// <b>Every value, however short.</b> There is no minimum length: a length threshold would be a bypass
+/// (a 1-3 character secret is exactly the case an attacker would choose), and organization secrets have
+/// no minimum length of their own. The cost is an occasional false positive in a log line - the safer
+/// direction, and the SDK docs advise against 1-3 character secrets.
+/// </para>
+/// <para>
+/// <b>Why a replacement token instead of dropping the line.</b> Dropping loses the diagnostic value of the
+/// surrounding text ("fatal: Authentication failed for ..." still tells the operator what happened);
+/// replacing keeps the shape and removes the value. One token (<c>***</c>) everywhere, so a reader never
+/// has to wonder whether two different markers mean two different things.
 /// </para>
 /// </summary>
 public sealed class GitLogFilter
 {
     /// <summary>What replaces a redacted value.</summary>
-    public const string Replacement = "[redacted]";
-
-    /// <summary>Values below this length are not registered (they would redact unrelated text).</summary>
-    public const int MinimumRedactableLength = 4;
+    public const string Replacement = "***";
 
     private readonly object _gate = new();
     private readonly List<string> _secrets = [];
@@ -44,12 +51,14 @@ public sealed class GitLogFilter
     }
 
     /// <summary>
-    /// Registers one value to redact. Idempotent, order-independent, safe to call from the thread
-    /// that just decrypted the value and from the threads that stream git's output.
+    /// Registers one value to redact. Idempotent, order-independent, safe to call from the thread that
+    /// just decrypted the value and from the threads that stream a child's output. An empty or
+    /// whitespace-only value is ignored (it would match every line and redact the whole log without
+    /// protecting anything); everything else - however short - is registered.
     /// </summary>
     public void Register(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Length < MinimumRedactableLength)
+        if (string.IsNullOrEmpty(value) || string.IsNullOrWhiteSpace(value))
         {
             return;
         }
@@ -59,14 +68,15 @@ public sealed class GitLogFilter
             if (!_secrets.Contains(value, StringComparer.Ordinal))
             {
                 _secrets.Add(value);
-                // Longest first: a token that is a superstring of another registered value must be
+
+                // Longest first: a value that is a superstring of another registered value must be
                 // replaced as a whole, never split by the shorter match.
                 _secrets.Sort((left, right) => right.Length.CompareTo(left.Length));
             }
         }
     }
 
-    /// <summary>Registers the material's secret, if any.</summary>
+    /// <summary>Registers the material's secret, if any (the F-013 path).</summary>
     public void Register(GitCredentialMaterial? material) => Register(material?.Secret);
 
     /// <summary>Returns <paramref name="text"/> with every registered value replaced.</summary>

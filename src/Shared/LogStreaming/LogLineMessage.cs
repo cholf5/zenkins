@@ -26,9 +26,16 @@ public static class LogStream
 /// overlapping sequence numbers and the database's <c>(RunId, Seq)</c> primary key absorbs the
 /// duplicates; browsers merge history chunks and live lines by <see cref="Seq"/>.
 /// </para>
+/// <para>
+/// <b><see cref="StepId"/> is the per-step segmentation (card F-015).</b> The Worker stamps every line
+/// it emits while a step runs with that step's id, and leaves it <see langword="null"/> for the
+/// lines of the definition phase and the ones between steps. The run page groups lines under step
+/// headers with it; the full viewer with per-step filtering stays v0.9.
+/// </para>
 /// </summary>
 public sealed record LogLineMessage(
     long Seq,
     string Stream,
     string Message,
-    DateTimeOffset Timestamp);
+    DateTimeOffset Timestamp,
+    Guid? StepId = null);

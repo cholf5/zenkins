@@ -42,23 +42,42 @@ public sealed class SecretRouteShapeTests
             Assert.Contains(mutation, templates);
         }
 
-        // And the count matches exactly: one page + three mutations, so an added route of any shape is
-        // visible in this number even before the allow-list names it.
-        Assert.Equal(1 + SecretRouteShape.MutationTemplates.Count, templates.Length);
+        // The one value route the product has: the worker's run-scoped fetch (card F-015). It is
+        // bearer-authenticated, so it is not a browser surface.
+        Assert.Contains(SecretRouteShape.WorkerFetchTemplate, templates);
+
+        // And the count matches exactly: one page + three mutations + the worker fetch, so an added route of
+        // any shape is visible in this number even before the allow-list names it.
+        Assert.Equal(2 + SecretRouteShape.MutationTemplates.Count, templates.Length);
     }
 
     [Fact]
     public void The_assertion_catches_a_value_route_and_a_relaxed_mutation()
     {
-        // A well-shaped table passes...
+        // A well-shaped table passes... including the one worker value route, which is deliberately
+        // bearer-authenticated rather than cookie-authorized.
         Endpoint[] wellShaped =
         [
             Synthetic(SecretRouteShape.PageTemplate, methods: ["GET"]),
             Synthetic("/secrets/create", methods: ["POST"]),
             Synthetic("/secrets/{secretId:guid}/rotate", methods: ["POST"]),
             Synthetic("/secrets/{secretId:guid}/delete", methods: ["POST"]),
+            Synthetic(SecretRouteShape.WorkerFetchTemplate, requiresAuthorization: false, methods: ["POST"]),
         ];
         Assert.Empty(SecretRouteShape.FindViolations(wellShaped));
+
+        // ...while the worker template is matched exactly: a GET (a value route a browser could hit) and a
+        // cookie-authorized variant are both red, so the allow-list entry cannot be widened by accident.
+        Assert.NotEmpty(SecretRouteShape.FindViolations(
+        [
+            Synthetic(SecretRouteShape.PageTemplate, methods: ["GET"]),
+            Synthetic(SecretRouteShape.WorkerFetchTemplate, requiresAuthorization: false, methods: ["GET"]),
+        ]));
+        Assert.NotEmpty(SecretRouteShape.FindViolations(
+        [
+            Synthetic(SecretRouteShape.PageTemplate, methods: ["GET"]),
+            Synthetic(SecretRouteShape.WorkerFetchTemplate, requiresAuthorization: true, methods: ["POST"]),
+        ]));
 
         // ...a fabricated value route is red (this is the mutation the guard exists for)...
         var withValueRoute = wellShaped

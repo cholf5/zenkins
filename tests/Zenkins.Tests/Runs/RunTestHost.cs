@@ -238,6 +238,22 @@ public sealed class RunTestHost : IDisposable
             $"/api/workers/runs/{runId}/definition",
             new { gitCommit, pipelineSpecJson });
 
+    /// <summary>Posts one F-015 step transition (the executor's report, before and after a step).</summary>
+    public static Task<HttpResponseMessage> ReportStepAsync(
+        HttpClient client,
+        string workerToken,
+        Guid runId,
+        int index,
+        string name,
+        string status,
+        int? exitCode = null,
+        string? failureReason = null) =>
+        WorkerTestHost.SendWorkerJsonAsync(
+            client,
+            workerToken,
+            $"/api/workers/runs/{runId}/steps",
+            new { index, name, status, exitCode, failureReason });
+
     public static Task<HttpResponseMessage> CompleteAsync(
         HttpClient client,
         string workerToken,

@@ -33,7 +33,7 @@ public static class TenantIsolationProbes
     public static IReadOnlyList<Type> CoveredEntityTypes { get; } =
         [
             typeof(OrganizationMember), typeof(Project), typeof(BuildRun), typeof(BuildLog),
-            typeof(WorkerEntity), typeof(WorkerToken), typeof(Secret), typeof(GitCredential),
+            typeof(BuildStep), typeof(WorkerEntity), typeof(WorkerToken), typeof(Secret), typeof(GitCredential),
         ];
 
     /// <summary>

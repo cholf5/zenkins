@@ -132,13 +132,17 @@ public sealed class RunLogBuffer
     /// threads (one per stream - the lock makes the sequence assignment unique and the buffer
     /// consistent). Overflow drops the oldest unsent line, honestly counted.
     /// </summary>
-    public void Emit(string stream, string message)
+    /// <param name="stepId">
+    /// The step the line belongs to (card F-015), or <see langword="null"/> for the definition phase and
+    /// the lines between steps; the server persists it so the run page can group the log per step.
+    /// </param>
+    public void Emit(string stream, string message, Guid? stepId = null)
     {
         bool wasEmpty;
         lock (_gate)
         {
             wasEmpty = _pending.Count == 0;
-            _pending.Add(new LogLineMessage(_nextSeq++, stream, message, DateTimeOffset.UtcNow));
+            _pending.Add(new LogLineMessage(_nextSeq++, stream, message, DateTimeOffset.UtcNow, stepId));
             while (_pending.Count > _capacity)
             {
                 _pending.RemoveAt(0);
@@ -296,7 +300,11 @@ public sealed class RunLogBuffer
             _nextSeq++,
             LogStream.StdErr,
             string.Format(format, droppedCount),
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow,
+
+            // A loss marker is not a step's line: it belongs to the run, not to whichever step happened
+            // to be running when the buffer overflowed.
+            StepId: null));
     }
 
     /// <summary>

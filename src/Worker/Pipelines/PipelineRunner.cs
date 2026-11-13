@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Worker.Git;
 using Zenkins.Worker.Lua;
@@ -6,8 +7,8 @@ using Zenkins.Worker.Lua;
 namespace Zenkins.Worker.Pipelines;
 
 /// <summary>
-/// Everything the pipeline layer needs about one run (card F-014). The Worker's run loop fills this
-/// from the claim the server handed it and from the accept report's frozen deadline.
+/// Everything the pipeline layer needs about one run (card F-014, extended by F-015). The Worker's run
+/// loop fills this from the claim the server handed it and from the accept report's frozen deadline.
 /// </summary>
 public sealed class PipelineRunOptions
 {
@@ -45,15 +46,57 @@ public sealed class PipelineRunOptions
     public IReadOnlyDictionary<string, string?> GitEnvironment { get; init; } =
         new Dictionary<string, string?>();
 
-    /// <summary>The environment every step inherits on top of the worker's own (run metadata).</summary>
+    /// <summary>
+    /// The server-provided run environment (F-007): <c>ZENKINS_RUN_ID</c>, <c>ZENKINS_PROJECT_ID</c>,
+    /// <c>ZENKINS_WORKER_NAME</c>. It is the <b>last</b> layer of the composition - it wins over the
+    /// pipeline's and the step's own <c>env</c> (card F-015's precedence).
+    /// </summary>
     public IReadOnlyDictionary<string, string?> StepEnvironment { get; init; } =
         new Dictionary<string, string?>();
+
+    /// <summary>
+    /// The worker's own process environment, the <b>first</b> layer of the composition. Null means "read the
+    /// running process' environment", which is what the child would inherit anyway; tests pass a fixed map
+    /// so the precedence chain is a fact rather than an inference.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?>? InheritedEnvironment { get; init; }
 
     /// <summary>Where this layer's own lines go (the run log: stdout stream).</summary>
     public Action<string>? Log { get; init; }
 
     /// <summary>Where a step's captured stdout/stderr lines go (the run's streaming log).</summary>
     public Action<ProcessOutputLine>? OnProcessOutput { get; init; }
+
+    /// <summary>
+    /// Called when the run's current step changes (its id while a step is running, null between steps and
+    /// during the definition phase). The run loop stamps every line it emits with it, which is how the run
+    /// page groups the log per step (card F-015).
+    /// </summary>
+    public Action<Guid?>? OnStepChanged { get; init; }
+
+    /// <summary>
+    /// The run's redaction filter (F-013's, now fed by F-015's secrets too). Every line this layer emits -
+    /// including the ones it synthesizes - passes through it, and every value decrypted for the run is
+    /// registered with it the instant it is known.
+    /// </summary>
+    public GitLogFilter Redactor { get; init; } = new();
+
+    /// <summary>Where step transitions are reported; an accepting offline sink when no server is behind the run.</summary>
+    public IPipelineStepSink StepSink { get; init; } = OfflinePipelineStepSink.Instance;
+
+    /// <summary>
+    /// The run's secret source (a per-run fetch cache in production). Defaults to a source with no secrets,
+    /// so a <c>secret()</c> reference fails the step that made it instead of silently becoming empty.
+    /// </summary>
+    public IRunSecretSource Secrets { get; init; } = EmptyRunSecretSource.Instance;
+
+    /// <summary>
+    /// Why this run's cancellation fired, asked at the instant a step is killed (card F-015): a user cancel
+    /// (F-009's button) or the run's deadline. The answer becomes the killed step's
+    /// <see cref="PipelineStepFailureReasons"/> value, so the run page can tell "someone stopped this" from
+    /// "it ran out of time". Null (or a null answer) means a user cancel.
+    /// </summary>
+    public Func<string?>? CancellationFailureReason { get; init; }
 }
 
 /// <summary>
@@ -74,7 +117,7 @@ public sealed record PipelineRunOutcome(
     bool Canceled = false,
     bool Abandoned = false)
 {
-    /// <summary>A successful run: every step exited 0.</summary>
+    /// <summary>A successful run: every non-skipped step succeeded.</summary>
     public static PipelineRunOutcome Succeeded(string commit) => new(0, null, commit);
 
     /// <summary>The run answered a cancellation; the caller reports it through F-009's endpoint.</summary>
@@ -98,19 +141,33 @@ public sealed record PipelineRunOutcome(
 }
 
 /// <summary>
-/// Executes one pipeline run (card F-014): clone the project's repository at the run's branch through
-/// F-013, run the definition phase once, report the resolved commit and the frozen spec, then execute
-/// the steps in order with <see cref="ProcessRunner"/> - stopping at the first non-zero exit.
+/// Executes one pipeline run (cards F-014 and F-015): clone the project's repository at the run's branch
+/// through F-013, run the definition phase once, report the resolved commit and the frozen spec, then
+/// execute the steps in order with <see cref="ProcessRunner"/>.
 /// <para>
-/// <b>Execution is C#, never Lua</b> (<c>docs/lua-runtime.md</c> §6.1): sequencing, timing, exit codes
-/// and cancellation live here, so a hostile or buggy script cannot skip them and the run's step list is
+/// <b>Execution is C#, never Lua</b> (<c>docs/lua-runtime.md</c> §6.1): sequencing, timing, exit codes,
+/// <c>continue_on_error</c>, <c>when</c> conditions, environment composition, secret resolution and
+/// cancellation all live here, so a hostile or buggy script cannot skip them and the run's step list is
 /// known before the first process starts. The frozen spec is the only input; the script is never run a
 /// second time, so a changed working tree or a moving branch cannot alter what a run does.
+/// </para>
+/// <para>
+/// <b>Each step is a first-class record.</b> Every step is reported <c>Running</c> before its process
+/// starts (the server stamps the start instant and answers the row's id) and terminal afterwards:
+/// <c>Success</c>/<c>Failed</c> with the real exit code, or <c>Skipped</c> with a reason - never started, so
+/// no process was spawned and no start instant recorded. A skipped step does not affect the run's success;
+/// a failed step does, even when <c>continue_on_error</c> let the rest run.
 /// </para>
 /// <para>
 /// <b>Failure taxonomy is closed</b> (<see cref="PipelineFailureReasons"/>): a git failure maps from
 /// F-013's <c>GitFailureKind</c>, a definition failure carries its own reason, and a non-zero step exit
 /// is <c>step-failed</c> with that exact code. Nothing here invents a reason for a step.
+/// </para>
+/// <para>
+/// <b>Redaction is applied here, on the way out.</b> Every line this class emits - its own synthesized
+/// lines included, which is what makes a step header carrying a resolved secret safe - is passed through the
+/// run's <see cref="PipelineRunOptions.Redactor"/> first, and every secret is registered there at the
+/// moment it is decrypted. It is log hygiene, not a boundary (<c>docs/lua-runtime.md</c> §7).
 /// </para>
 /// <para>
 /// <b>No timers, no threads.</b> The definition phase's budget is F-011's deadline-driven coroutine
@@ -125,6 +182,7 @@ public sealed class PipelineRunner
     private readonly PipelineDefinitionRunner _definitions;
     private readonly Func<CancellationToken, Task<GitCredentialMaterial?>> _credentialProvider;
     private readonly Func<string?, string?, CancellationToken, Task<bool>> _definitionReporter;
+    private readonly IReadOnlyDictionary<string, string?> _inheritedEnvironment;
 
     /// <param name="options">The run's knobs (work directory, repository, branch, deadline, logging).</param>
     /// <param name="definitions">The definition phase (F-011's runtime plus the Lua prelude).</param>
@@ -154,6 +212,7 @@ public sealed class PipelineRunner
         _definitions = definitions;
         _credentialProvider = credentialProvider;
         _definitionReporter = definitionReporter;
+        _inheritedEnvironment = options.InheritedEnvironment ?? StepEnvironment.InheritedEnvironment();
     }
 
     /// <summary>The Lua log sink a run's definition phase writes its <c>log()</c> lines to.</summary>
@@ -174,7 +233,8 @@ public sealed class PipelineRunner
     {
         // 1. Clone at the run's branch (F-013). The credential is fetched per run and never travels in
         //    the claim payload; the clone refuses a non-empty target, so a retried run cannot inherit
-        //    a previous tree.
+        //    a previous tree. The credential is registered with the run's redaction filter the instant it
+        //    is known - before the first git command, and long before any step (F-015 extends F-013 here).
         string commit;
         try
         {
@@ -187,10 +247,11 @@ public sealed class PipelineRunner
                 OperationTimeout = _options.GitOperationTimeout,
                 RunDeadline = _options.Deadline,
                 EnvironmentOverrides = _options.GitEnvironment,
-                Log = _options.Log,
+                Log = Log,
             });
 
             var credential = await _credentialProvider(cancellationToken);
+            _options.Redactor.Register(credential);
             var clone = await workspace.CloneAsync(
                 _options.RepositoryUrl,
                 _options.Branch,
@@ -272,20 +333,113 @@ public sealed class PipelineRunner
             return PipelineRunOutcome.GiveUp(commit);
         }
 
-        // 5. Execute the steps in order, stopping at the first failure.
-        var steps = definition.Spec.Steps;
-        Log($"zenkins: pipeline '{definition.Spec.Name}' with {steps.Length} step(s).");
+        // 5. Execute the steps in order (F-015: conditions, env composition, secrets, continue_on_error).
+        return await ExecuteStepsAsync(definition.Spec, commit, cancellationToken);
+    }
+
+    /// <summary>
+    /// The step loop (card F-015). One pass per declared step: evaluate its condition, compose its
+    /// environment, resolve the references in its argv and env, report <c>Running</c>, run the process,
+    /// report the terminal state - then decide whether the run continues.
+    /// </summary>
+    private async Task<PipelineRunOutcome> ExecuteStepsAsync(
+        PipelineSpec spec,
+        string commit,
+        CancellationToken cancellationToken)
+    {
+        var steps = spec.Steps;
+        var facts = new StepConditionFacts(_options.Branch, StepConditionFacts.CurrentPlatform);
+
+        Log($"zenkins: pipeline '{spec.Name}' with {steps.Length} step(s).");
+
+        int? failedIndex = null;
+        int? failedExitCode = null;
+
         for (var i = 0; i < steps.Length; i++)
         {
+            var step = steps[i];
+            var position = $"{i + 1}/{steps.Length}";
+
             if (cancellationToken.IsCancellationRequested)
             {
-                Log($"zenkins: canceled before step {i + 1}/{steps.Length}.");
+                Log($"zenkins: canceled before step {position}.");
+                await SkipRemainingAsync(steps, i, PipelineStepFailureReasons.RunCanceled, cancellationToken);
                 return PipelineRunOutcome.Cancellation(commit);
             }
 
-            var step = steps[i];
-            var argv = step.Argv;
-            var position = $"{i + 1}/{steps.Length}";
+            // 5a. The step's effective environment: inherited < pipeline env < step env < run env. One
+            //     composition serves both readers - the deferred env() references below and the child.
+            var runLayer = new Dictionary<string, string?>(_options.StepEnvironment, StringComparer.Ordinal)
+            {
+                [StepEnvironment.StepNameVariable] = step.Name,
+            };
+            var environment = StepEnvironment.Compose(
+                _inheritedEnvironment,
+                spec.Env,
+                step.Env,
+                runLayer);
+
+            // 5b. The condition is evaluated against the run's frozen facts before anything is resolved or
+            //     started. A step that does not match is recorded Skipped - never claimed Running, no start
+            //     instant, no process - and it does not affect the run's success.
+            if (!StepCondition.IsSatisfied(step.When, facts, environment, out var skipReason))
+            {
+                Log($"zenkins: step {position} \"{step.Name}\" skipped: {skipReason}.");
+                await ReportStepAsync(
+                    i + 1,
+                    step.Name,
+                    PipelineStepStatus.Skipped,
+                    failureReason: PipelineStepFailureReasons.WhenNotMatched,
+                    cancellationToken: cancellationToken);
+                continue;
+            }
+
+            // 5c. Resolve the deferred references: env references against the composed environment, secret
+            //     references through the run's per-run cache (each decrypted value is registered with the
+            //     redaction filter at this instant, before the step exists to log it).
+            string[] argv;
+            Dictionary<string, string?> childEnvironment;
+            try
+            {
+                var resolver = new StepValueResolver(_options.Redactor, _options.Secrets);
+                argv = await ResolveArgvAsync(resolver, step.Argv, environment, cancellationToken);
+                childEnvironment = await ResolveEnvironmentAsync(resolver, environment, cancellationToken);
+            }
+            catch (StepPreparationException failure)
+            {
+                Log($"zenkins: step {position} \"{step.Name}\" could not be prepared: {failure.Message}");
+                await ReportStepAsync(
+                    i + 1,
+                    step.Name,
+                    PipelineStepStatus.Failed,
+                    failureReason: failure.FailureReason,
+                    cancellationToken: cancellationToken);
+                if (!step.ContinueOnError)
+                {
+                    await SkipRemainingAsync(
+                        steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
+                    return PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
+                }
+
+                Log($"zenkins: step {position} \"{step.Name}\" failed but continue_on_error is set; "
+                    + "running the remaining step(s).");
+                failedIndex ??= i + 1;
+                continue;
+            }
+
+            // 5d. Report the step Running BEFORE the process starts, so a page opened mid-run shows it as
+            //     the current step. The answer carries the row's id, which stamps this step's log lines.
+            var running = await ReportStepAsync(
+                i + 1,
+                step.Name,
+                PipelineStepStatus.Running,
+                cancellationToken: cancellationToken);
+            if (running is null)
+            {
+                return PipelineRunOutcome.GiveUp(commit);
+            }
+
+            SetCurrentStep(running);
             Log($"zenkins: step {position} \"{step.Name}\" started: {Render(argv)}");
 
             var stopwatch = Stopwatch.StartNew();
@@ -298,14 +452,30 @@ public sealed class PipelineRunner
                         FileName = argv[0],
                         Arguments = [.. argv.Skip(1)],
                         WorkingDirectory = _options.Work.RepositoryPath,
-                        EnvironmentVariables = BuildStepEnvironment(step),
+
+                        // The composed environment, in full: the child sees exactly the map env() reports, so
+                        // the two can never disagree about a value or its precedence.
+                        EnvironmentVariables = childEnvironment,
                     },
-                    _options.OnProcessOutput);
+                    OnProcessOutput);
                 exitCode = await runner.RunAsync(cancellationToken);
             }
             catch (OperationCanceledException)
             {
+                // F-015: the killed step records *why* it died - a user cancel or the run's deadline - so the
+                // run page does not have to infer it from the run's own reason.
+                var cancellationReason = _options.CancellationFailureReason?.Invoke()
+                    ?? PipelineStepFailureReasons.Canceled;
                 Log($"zenkins: step {position} \"{step.Name}\" was killed by the run's cancellation.");
+                await ReportStepAsync(
+                    i + 1,
+                    step.Name,
+                    PipelineStepStatus.Failed,
+                    failureReason: cancellationReason,
+                    cancellationToken: CancellationToken.None);
+                SetCurrentStep(null);
+                await SkipRemainingAsync(
+                    steps, i + 1, PipelineStepFailureReasons.RunCanceled, CancellationToken.None);
                 return PipelineRunOutcome.Cancellation(commit);
             }
             catch (Exception failure)
@@ -313,21 +483,154 @@ public sealed class PipelineRunner
                 // The process never started (bad argv[0], unusable working directory...). No exit code
                 // exists, so none is recorded - the log line says what happened.
                 Log($"zenkins: step {position} \"{step.Name}\" could not be started: {failure.Message}");
-                return PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
+                await ReportStepAsync(
+                    i + 1,
+                    step.Name,
+                    PipelineStepStatus.Failed,
+                    failureReason: PipelineStepFailureReasons.NotStarted,
+                    cancellationToken: cancellationToken);
+                SetCurrentStep(null);
+                if (!step.ContinueOnError)
+                {
+                    await SkipRemainingAsync(
+                        steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
+                    return PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
+                }
+
+                failedIndex ??= i + 1;
+                continue;
             }
 
             stopwatch.Stop();
-            var duration = stopwatch.Elapsed.TotalSeconds.ToString("0.0#", System.Globalization.CultureInfo.InvariantCulture);
+            var duration = stopwatch.Elapsed.TotalSeconds.ToString("0.0#", CultureInfo.InvariantCulture);
             Log($"zenkins: step {position} \"{step.Name}\" exited with code {exitCode} after {duration}s.");
 
-            if (exitCode != 0)
+            await ReportStepAsync(
+                i + 1,
+                step.Name,
+                exitCode == 0 ? PipelineStepStatus.Success : PipelineStepStatus.Failed,
+                exitCode: exitCode,
+                cancellationToken: cancellationToken);
+            SetCurrentStep(null);
+
+            if (exitCode == 0)
             {
-                // The failing step's own code is the record; nothing else is claimed about why.
+                continue;
+            }
+
+            // The failing step's own code is the record; nothing else is claimed about why. The line names
+            // the step explicitly, so the log says which step failed whether or not the run continues.
+            Log($"zenkins: step {position} \"{step.Name}\" failed with exit code {exitCode}.");
+            failedIndex ??= i + 1;
+            failedExitCode ??= exitCode;
+            if (!step.ContinueOnError)
+            {
+                await SkipRemainingAsync(
+                    steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
                 return PipelineRunOutcome.StepFailed(exitCode, commit);
             }
+
+            Log($"zenkins: step {position} \"{step.Name}\" failed but continue_on_error is set; "
+                + "running the remaining step(s).");
+        }
+
+        if (failedIndex is { } index)
+        {
+            // continue_on_error ran the rest, but a failure is never laundered into a success: the run
+            // ends Failed and names the step that failed (card F-015, TC-002).
+            Log($"zenkins: the run failed because step {index}/{steps.Length} \"{steps[index - 1].Name}\" "
+                + $"failed{(failedExitCode is { } code ? $" with exit code {code}" : string.Empty)}.");
+            return PipelineRunOutcome.StepFailed(failedExitCode ?? 1, commit);
         }
 
         return PipelineRunOutcome.Succeeded(commit);
+    }
+
+    /// <summary>
+    /// Reports every step from <paramref name="startIndex"/> on as <c>Skipped</c>: the run stops here (a
+    /// failed step without <c>continue_on_error</c>, or a cancellation), and a step that never ran must say
+    /// so rather than silently vanish from the page.
+    /// </summary>
+    private async Task SkipRemainingAsync(
+        PipelineStep[] steps,
+        int startIndex,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        for (var i = startIndex; i < steps.Length; i++)
+        {
+            await ReportStepAsync(
+                i + 1,
+                steps[i].Name,
+                PipelineStepStatus.Skipped,
+                failureReason: reason,
+                cancellationToken: cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Reports one step transition and returns the recorded row's id, or <see langword="null"/> when the
+    /// server refused it definitively (the caller then gives the run up).
+    /// </summary>
+    private async Task<Guid?> ReportStepAsync(
+        int index,
+        string name,
+        string status,
+        int? exitCode = null,
+        string? failureReason = null,
+        CancellationToken cancellationToken = default)
+    {
+        var receipt = await _options.StepSink.ReportAsync(
+            new PipelineStepReport(index, name, status, exitCode, failureReason),
+            cancellationToken);
+        if (!receipt.Accepted)
+        {
+            Log($"zenkins: the server refused the report for step {index}/{status}; the run is not ours to "
+                + "finish - no further step will be executed.");
+            return null;
+        }
+
+        return receipt.StepId;
+    }
+
+    /// <summary>Announces the current step to the caller (which stamps its log lines with it).</summary>
+    private void SetCurrentStep(Guid? stepId) => _options.OnStepChanged?.Invoke(stepId);
+
+    /// <summary>Resolves the references in every argv entry (secrets are fetched here, once per name).</summary>
+    private static async Task<string[]> ResolveArgvAsync(
+        StepValueResolver resolver,
+        IReadOnlyList<string> argv,
+        IReadOnlyDictionary<string, string?> environment,
+        CancellationToken cancellationToken)
+    {
+        var resolved = new string[argv.Count];
+        for (var i = 0; i < argv.Count; i++)
+        {
+            resolved[i] = await resolver.ResolveAsync(argv[i], environment, cancellationToken);
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// The composed environment with every reference resolved - so a secret an <c>env</c> value names is
+    /// decrypted here too (and registered with the filter at the same instant), and the child receives exactly
+    /// the values <c>env()</c> reports for the same names.
+    /// </summary>
+    private static async Task<Dictionary<string, string?>> ResolveEnvironmentAsync(
+        StepValueResolver resolver,
+        IReadOnlyDictionary<string, string?> environment,
+        CancellationToken cancellationToken)
+    {
+        var resolved = new Dictionary<string, string?>(environment.Count, StringComparer.Ordinal);
+        foreach (var (name, value) in environment)
+        {
+            resolved[name] = value is null || !StepReference.Contains(value)
+                ? value
+                : await resolver.ResolveAsync(value, environment, cancellationToken);
+        }
+
+        return resolved;
     }
 
     /// <summary>
@@ -351,20 +654,6 @@ public sealed class PipelineRunner
         }
 
         return accepted;
-    }
-
-    /// <summary>
-    /// The environment of one step: the run's metadata on top of the worker's own environment. The
-    /// step's frozen <c>env</c> is deliberately not applied here - F-015 owns it - so this card's
-    /// behaviour is the documented default.
-    /// </summary>
-    private IReadOnlyDictionary<string, string?> BuildStepEnvironment(PipelineStep step)
-    {
-        var environment = new Dictionary<string, string?>(_options.StepEnvironment)
-        {
-            ["ZENKINS_STEP_NAME"] = step.Name,
-        };
-        return environment;
     }
 
     /// <summary>Maps F-013's failure classification onto the closed run-failure vocabulary.</summary>
@@ -398,5 +687,15 @@ public sealed class PipelineRunner
         return string.Join(' ', parts);
     }
 
-    private void Log(string line) => _options.Log?.Invoke(line);
+    /// <summary>One captured output line, redacted before it leaves this layer.</summary>
+    private void OnProcessOutput(ProcessOutputLine line) =>
+        _options.OnProcessOutput?.Invoke(
+            new ProcessOutputLine(line.Stream, _options.Redactor.Redact(line.Line)));
+
+    /// <summary>
+    /// One line of this layer, redacted before it leaves this layer. The worker synthesizes step headers and
+    /// exit-code lines from data that can now contain a resolved secret (a step's argv), so this is not
+    /// merely defence in depth - it is the only thing that keeps such a line out of the log.
+    /// </summary>
+    private void Log(string line) => _options.Log?.Invoke(_options.Redactor.Redact(line));
 }

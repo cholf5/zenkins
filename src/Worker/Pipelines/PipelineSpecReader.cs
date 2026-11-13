@@ -46,7 +46,8 @@ public static class PipelineSpecReader
     private const string ShellKey = "shell";
 
     private static readonly string[] PipelineKeys = ["name", "env", "steps", "triggers"];
-    private static readonly string[] StepKeys = ["name", "run", "shell", "env", "continue_on_error"];
+    private static readonly string[] StepKeys = ["name", "run", "shell", "env", "continue_on_error", "when"];
+    private static readonly string[] WhenKeys = ["branch", "platform", "env"];
     private static readonly string[] TriggerKeys = ["branches"];
 
     /// <summary>
@@ -140,13 +141,15 @@ public static class PipelineSpecReader
 
             var stepEnv = ReadEnv(table, path + ".env");
             var continueOnError = ReadContinueOnError(table, path);
+            var when = ReadWhen(table, path);
 
             steps[i] = new PipelineStep(
                 stepName,
                 Run: run,
                 Shell: shell,
                 Env: stepEnv,
-                ContinueOnError: continueOnError);
+                ContinueOnError: continueOnError,
+                When: when);
         }
 
         return steps;
@@ -254,6 +257,75 @@ public static class PipelineSpecReader
         }
 
         return value.Boolean;
+    }
+
+    /// <summary>
+    /// Reads a step's execution-time condition (card F-015): <c>when = { branch = …, platform = …, env = … }</c>.
+    /// Strict like everything else here - an unknown key is refused by field path (a typo like
+    /// <c>brnach</c> would otherwise silently never match), a platform the executor does not know is refused,
+    /// and an empty table is refused because a condition that declares nothing is a mistake, not "always".
+    /// </summary>
+    private static PipelineCondition? ReadWhen(LuaHostTable table, string path)
+    {
+        var whenPath = path + ".when";
+        if (!TryGet(table, "when", out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        if (value.Kind != LuaHostValueKind.Table)
+        {
+            throw Invalid($"{whenPath} must be a table ({{ branch = \"main\" }}), got {Describe(value)}.");
+        }
+
+        if (value.Table.IsSequence)
+        {
+            // An empty table arrives as an empty list: a condition that declares nothing.
+            if (value.Table.Items.Count == 0)
+            {
+                throw Invalid($"{whenPath} must declare at least one of branch, platform or env.");
+            }
+
+            throw Invalid($"{whenPath} must be a table with named fields, not a list.");
+        }
+
+        var when = value.Table;
+        RejectUnknownKeys(when, whenPath, WhenKeys);
+
+        var branch = ReadOptionalString(when, whenPath + ".branch");
+        var platform = ReadOptionalString(when, whenPath + ".platform");
+        if (platform is not null && !PipelineCondition.Platforms.Contains(platform, StringComparer.Ordinal))
+        {
+            throw Invalid(
+                $"{whenPath}.platform must be one of {string.Join(", ", PipelineCondition.Platforms)} "
+                + $"(got \"{platform}\").");
+        }
+
+        var env = ReadEnv(when, whenPath);
+        var condition = new PipelineCondition(branch, platform, env);
+        if (condition.IsEmpty)
+        {
+            throw Invalid($"{whenPath} must declare at least one of branch, platform or env.");
+        }
+
+        return condition;
+    }
+
+    /// <summary>A declared string field that may be absent; present but not a non-empty string is refused.</summary>
+    private static string? ReadOptionalString(LuaHostTable table, string path)
+    {
+        var key = path[(path.LastIndexOf('.') + 1)..];
+        if (!TryGet(table, key, out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        if (value.Kind != LuaHostValueKind.String || value.Text.Length == 0)
+        {
+            throw Invalid($"{path} must be a non-empty string, got {Describe(value)}.");
+        }
+
+        return value.Text;
     }
 
     private static PipelineTriggers? ReadTriggers(LuaHostTable root)

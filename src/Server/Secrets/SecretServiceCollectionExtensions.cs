@@ -18,6 +18,9 @@ public static class SecretServiceCollectionExtensions
 
         services.AddScoped<SecretProtector>();
         services.AddScoped<SecretService>();
+
+        // F-015: the run-scoped, worker-authenticated fetch secret() is delivered through.
+        services.AddScoped<RunSecretService>();
         return services;
     }
 }

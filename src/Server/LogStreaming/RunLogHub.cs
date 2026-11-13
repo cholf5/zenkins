@@ -60,7 +60,7 @@ public sealed class RunLogHub(
             .AsNoTracking()
             .Where(log => log.RunId == runId)
             .OrderBy(log => log.Seq)
-            .Select(log => new LogLineMessage(log.Seq, log.Stream, log.Message, log.Timestamp));
+            .Select(log => new LogLineMessage(log.Seq, log.Stream, log.Message, log.Timestamp, log.StepId));
         await foreach (var line in rows.AsAsyncEnumerable().WithCancellation(cancellationToken))
         {
             chunk.Add(line);

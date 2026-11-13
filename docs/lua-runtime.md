@@ -384,6 +384,57 @@ Why this split:
 - Swapping the engine (§1) means porting the primitives and the prelude, not the user-facing
   pipeline semantics — which are pinned by the fixtures in §9.
 
+### 6.0.1 `env()` and `secret()` are deferred references (F-015)
+
+Describing a pipeline does no I/O: the run has no environment yet and no secret may be decrypted
+then. So `env("NAME")` and `secret("NAME")` are **not** evaluated while the pipeline is being
+described — they return a reference:
+
+```lua
+pipeline {
+  name = "deploy",
+  steps = {
+    {
+      name = "Deploy",
+      run  = { "deploy", "--token", secret("DEPLOY_TOKEN") },
+      env  = { CONFIG = env("CONFIG") },
+    },
+  },
+}
+```
+
+`secret("NAME")` yields `${secret:NAME}`, `env("NAME")` yields `${env:NAME}`, and the C# executor
+substitutes them **immediately before the step starts**, on the full precedence chain: inherited
+process environment < pipeline `env` < step `env` < the server-provided run environment
+(`ZENKINS_RUN_ID`, `ZENKINS_PROJECT_ID`, `ZENKINS_WORKER_NAME`, `ZENKINS_STEP_NAME`). One
+composition feeds two readers — the substituted argv/`env` values and the child process's own
+environment — so a script and the process it starts can never disagree about a value. A secret's
+value enters only where the script put the reference; it is not a layer that silently overrides a
+name.
+
+The value a reference resolves to is registered with the run's redaction filter (§7) at the moment
+it is decrypted — before the step that asked for it can log anything — and the definition phase
+therefore never holds a plaintext value at all.
+
+**A deliberate consequence:** a script that does string arithmetic with a reference, compares it,
+or prints it *while being described* sees the reference itself (`${secret:NAME}`), not the value.
+Only the two substituted surfaces — an argv entry and an `env` value — yield the real value. That is
+the price of not decrypting anything during the definition phase, and it is a design decision rather
+than a defect. A reference is not expanded inside a condition's comparison (`when.env` compares the
+declared value).
+
+Two more limitations of the substitution, recorded so nobody discovers them by surprise:
+
+- **An `${env:NAME}` expansion does not fetch secrets.** If the referenced variable's value itself
+  contains `${secret:NAME}`, the child receives that text literally: environment expansion walks
+  environment values only, so it stays free of I/O (and of a decrypt step in a place where the
+  run's redaction filter is not yet armed). Nothing leaks — the literal is a reference, not a value
+  — but the value is not what a reader might expect. Put the `secret()` reference in the argv entry
+  or in the `env` value directly instead of nesting it.
+- **Only whole references are recognised.** A reference is `${secret:NAME}` / `${env:NAME}` with an
+  environment-variable-shaped name; anything malformed (`${secret:}`, `${env:1abc}`) is left verbatim
+  as an ordinary string rather than becoming an empty value.
+
 ### 6.1 Execution form: declarative by default
 
 `pipeline{ ... }` is the primary form (PRD §3.3.2). The script builds a spec table; the host
@@ -427,10 +478,34 @@ validates it, serialises it, and executes the steps **in C#**:
   the worker's console (the engine's default `DebugPrint` writes to `Console` — i.e. outside the log
   pipeline, invisible in the UI and unredactable).
 - Every line carries the current step id so the UI can group per step (PRD §3.3.5).
-- **Redaction is defence in depth, never a guarantee** (PRD §3.8): the worker knows each secret's
-  plaintext for the duration of the run and can replace occurrences before streaming. Scripts can
-  still encode, split or hash a value; anyone who can edit `pipeline.lua` is treated as having the
-  build's permissions. The contract records this so nobody later documents redaction as a boundary.
+- **Redaction is a streaming filter, and its boundary is stated rather than implied** (PRD §3.8,
+  F-013/F-015). Every value the worker decrypts for a run — the Git credential and every
+  `secret()` value — is registered with that run's filter, and every line the run emits is passed
+  through it before it is streamed or written anywhere: a child's stdout, its stderr, and the lines
+  the worker synthesizes itself (step headers, exit-code lines, which render resolved argv and can
+  therefore contain a value that was passed as an argument). Registered values are replaced
+  literally with `***`.
+- **No length threshold.** A value shorter than four characters is registered and replaced exactly
+  like a long one: any threshold is a bypass, and organization secrets have no minimum length of
+  their own. The cost is an occasional false positive in a log line, which is the safer direction;
+  the SDK documentation advises against 1–3 character secrets.
+- **Where it is applied.** The filter wraps the pipeline layer's synthetic lines and the process
+  output before either reaches the run log; the worker's loop applies the same filter instance to
+  the definition phase's `print`/`log` lines, so the whole run stream is covered. The same redacted
+  text is what lands in the local `temp/` copies, the database rows, the download endpoint and the
+  UI — there is no second, unredacted path.
+- **Redaction is defence in depth, never a boundary.** Documented gaps, not accidents:
+  - a value **split across two writes** (a line boundary that falls inside the value, with no
+    newline) is not caught — the filter sees one line at a time;
+  - a value that is **encoded, split, hashed or otherwise transformed** before it is printed is not
+    caught;
+  - the worker **holds each plaintext in memory** for the duration of the run (that is what makes
+    the replacement possible), so anyone who can read the worker's memory can read it;
+  - a script that prints a **reference** while being described sees `${secret:NAME}`, not the value
+    (§6.0.1) — the inverse gap, and the reason it is stated here too.
+  Anyone who can edit `pipeline.lua` is treated as having the build's permissions, so none of this
+  is a security control: `***` is log hygiene, and this contract records that so no later reader
+  treats the replacement token as a guarantee.
 
 ## 8. Dependency and build contract
 

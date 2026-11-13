@@ -1,6 +1,7 @@
 using Xunit;
 using Zenkins.Server.Data;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Shared.Tenancy;
 
@@ -47,6 +48,36 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
     [Fact]
     public Task Build_logs_are_invisible_across_tenants() =>
         TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BuildLog>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Build_steps_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BuildStep>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Cross_tenant_build_step_write_is_rejected_and_persists_nothing()
+    {
+        // (RunId, Index) is unique, so the smuggled row uses A's run with a fresh position per direction:
+        // the rejection must be the tenant guard's, never a key clash.
+        var index = 900;
+        return TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<BuildStep>(
+            _fixture,
+            () => new BuildStep
+            {
+                RunId = TwoOrgsFixture.BuildRunAId,
+                Index = index++,
+                Name = "Smuggled",
+                Status = PipelineStepStatus.Running,
+            },
+            CancellationToken);
+    }
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_build_steps() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<BuildStep>(
+            _fixture,
+            TwoOrgsFixture.BuildStepAId,
+            TwoOrgsFixture.BuildStepBId,
+            CancellationToken);
 
     [Fact]
     public Task Secrets_are_invisible_across_tenants() =>

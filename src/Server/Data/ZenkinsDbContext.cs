@@ -8,6 +8,7 @@ using Zenkins.Server.Git;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Data;
@@ -94,6 +95,9 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Incrementally persisted output lines of build runs (F-008). Never queried without
     /// a run id: the composite (RunId, Seq) primary key orders every read.</summary>
     public DbSet<BuildLog> BuildLogs => Set<BuildLog>();
+
+    /// <summary>Per-step records of a pipeline run (F-015): one row per step position, one per run.</summary>
+    public DbSet<BuildStep> BuildSteps => Set<BuildStep>();
 
     /// <summary>Encrypted organization secrets (F-012). Write-only above this layer: nothing outside
     /// <c>SecretService.TryGetValueAsync</c> ever decrypts a row, and no endpoint returns a value.</summary>
@@ -730,6 +734,35 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 $"\"Stream\" IN ('{LogStream.StdOut}', '{LogStream.StdErr}')"));
 
             entity.HasQueryFilter(log => log.OrganizationId == CurrentOrganizationId);
+        });
+
+        // F-015: one row per step position of a run. The unique (RunId, Index) index is the guard, not a
+        // pre-flight query: two concurrent reports of the same step position cannot both insert, so the
+        // worker's re-delivery of a report (a lost response) lands on the row that already exists. The
+        // rows cascade with their run - a step is not meaningful without it.
+        modelBuilder.Entity<BuildStep>(entity =>
+        {
+            entity.HasKey(step => step.Id);
+            entity.Property(step => step.Name).IsRequired()
+                .HasMaxLength(PipelineSpecSchema.MaxNameLength);
+            entity.Property(step => step.Status).IsRequired().HasMaxLength(16);
+            entity.Property(step => step.FailureReason).HasMaxLength(64);
+
+            entity.HasIndex(step => new { step.RunId, step.Index }).IsUnique();
+
+            entity.HasOne<Organization>().WithMany().HasForeignKey(step => step.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(step => step.Run).WithMany().HasForeignKey(step => step.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Belt and braces for the string status, same shape as the run status check above. Pending
+            // is deliberately absent: it is a view state for a step with no row, never a stored value.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_BuildSteps_Status",
+                $"\"Status\" IN ('{PipelineStepStatus.Running}', '{PipelineStepStatus.Success}', "
+                + $"'{PipelineStepStatus.Failed}', '{PipelineStepStatus.Skipped}')"));
+
+            entity.HasQueryFilter(step => step.OrganizationId == CurrentOrganizationId);
         });
 
         // F-012: secrets are tenant-owned and write-only above the storage layer. The name is the

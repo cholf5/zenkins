@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.SignalR.Client
 @using Microsoft.Extensions.Logging
 @using Zenkins.Server.LogStreaming
+@using Zenkins.Server.Runs
 @using Zenkins.Shared.LogStreaming
 
 @* The run's live log (card F-008). The page mints a subscription ticket for the signed-in session
@@ -51,9 +52,15 @@
             }
             else
             {
-                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var line in _lines)
+                @* One header per step segment (F-015): a line carries the step it was emitted in, so the log
+                   reads as "what each step printed" instead of one undifferentiated stream. *@
+                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var entry in _entries)
 {
-    <span @key="line.Seq" class="@(IsStdErr(line) ? "bb:text-red-500" : null)">@line.Message
+    @if (entry.Header is { } header)
+    {
+        <span class="bb:block bb:mt-1 bb:font-medium bb:text-foreground">@header</span>
+    }
+    <span @key="entry.Line.Seq" class="@(IsStdErr(entry.Line) ? "bb:text-red-500" : null)">@entry.Line.Message
 </span>
 }</code></pre>
             }
@@ -70,6 +77,13 @@
     [Parameter]
     public string? Ticket { get; set; }
 
+    /// <summary>
+    /// The run's steps in declaration order (card F-015), used to turn a line's <c>StepId</c> into the header
+    /// that names the step whose segment the line belongs to.
+    /// </summary>
+    [Parameter]
+    public IReadOnlyList<RunStepView>? Steps { get; set; }
+
     private readonly RunLogViewModel _viewModel = new();
     private HubConnection? _connection;
     private bool _connecting;
@@ -77,6 +91,9 @@
     private string? _connectionError;
 
     private IReadOnlyList<LogLineMessage> _lines = [];
+
+    /// <summary>The rendered lines, each with the step header it introduces (null when none does).</summary>
+    private IReadOnlyList<RunLogEntry> _entries = [];
 
     private string DownloadUrl => $"/runs/{RunId}/log/download";
 
@@ -204,6 +221,19 @@
     private Task LinesChanged()
     {
         _lines = _viewModel.Snapshot();
+
+        // F-015: the grouping rule lives in the view model (RunLogViewModel.Segment) so it is testable
+        // without an interactive circuit; the panel only supplies the step headers.
+        var headers = new Dictionary<Guid, string>();
+        foreach (var step in Steps ?? [])
+        {
+            if (step.Id is { } id)
+            {
+                headers[id] = $"{step.Index}. {step.Name}";
+            }
+        }
+
+        _entries = RunLogViewModel.Segment(_lines, headers);
         StateHasChanged();
         return Task.CompletedTask;
     }

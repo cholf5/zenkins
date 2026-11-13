@@ -167,7 +167,6 @@ public sealed class PipelineDefinitionTests
     [InlineData("shell")]
     [InlineData("checkout")]
     [InlineData("artifact")]
-    [InlineData("secret")]
     public void An_io_primitive_called_while_describing_says_it_is_available_inside_steps_only(string primitive)
     {
         var definition = $$"""
@@ -185,12 +184,43 @@ public sealed class PipelineDefinitionTests
     }
 
     [Fact]
-    public void A_step_time_helper_is_refused_with_its_own_wording_not_the_io_one()
+    public void Env_and_secret_are_deferred_references_not_values_read_while_describing()
     {
-        // env() is a synchronous helper (docs/lua-runtime.md §5.2/§6), not an I/O primitive: it reads the
-        // run's environment while a step runs, so the refusal must say that instead of "inside steps only".
+        // F-015 replaces the definition-time refusal with a deferred binding: env() and secret() answer with
+        // a reference the C# executor substitutes at the step boundary, because neither the run's
+        // environment nor a decrypted secret exists while the pipeline is being described. The spec therefore
+        // carries the reference, not a value - which is also why the definition phase never holds plaintext.
         var definition = """
-            env("PATH")
+            pipeline {
+              name = "Build",
+              steps = {
+                {
+                  name = "Only",
+                  run = { "deploy", secret("DEPLOY_TOKEN") },
+                  env = { CONFIG = env("CONFIG") },
+                },
+              },
+            }
+            """;
+
+        var result = new LuaRuntimeTestDefinition(definition).Run();
+
+        Assert.Equal("${secret:DEPLOY_TOKEN}", result.Spec.Steps[0].Argv[1]);
+        Assert.Equal("${env:CONFIG}", result.Spec.Steps[0].Env!["CONFIG"]);
+        // ...and the same reference survives the frozen JSON the Server stores (it is data, not code).
+        Assert.True(PipelineSpecJson.TryRead(result.SpecJson, out var frozen, out var error), error);
+        Assert.Equal("${secret:DEPLOY_TOKEN}", frozen!.Steps[0].Argv[1]);
+    }
+
+    [Theory]
+    [InlineData("secret")]
+    [InlineData("env")]
+    public void A_reference_helper_refuses_an_argument_that_is_not_a_variable_name(string helper)
+    {
+        // A malformed argument is the script's mistake, reported at its call site (positioned like any other
+        // Lua error) instead of silently becoming an empty string that fails somewhere unrelated.
+        var definition = $$"""
+            {{helper}}(42)
             pipeline { name = "Build", steps = { { name = "Only", run = { "dotnet", "--info" } } } }
             """;
 
@@ -198,9 +228,8 @@ public sealed class PipelineDefinitionTests
             new LuaRuntimeTestDefinition(definition).Run());
 
         Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
-        Assert.Contains("step-time helper", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("reads the run's environment", failure.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("available inside steps only", failure.Message, StringComparison.Ordinal);
+        Assert.Contains($"{helper}() takes one environment-variable-shaped name", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("pipeline.lua:", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]

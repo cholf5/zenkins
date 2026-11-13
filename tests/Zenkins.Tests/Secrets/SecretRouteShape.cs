@@ -21,6 +21,15 @@ internal static class SecretRouteShape
     /// <summary>The only read-only secret route: the Owner-only page.</summary>
     internal const string PageTemplate = "/secrets";
 
+    /// <summary>
+    /// The one worker-authenticated value route (card F-015, <c>secret()</c> delivery): <c>POST</c>, bearer
+    /// token, run-scoped. It is in the allow-list because it hands exactly one value to the worker executing
+    /// that run - the product's only value-returning route - and it is unreachable from a browser session
+    /// (no cookie authorization by design, like every other <c>/api/workers</c> route). The name travels in
+    /// the body, never in the URL.
+    /// </summary>
+    internal const string WorkerFetchTemplate = "/api/workers/runs/{runId:guid}/secrets";
+
     /// <summary>The only mutations there may be. All must be POST.</summary>
     internal static IReadOnlyList<string> MutationTemplates { get; } =
     [
@@ -60,6 +69,21 @@ internal static class SecretRouteShape
             var methods = MethodsOf(endpoint);
             var description = $"{template} [{string.Join(",", methods)}]";
 
+            // The worker fetch is a value route by design (F-015): one bearer-authenticated worker asks for
+            // one secret of the run it is executing. It must be exactly this template, POST only, and
+            // deliberately NOT cookie-authorized - a browser session must never be able to ask for a value.
+            if (IsWorkerFetchRoute(template!, methods))
+            {
+                if (RequiresAuthorization(endpoint))
+                {
+                    violations.Add(
+                        $"{description}: the worker fetch is bearer-token authenticated; adding cookie "
+                        + "authorization would expose a secret value route to a browser session.");
+                }
+
+                continue;
+            }
+
             if (!IsPageRoute(template!, methods)
                 && !IsMutationInAllowList(template!, methods))
             {
@@ -77,6 +101,11 @@ internal static class SecretRouteShape
 
         return violations;
     }
+
+    private static bool IsWorkerFetchRoute(string template, IReadOnlyList<string> methods) =>
+        string.Equals(template, WorkerFetchTemplate, StringComparison.Ordinal)
+        && methods.Count == 1
+        && string.Equals(methods[0], "POST", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPageRoute(string template, IReadOnlyList<string> methods) =>
         string.Equals(template, PageTemplate, StringComparison.OrdinalIgnoreCase)

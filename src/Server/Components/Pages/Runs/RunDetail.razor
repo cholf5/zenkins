@@ -1,5 +1,6 @@
 @page "/runs/{RunId:guid}"
 @attribute [Authorize]
+@using Zenkins.Shared.Pipelines
 @inject UserSession UserSession
 @inject RunService RunsService
 @inject RunLogAccess RunLogAccess
@@ -74,12 +75,34 @@
                         <span class="bb:font-medium">Pipeline:</span> <span id="run-pipeline-name">@pipeline.Name</span>
                         <span class="bb:text-muted-foreground">(@pipeline.Steps.Length step(s))</span>
                     </p>
-                    <ol id="run-steps" class="bb:mt-2 bb:list-decimal bb:space-y-1 bb:pl-6 bb:text-sm">
-                        @foreach (var step in pipeline.Steps)
+                    @* F-015: every declared step with the state the worker recorded for it, or Pending when
+                       it has not been reached - so a page opened mid-run shows completed, current and
+                       pending steps (the frozen spec is the list, the step rows are the states). *@
+                    <ol id="run-steps" class="bb:mt-2 bb:space-y-3 bb:text-sm">
+                        @foreach (var step in _run.StepList)
                         {
                             <li id="@($"run-step-{step.Name}")" class="bb:break-all">
-                                <span class="bb:font-medium">@step.Name</span>
-                                <code class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@string.Join(' ', step.Argv)</code>
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                    <span class="bb:text-xs bb:text-muted-foreground">@step.Index.</span>
+                                    <span class="bb:font-medium">@step.Name</span>
+                                    <BbBadge Variant="@StepBadgeVariant(step.Status)">@step.Status</BbBadge>
+                                    @if (step.ExitCode is { } exitCode)
+                                    {
+                                        <span class="bb:text-xs bb:text-muted-foreground">exit @exitCode</span>
+                                    }
+                                    @if (step.Duration is { } duration)
+                                    {
+                                        <span class="bb:text-xs bb:text-muted-foreground">@FormatDuration(duration)</span>
+                                    }
+                                    @if (step.FailureReason is { } reason)
+                                    {
+                                        <span class="bb:text-xs bb:text-muted-foreground">@StepReasonText(reason)</span>
+                                    }
+                                </div>
+                                @if (step.Index <= pipeline.Steps.Length)
+                                {
+                                    <code class="bb:text-xs bb:text-muted-foreground">@string.Join(' ', pipeline.Steps[step.Index - 1].Argv)</code>
+                                }
                             </li>
                         }
                     </ol>
@@ -161,7 +184,7 @@
         @* The run's log (F-008): live while the run executes, full history once it is finished.
            The ticket below is minted for this session and lets the panel's server-side
            HubConnection authenticate to the browser hub (a circuit cannot replay the cookie). *@
-        <RunLogPanel RunId="@_run.Id" Ticket="@_accessTicket" />
+        <RunLogPanel RunId="@_run.Id" Ticket="@_accessTicket" Steps="@_run.StepList" />
     }
 </div>
 
@@ -236,6 +259,40 @@
     private static string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds
         ? $"{seconds / 60} min (per-run override)"
         : "default";
+
+    /// <summary>A step's state as a badge (card F-015). Pending is the declared-but-not-reached state.</summary>
+    private static BadgeVariant StepBadgeVariant(string status) => status switch
+    {
+        PipelineStepStatus.Running => BadgeVariant.Default,
+        PipelineStepStatus.Success => BadgeVariant.Success,
+        PipelineStepStatus.Failed => BadgeVariant.Destructive,
+        PipelineStepStatus.Skipped => BadgeVariant.Outline,
+        _ => BadgeVariant.Secondary,
+    };
+
+    /// <summary>
+    /// A step's failure/skip reason in words; the stored value is a closed code (card F-015). Every code the
+    /// vocabulary defines has a sentence here - the three cancel-ish values are worded so the page tells them
+    /// apart (a step killed by a user cancel, a step that a canceled run never reached, and a step killed by the
+    /// run's deadline) - and an unknown code still renders as itself rather than as nothing.
+    /// </summary>
+    private static string StepReasonText(string reason) => reason switch
+    {
+        PipelineStepFailureReasons.WhenNotMatched => "its when condition did not match",
+        PipelineStepFailureReasons.PreviousStepFailed => "an earlier step failed",
+        PipelineStepFailureReasons.RunCanceled => "the run was canceled before this step",
+        PipelineStepFailureReasons.Canceled => "the run was canceled by a user",
+        PipelineStepFailureReasons.TimedOut => "the run's deadline passed",
+        PipelineStepFailureReasons.NotStarted => "the process could not be started",
+        PipelineStepFailureReasons.SecretUnavailable => "a secret could not be resolved",
+        _ => reason,
+    };
+
+    /// <summary>A step's duration, in the same shape the run's own duration uses.</summary>
+    private static string FormatDuration(TimeSpan duration) =>
+        duration.TotalMinutes >= 1
+            ? $"{(int)duration.TotalMinutes}m {duration.Seconds:D2}s"
+            : $"{duration.TotalSeconds:F1}s";
 
     /// <summary>Duration from the persisted start and end times; "-" while the run has no end.</summary>
     private static string FormatDuration(DateTimeOffset? startedAt, DateTimeOffset? endedAt)

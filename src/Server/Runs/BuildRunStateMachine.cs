@@ -32,6 +32,17 @@ public static class RunErrorCodes
     /// <summary>F-014: the run already has a frozen spec and the report carried a different one. The
     /// spec is immutable, so a second, different definition is refused rather than silently ignored.</summary>
     public const string PipelineSpecFrozen = "pipeline-spec-frozen";
+
+    /// <summary>F-015: the reported step does not exist in the run's frozen spec (index out of range, or
+    /// a name that disagrees with the spec at that position).</summary>
+    public const string StepUnknown = "step-unknown";
+
+    /// <summary>F-015: the step reports arrived out of order (a position above one that already has a row).</summary>
+    public const string StepOutOfOrder = "step-out-of-order";
+
+    /// <summary>F-015: the step is already terminal, so a further transition is refused (a re-delivery of
+    /// the same report is idempotent instead).</summary>
+    public const string StepAlreadyFinished = "step-already-finished";
 }
 
 /// <summary>

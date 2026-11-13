@@ -32,9 +32,9 @@ public sealed record PipelineSpec(
 /// first element is the program (pure argv, <b>never</b> a shell command line: PRD §8 constraint 6 -
 /// no quoting interpretation exists anywhere in the pipeline).
 /// <para>
-/// <see cref="Env"/> and <see cref="ContinueOnError"/> are accepted and frozen now and honoured by
-/// F-015; F-014 executes the default behaviour only (inherited environment, stop at the first
-/// failure), so a spec written today does not need a v2 tomorrow.
+/// <see cref="Env"/>, <see cref="ContinueOnError"/> and <see cref="When"/> are frozen by the definition
+/// phase and honoured by the C# executor (F-015): the step list is data, so a script cannot skip the
+/// sequencing, the conditions or the environment composition.
 /// </para>
 /// </summary>
 public sealed record PipelineStep(
@@ -42,8 +42,13 @@ public sealed record PipelineStep(
     string[]? Run = null,
     string[]? Shell = null,
     SortedDictionary<string, string>? Env = null,
-    bool ContinueOnError = false)
+    bool ContinueOnError = false,
+    PipelineCondition? When = null)
 {
+    /// <summary>Whether the step declares an execution-time condition (<c>when = { … }</c>).</summary>
+    [JsonIgnore]
+    public bool HasCondition => When is { } condition && !condition.IsEmpty;
+
     /// <summary>Whether the step was declared with <c>shell</c> rather than <c>run</c>.</summary>
     [JsonIgnore]
     public bool IsShell => Shell is not null;
@@ -55,6 +60,39 @@ public sealed record PipelineStep(
 
 /// <summary>The optional <c>triggers</c> table. Informational for a manual run; F-017 reads it.</summary>
 public sealed record PipelineTriggers(string[]? Branches = null);
+
+/// <summary>
+/// A step's execution-time condition (card F-015): <c>when = { branch = "main", platform = "linux",
+/// env = { K = "v" } }</c>.
+/// <para>
+/// <b>Declared, not executable.</b> A definition-time condition is plain Lua (<c>if is_linux() then
+/// steps[#steps+1] = … end</c>); this field is the other half - a condition the <b>C#</b> executor
+/// evaluates against the run's frozen facts (the branch it checked out, the worker's OS, the step's
+/// effective environment) immediately before the step would start. A script cannot make it do
+/// anything a step could not, and a skipped step is recorded rather than omitted, so the run page
+/// never shows a step that silently vanished.
+/// </para>
+/// <para>
+/// <b>All declared keys must match.</b> An absent key is not a condition; an unknown key is a
+/// definition error (<see cref="PipelineSpecSchema"/> refuses it, and this type refuses it on the
+/// wire too), because a typo like <c>brnach = "main"</c> would otherwise silently never match.
+/// </para>
+/// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record PipelineCondition(
+    string? Branch = null,
+    string? Platform = null,
+    SortedDictionary<string, string>? Env = null)
+{
+    /// <summary>The platforms <c>when.platform</c> may name (the same names <c>is_*()</c> use).</summary>
+    public static IReadOnlyList<string> Platforms { get; } = ["linux", "macos", "windows"];
+
+    /// <summary>Whether nothing is declared (the step always runs).</summary>
+    [JsonIgnore]
+    public bool IsEmpty => string.IsNullOrEmpty(Branch)
+        && string.IsNullOrEmpty(Platform)
+        && (Env is null || Env.Count == 0);
+}
 
 /// <summary>
 /// The schema constants and the JSON contract of <see cref="PipelineSpec"/> (card F-014). Both sides
@@ -72,6 +110,12 @@ public static class PipelineSpecSchema
 {
     /// <summary>The only schema version v1 knows: an unknown version is refused, never guessed.</summary>
     public const int Version = 1;
+
+    /// <summary>
+    /// An upper bound on the entries of one <c>when.env</c> map (card F-015). A condition is a hand-written
+    /// comparison, not a data channel; the bound keeps the frozen JSON bounded.
+    /// </summary>
+    public const int MaxConditionEnvEntries = 32;
 
     /// <summary>An upper bound on the steps of one pipeline (§6.1's 1..200).</summary>
     public const int MaxSteps = 200;
@@ -100,6 +144,7 @@ public static class PipelineSpecSchema
 [JsonSerializable(typeof(PipelineSpec))]
 [JsonSerializable(typeof(PipelineStep))]
 [JsonSerializable(typeof(PipelineTriggers))]
+[JsonSerializable(typeof(PipelineCondition))]
 public sealed partial class PipelineJsonContext : JsonSerializerContext;
 
 /// <summary>Serialisation and the Server-side envelope check of the frozen spec (card F-014).</summary>
@@ -203,9 +248,83 @@ public static class PipelineSpecJson
                 error = $"{path} has an empty argv.";
                 return false;
             }
+
+            // F-015: a condition is declared data the executor evaluates; an empty one is a mistake, and
+            // so is a key or platform the executor does not know (a typo would never match anything).
+            if (step.When is { } condition
+                && !TryReadCondition(condition, $"{path}.when", out error))
+            {
+                return false;
+            }
         }
 
         spec = parsed;
+        return true;
+    }
+
+    /// <summary>
+    /// The envelope check of one step condition (card F-015). <see cref="PipelineCondition"/> already
+    /// refuses an unknown key on the wire; this refuses the shapes a known key may not take, so the
+    /// Server never stores a condition the executor would have to guess at.
+    /// </summary>
+    internal static bool TryReadCondition(PipelineCondition? condition, string path, out string? error)
+    {
+        error = null;
+        if (condition is null)
+        {
+            return true;
+        }
+
+        if (condition.IsEmpty)
+        {
+            error = $"{path} must declare at least one of branch, platform or env.";
+            return false;
+        }
+
+        if (condition.Branch is { Length: 0 })
+        {
+            error = $"{path}.branch must be a non-empty string.";
+            return false;
+        }
+
+        if (condition.Branch is { } branch && branch.Length > PipelineSpecSchema.MaxNameLength)
+        {
+            error = $"{path}.branch must be at most {PipelineSpecSchema.MaxNameLength} characters.";
+            return false;
+        }
+
+        if (condition.Platform is { } platform
+            && !PipelineCondition.Platforms.Contains(platform, StringComparer.Ordinal))
+        {
+            error = $"{path}.platform must be one of {string.Join(", ", PipelineCondition.Platforms)} "
+                + $"(got '{platform}').";
+            return false;
+        }
+
+        if (condition.Env is { } env)
+        {
+            if (env.Count > PipelineSpecSchema.MaxConditionEnvEntries)
+            {
+                error = $"{path}.env must hold at most {PipelineSpecSchema.MaxConditionEnvEntries} entries.";
+                return false;
+            }
+
+            foreach (var (name, value) in env)
+            {
+                if (name.Length == 0)
+                {
+                    error = $"{path}.env has an empty variable name.";
+                    return false;
+                }
+
+                if (value is null)
+                {
+                    error = $"{path}.env.{name} must be a string.";
+                    return false;
+                }
+            }
+        }
+
         return true;
     }
 }

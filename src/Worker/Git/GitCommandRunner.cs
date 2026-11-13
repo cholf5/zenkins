@@ -225,7 +225,9 @@ public sealed class GitCommandRunner
             return argument;
         }
 
-        return string.Concat(argument.AsSpan(0, schemeEnd + 3), "[redacted]@", argument.AsSpan(at + 1));
+        // The same replacement token the run's log filter uses (F-015): one marker everywhere, so nobody has
+        // to reason about which token means "a value was removed here".
+        return string.Concat(argument.AsSpan(0, schemeEnd + 3), GitLogFilter.Replacement, "@", argument.AsSpan(at + 1));
     }
 
     private static IEnumerable<string> TakeLast(List<string> values, int count)

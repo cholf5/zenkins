@@ -51,15 +51,11 @@ public sealed class PipelineDefinitionRunner
 
     /// <summary>
     /// The SDK's I/O primitives: they need the host to do real work, which only a step may ask for.
+    /// <c>env</c> and <c>secret</c> are deliberately <b>not</b> here: since F-015 they answer with a deferred
+    /// reference instead of touching anything (see <see cref="StepReference"/>).
     /// </summary>
-    private static readonly string[] IoPrimitives = ["run", "shell", "checkout", "artifact", "secret"];
+    private static readonly string[] IoPrimitives = ["run", "shell", "checkout", "artifact"];
 
-    /// <summary>
-    /// The SDK helpers that belong to a step's lifetime rather than to a pipeline's description:
-    /// <c>env</c> reads the run's environment, which a definition cannot have yet (F-015 wires it). It is
-    /// refused for a different reason than the I/O primitives, and says so.
-    /// </summary>
-    private static readonly string[] StepTimeHelpers = ["env"];
 
     private readonly ILuaRuntime _runtime;
 
@@ -83,7 +79,8 @@ public sealed class PipelineDefinitionRunner
 
     /// <summary>
     /// Builds the runtime a definition runs on: F-011's runtime plus the primitives that exist only to
-    /// refuse (<c>run</c>, <c>shell</c>, <c>checkout</c>, <c>artifact</c>, <c>secret</c>, <c>env</c>).
+    /// refuse (<c>run</c>, <c>shell</c>, <c>checkout</c>, <c>artifact</c>) and the two that answer with a
+    /// deferred reference (<c>env</c>, <c>secret</c>).
     /// </summary>
     /// <param name="logSink">Where the script's <c>print</c>/<c>log</c> lines go (the run's log).</param>
     public static ILuaRuntime CreateRuntime(LuaLogSink logSink)
@@ -95,12 +92,35 @@ public sealed class PipelineDefinitionRunner
             runtime.RegisterHostFunction(name, _ => RefuseIo(name));
         }
 
-        foreach (var name in StepTimeHelpers)
-        {
-            runtime.RegisterHostFunction(name, _ => RefuseStepTime(name));
-        }
+        // F-015: the definition phase cannot read the run's environment or decrypt a secret - neither exists
+        // yet, and describing a pipeline does no I/O - so both answer with a deferred reference the C#
+        // executor substitutes at the step boundary (docs/lua-runtime.md §6/§7).
+        runtime.RegisterHostFunction(
+            "env",
+            call => Reference(call, StepReference.EnvironmentPrefix, "env"));
+        runtime.RegisterHostFunction(
+            "secret",
+            call => Reference(call, StepReference.SecretPrefix, "secret"));
 
         return runtime;
+    }
+
+    /// <summary>
+    /// The deferred reference an <c>env()</c>/<c>secret()</c> call yields while a pipeline is being
+    /// described. A malformed argument is the script's mistake and is reported at its call site, positioned
+    /// like any other Lua error, rather than becoming an empty string that fails somewhere unrelated.
+    /// </summary>
+    private static LuaHostResult Reference(LuaHostCall call, string prefix, string name)
+    {
+        var argument = call.FirstArgument;
+        var text = argument is { Kind: LuaHostValueKind.String } value ? value.Text : null;
+        if (!StepReference.IsValidName(text))
+        {
+            return LuaHostResult.Fail(
+                $"{name}() takes one environment-variable-shaped name, for example {name}(\"NAME\").");
+        }
+
+        return LuaHostResult.Value(LuaHostValue.FromString(prefix + text + StepReference.Terminator));
     }
 
     /// <summary>
@@ -221,15 +241,6 @@ public sealed class PipelineDefinitionRunner
     private static LuaHostResult RefuseIo(string name) => LuaHostResult.Fail(
         $"{name}() is available inside steps only: a pipeline definition describes the steps, "
         + "it does not execute anything.");
-
-    /// <summary>
-    /// The refusal for a step-time helper such as <c>env()</c>: not an I/O primitive (§6 calls it a
-    /// synchronous helper), but it reads the run's environment, which does not exist while the pipeline
-    /// is being described.
-    /// </summary>
-    private static LuaHostResult RefuseStepTime(string name) => LuaHostResult.Fail(
-        $"{name}() is a step-time helper: it reads the run's environment while a step runs, so it "
-        + "cannot be used while the pipeline is being described.");
 
     /// <summary>
     /// Resolves <paramref name="relativePath"/> inside <paramref name="repositoryPath"/>, refusing a

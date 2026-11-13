@@ -94,13 +94,44 @@ public sealed record RunView(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     int? TimeoutSeconds = null,
-    DateTimeOffset? DeadlineAt = null)
+    DateTimeOffset? DeadlineAt = null,
+    IReadOnlyList<RunStepView>? Steps = null)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
 
     /// <summary>The pipeline's declared name, or null while no definition was reported.</summary>
     public string? PipelineName => Pipeline?.Name;
+
+    /// <summary>
+    /// The run's steps in declaration order (card F-015): each declared step merged with the row the
+    /// worker recorded for it, or <see cref="PipelineStepStatus.Pending"/> when it has not been
+    /// reached yet. A run page opened mid-run therefore shows completed, current and pending steps.
+    /// </summary>
+    public IReadOnlyList<RunStepView> StepList => Steps ?? [];
+}
+
+/// <summary>
+/// One step of a run as the page displays it (card F-015). <see cref="Id"/> is the recorded row's id
+/// (also what <see cref="Zenkins.Shared.LogStreaming.LogLineMessage.StepId"/> carries), null for a
+/// declared step that has not been reported yet; <see cref="Index"/> is its 1-based position in the
+/// frozen spec.
+/// </summary>
+public sealed record RunStepView(
+    Guid? Id,
+    int Index,
+    string Name,
+    string Status,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? EndedAt,
+    int? ExitCode,
+    string? FailureReason)
+{
+    /// <summary>Whether the step is declared but not reached (no row recorded).</summary>
+    public bool IsPending => Status == PipelineStepStatus.Pending;
+
+    /// <summary>The step's duration, or null while it has no recorded end.</summary>
+    public TimeSpan? Duration => StartedAt is { } start && EndedAt is { } end ? end - start : null;
 }
 
 /// <summary>The failure reasons the server itself records (the worker's exit code needs none).</summary>
@@ -178,6 +209,40 @@ public sealed record RunReportResult(
     public static RunReportResult NotFound() => new(RunOperationStatus.NotFound);
 
     public static RunReportResult Conflict(string errorCode) => new(RunOperationStatus.Conflict, errorCode);
+}
+
+/// <summary>
+/// One step transition a worker reports (card F-015): the step's 1-based position in the frozen spec,
+/// its name (checked against that spec), the state it reached and - when nothing exited - the closed
+/// reason. Timestamps are the server's: the run's own <c>StartedAt</c>/<c>EndedAt</c> follow the same
+/// discipline, so a worker clock skew cannot make a step appear to end before it started.
+/// </summary>
+public sealed record RunStepReport(
+    int Index,
+    string? Name,
+    string? Status,
+    int? ExitCode = null,
+    string? FailureReason = null);
+
+/// <summary>The answer of a step report: the recorded row's id (which the worker stamps on the step's
+/// log lines), its state and the run's state.</summary>
+public sealed record RunStepResult(
+    RunOperationStatus Status,
+    Guid? StepId = null,
+    string? ErrorCode = null,
+    string? RunStatus = null,
+    string? StepStatus = null)
+{
+    public static RunStepResult Success(Guid stepId, string stepStatus, string runStatus) =>
+        new(RunOperationStatus.Success, stepId, RunStatus: runStatus, StepStatus: stepStatus);
+
+    public static RunStepResult InvalidToken() => new(RunOperationStatus.InvalidToken);
+
+    public static RunStepResult Invalid(string errorCode) => new(RunOperationStatus.InvalidInput, ErrorCode: errorCode);
+
+    public static RunStepResult NotFound() => new(RunOperationStatus.NotFound);
+
+    public static RunStepResult Conflict(string errorCode) => new(RunOperationStatus.Conflict, ErrorCode: errorCode);
 }
 
 /// <summary>
@@ -379,7 +444,7 @@ public sealed class RunService(
             .AsNoTracking()
             .Where(log => log.RunId == runId)
             .OrderBy(log => log.Seq)
-            .Select(log => new LogLineMessage(log.Seq, log.Stream, log.Message, log.Timestamp));
+            .Select(log => new LogLineMessage(log.Seq, log.Stream, log.Message, log.Timestamp, log.StepId));
 
         await foreach (var line in rows.AsAsyncEnumerable().WithCancellation(cancellationToken))
         {
@@ -787,9 +852,210 @@ public sealed class RunService(
     }
 
     /// <summary>
+    /// Records one step transition of a run this worker executes (card F-015, PRD §3.3.5). Every step
+    /// is reported before it starts (<c>Running</c>) and again when it ends (<c>Success</c>/
+    /// <c>Failed</c>/<c>Skipped</c>), so a run page opened mid-run shows completed, current and pending
+    /// steps; a skipped step is reported too, with its reason, so the page never shows a step that
+    /// silently vanished.
+    /// <para>
+    /// <b>Guards, in this order.</b> The token (bare 401), the payload's closed vocabulary (400), the
+    /// run's existence through the tenant filter (404 - a foreign id and a missing one are the same
+    /// answer), the run's ownership and state (409), the frozen spec (409: a step only exists inside a
+    /// definition), the position and name against that spec (400), then ordering across the rows already
+    /// recorded (409). A position that already has a row is never inserted twice: the same report
+    /// re-delivered is idempotent, and a terminal step refuses a further transition.
+    /// </para>
+    /// <para>
+    /// <b>Timestamps are the server's.</b> Started/ended instants follow the run's own discipline
+    /// (<c>BuildRun.StartedAt</c> is stamped at accept), so a skewed worker clock can never make a step
+    /// end before it started. A skipped step gets no start time: nothing ran.
+    /// </para>
+    /// </summary>
+    public async Task<RunStepResult> ReportStepAsync(
+        string? plaintextToken,
+        Guid runId,
+        RunStepReport report,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        // Authentication before payload validation (the accepted/completed discipline).
+        var (workerToken, worker, context) = await AuthenticateWithWorkerAsync(plaintextToken, cancellationToken);
+        if (workerToken is null || worker is null)
+        {
+            return RunStepResult.InvalidToken();
+        }
+
+        try
+        {
+            // 1. The payload's shape: a status outside the closed vocabulary, a failure reason that does
+            //    not belong to it, or an exit code a non-exiting state claims are all contract mismatches.
+            var status = report.Status;
+            if (!PipelineStepStatus.IsReportable(status) || report.Index < 1)
+            {
+                return RunStepResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            if (!PipelineStepFailureReasons.IsLegal(status!, report.FailureReason))
+            {
+                return RunStepResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            if (status == PipelineStepStatus.Success && report.ExitCode is not (null or 0))
+            {
+                return RunStepResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            if (status is PipelineStepStatus.Running or PipelineStepStatus.Skipped && report.ExitCode is not null)
+            {
+                return RunStepResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            // 2. The run: this worker's, still Running, and carrying the frozen spec the step belongs to.
+            //    The lookup goes through the tenant query filter, so a foreign run id is the same 404.
+            var run = await context.BuildRuns
+                .AsNoTracking()
+                .Where(candidate => candidate.Id == runId)
+                .Select(candidate => new
+                {
+                    candidate.Id,
+                    candidate.OrganizationId,
+                    candidate.WorkerId,
+                    candidate.Status,
+                    candidate.PipelineSpecJson,
+                })
+                .SingleOrDefaultAsync(cancellationToken);
+            if (run is null)
+            {
+                return RunStepResult.NotFound();
+            }
+
+            if (run.WorkerId != worker.Id)
+            {
+                return RunStepResult.Conflict(RunErrorCodes.RunNotAssignedToWorker);
+            }
+
+            if (run.Status != BuildRunStatus.Running)
+            {
+                return RunStepResult.Conflict(RunErrorCodes.InvalidTransition);
+            }
+
+            if (!PipelineSpecJson.TryRead(run.PipelineSpecJson, out var spec, out _) || spec is null)
+            {
+                // A step only exists inside a definition: without one there is nothing to index into.
+                return RunStepResult.Conflict(RunErrorCodes.StepUnknown);
+            }
+
+            if (report.Index > spec.Steps.Length
+                || !string.Equals(report.Name, spec.Steps[report.Index - 1].Name, StringComparison.Ordinal))
+            {
+                // The position must exist in the frozen spec and agree with it; that is what makes
+                // (RunId, Index) an ordering authority rather than a bucket of worker-chosen rows.
+                return RunStepResult.Invalid(RunErrorCodes.StepUnknown);
+            }
+
+            var declaredName = spec.Steps[report.Index - 1].Name;
+
+            // 3. Ordering and idempotence, from the rows already recorded for this run.
+            var existing = await context.BuildSteps
+                .Where(step => step.RunId == runId)
+                .ToListAsync(cancellationToken);
+            var row = existing.SingleOrDefault(candidate => candidate.Index == report.Index);
+            var highestIndex = existing.Count == 0 ? 0 : existing.Max(candidate => candidate.Index);
+            var now = DateTimeOffset.UtcNow;
+
+            if (row is null)
+            {
+                if (report.Index <= highestIndex)
+                {
+                    return RunStepResult.Conflict(RunErrorCodes.StepOutOfOrder);
+                }
+
+                row = new BuildStep
+                {
+                    // The run's own tenant, which the filter has already proved is the active one.
+                    OrganizationId = run.OrganizationId,
+                    RunId = runId,
+                    Index = report.Index,
+                    Name = declaredName,
+                    Status = status!,
+                    ExitCode = report.ExitCode,
+                    FailureReason = report.FailureReason,
+
+                    // A skipped step never ran, so it has no start instant; a coalesced terminal report
+                    // (a single Success/Failed without a preceding Running) starts and ends now.
+                    StartedAt = status == PipelineStepStatus.Skipped ? null : now,
+                    EndedAt = status == PipelineStepStatus.Skipped ? now
+                        : PipelineStepStatus.IsTerminal(status) ? now : null,
+                };
+                context.BuildSteps.Add(row);
+            }
+            else if (string.Equals(row.Status, status, StringComparison.Ordinal))
+            {
+                // A re-delivery of the same report (a lost response): the stored row is the answer.
+                return RunStepResult.Success(row.Id, row.Status, run.Status);
+            }
+            else if (PipelineStepStatus.IsTerminal(row.Status))
+            {
+                return RunStepResult.Conflict(RunErrorCodes.StepAlreadyFinished);
+            }
+            else
+            {
+                // Running -> terminal (or Running -> Running, a retried progress report): the first
+                // recorded start instant survives.
+                row.Status = status!;
+                row.ExitCode = report.ExitCode;
+                row.FailureReason = report.FailureReason;
+                row.StartedAt ??= status == PipelineStepStatus.Skipped ? null : now;
+                if (PipelineStepStatus.IsTerminal(status))
+                {
+                    row.EndedAt = now;
+                }
+            }
+
+            try
+            {
+                await context.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException exception) when (DatabaseErrors.IsUniqueViolation(exception, "BuildSteps"))
+            {
+                // Two concurrent reports of the same position: one row wins the unique (RunId, Index)
+                // index. The loser answers what is stored instead of inventing a second record.
+                context.ChangeTracker.Clear();
+                var stored = await context.BuildSteps
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        candidate => candidate.RunId == runId && candidate.Index == report.Index,
+                        cancellationToken);
+                if (stored is null)
+                {
+                    throw;
+                }
+
+                return string.Equals(stored.Status, status, StringComparison.Ordinal)
+                    ? RunStepResult.Success(stored.Id, stored.Status, run.Status)
+                    : RunStepResult.Conflict(RunErrorCodes.StepOutOfOrder);
+            }
+
+            logger.LogInformation(
+                "Run step recorded. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} StepIndex={StepIndex} StepStatus={StepStatus} ExitCode={ExitCode}",
+                run.OrganizationId,
+                runId,
+                worker.Id,
+                report.Index,
+                row.Status,
+                row.ExitCode);
+            return RunStepResult.Success(row.Id, row.Status, run.Status);
+        }
+        finally
+        {
+            await context.DisposeAsync();
+        }
+    }
+
+    /// <summary>
     /// Reports the end of a run this worker executes (card F-014 extends F-006's exit code with a
-    /// closed failure reason):
-    /// <list type="bullet">
+    /// closed failure reason):    /// <list type="bullet">
     /// <item>exit 0, no reason → <c>Success</c>.</item>
     /// <item>a non-zero exit (optionally with <c>step-failed</c>) → <c>Failed</c> with the code recorded
     /// - the code is the record, and the reason adds which phase produced it.</item>
@@ -1426,31 +1692,88 @@ public sealed class RunService(
             .Where(worker => workerIds.Contains(worker.Id))
             .ToDictionaryAsync(worker => worker.Id, worker => worker.Name, cancellationToken);
 
-        return runs.Select(run => new RunView(
-            run.Id,
-            run.ProjectId,
-            run.Status,
-            run.TriggerType,
-            run.TriggerUserId is not null && emails.TryGetValue(run.TriggerUserId, out var email)
-                ? email
-                : null,
-            run.WorkerId is not null && workerNames.TryGetValue(run.WorkerId.Value, out var name)
-                ? name
-                : null,
-            run.PipelinePath,
-            run.GitBranch,
-            run.GitCommit,
-            ReadPipeline(run.PipelineSpecJson),
-            RunValidation.ParseTags(run.RequiredTags),
-            run.StartedAt,
-            run.EndedAt,
-            run.ExitCode,
-            run.FailureReason,
-            run.CreatedAt,
-            run.UpdatedAt,
-            run.TimeoutSeconds,
-            run.DeadlineAt)).ToList();
+        // F-015: every recorded step of every run on the page, in one read (the run page shows
+        // completed, current and pending steps for a run that is still executing).
+        var runIds = runs.Select(run => run.Id).ToArray();
+        var stepRows = await context.BuildSteps
+            .AsNoTracking()
+            .Where(step => runIds.Contains(step.RunId))
+            .ToListAsync(cancellationToken);
+        var stepsByRun = stepRows.ToLookup(step => step.RunId);
+
+        return runs.Select(run =>
+        {
+            var pipeline = ReadPipeline(run.PipelineSpecJson);
+            return new RunView(
+                run.Id,
+                run.ProjectId,
+                run.Status,
+                run.TriggerType,
+                run.TriggerUserId is not null && emails.TryGetValue(run.TriggerUserId, out var email)
+                    ? email
+                    : null,
+                run.WorkerId is not null && workerNames.TryGetValue(run.WorkerId.Value, out var name)
+                    ? name
+                    : null,
+                run.PipelinePath,
+                run.GitBranch,
+                run.GitCommit,
+                pipeline,
+                RunValidation.ParseTags(run.RequiredTags),
+                run.StartedAt,
+                run.EndedAt,
+                run.ExitCode,
+                run.FailureReason,
+                run.CreatedAt,
+                run.UpdatedAt,
+                run.TimeoutSeconds,
+                run.DeadlineAt,
+                BuildStepViews(pipeline, [.. stepsByRun[run.Id]]));
+        }).ToList();
     }
+
+    /// <summary>
+    /// The steps a run page lists (card F-015): every step of the frozen spec in declaration order,
+    /// merged with the row the worker recorded for that position, or <c>Pending</c> when it has not been
+    /// reached. Recorded positions the spec does not cover (a spec that no longer parses, or a step
+    /// reported before a spec was frozen) are appended rather than hidden - a step that produced output
+    /// must not disappear from its own page.
+    /// </summary>
+    private static RunStepView[] BuildStepViews(
+        PipelineSpec? pipeline,
+        IReadOnlyList<BuildStep> recorded)
+    {
+        var views = new List<RunStepView>();
+        var byIndex = recorded.ToDictionary(step => step.Index);
+
+        if (pipeline is { } spec)
+        {
+            for (var index = 1; index <= spec.Steps.Length; index++)
+            {
+                var name = spec.Steps[index - 1].Name;
+                views.Add(byIndex.TryGetValue(index, out var step)
+                    ? ToStepView(step)
+                    : new RunStepView(null, index, name, PipelineStepStatus.Pending, null, null, null, null));
+            }
+        }
+
+        views.AddRange(recorded
+            .Where(step => views.All(view => view.Index != step.Index))
+            .OrderBy(step => step.Index)
+            .Select(ToStepView));
+
+        return [.. views];
+    }
+
+    private static RunStepView ToStepView(BuildStep step) => new(
+        step.Id,
+        step.Index,
+        step.Name,
+        step.Status,
+        step.StartedAt,
+        step.EndedAt,
+        step.ExitCode,
+        step.FailureReason);
 
     /// <summary>
     /// The frozen spec as the page reads it (card F-014). A row whose JSON no longer parses is rendered

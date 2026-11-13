@@ -38,4 +38,14 @@ public sealed class BuildLog : ITenantOwned
 
     /// <summary>When the Worker captured the line (worker clock, monotonic per line).</summary>
     public DateTimeOffset Timestamp { get; set; }
+
+    /// <summary>
+    /// The step this line belongs to (card F-015), or <see langword="null"/> for the lines of the
+    /// definition phase and the ones emitted between steps. Deliberately no foreign key: a log line is
+    /// an append-only record and must never block a step row's write or cascade in a surprising order;
+    /// the value is the <see cref="BuildStep.Id"/> the worker was given when it reported that step
+    /// <c>Running</c>, and the run page groups lines by it (a line whose step row is unknown still
+    /// renders - it simply has no header).
+    /// </summary>
+    public Guid? StepId { get; set; }
 }
