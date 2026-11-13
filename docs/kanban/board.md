@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [F-014](issues/f-014-pipeline-runs-definition.md) | Pipeline runs: definition phase, frozen spec, sequential steps | P1 | L | none | F-011, F-013 |
 | [F-015](issues/f-015-step-records-env-secrets.md) | Step records, per-step logs, env, continue_on_error, secrets and redaction | P1 | L | none | F-012, F-013, F-014 |
 | [F-016](issues/f-016-artifacts.md) | Artifacts: safe local store, per-run download | P1 | M | none | F-014, F-015 |
 | [F-017](issues/f-017-webhook-trigger.md) | Webhook trigger: signature, branch filter, replay protection | P1 | M | none | F-012, F-013, F-014 |
@@ -40,3 +39,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-011](issues/f-011-lua-runtime-host.md) | Lua runtime host and sandbox (Worker) | P1 | 2026-11-13 |
 | [F-012](issues/f-012-secrets-encrypted-storage.md) | Secrets: encrypted storage and Owner-only management | P1 | 2026-11-13 |
 | [F-013](issues/f-013-git-clone-checkout.md) | Git: clone, fetch, checkout with HTTPS/SSH credentials | P1 | 2026-11-13 |
+| [F-014](issues/f-014-pipeline-runs-definition.md) | Pipeline runs: definition phase, frozen spec, sequential steps | P1 | 2026-11-13 |

@@ -4,7 +4,7 @@ title: Pipeline runs: definition phase, frozen spec, sequential steps
 type: feature
 priority: P1
 size: L
-status: todo
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
@@ -76,48 +76,48 @@ Each step carries exactly one of `run` (argv array, 1..64 non-empty strings) or 
 
 ## Acceptance Criteria
 
-- [ ] Migration: `BuildRun` gains `PipelinePath`, `GitBranch`, `PipelineSpecJson`, keeps `GitCommit`;
+- [x] Migration: `BuildRun` gains `PipelinePath`, `GitBranch`, `PipelineSpecJson`, keeps `GitCommit`;
       `CommandJson` is dropped; existing rows are backfilled (branch from the project default, path
       from the project) and remain readable; PostgreSQL contract gate clean.
-- [ ] Manual trigger takes a branch (defaulting to the project's default branch), tags and timeout;
+- [x] Manual trigger takes a branch (defaulting to the project's default branch), tags and timeout;
       the argv form is gone from the project page and its endpoint.
-- [ ] On accept the Worker clones/checks out the run's branch through F-013, reports the resolved
+- [x] On accept the Worker clones/checks out the run's branch through F-013, reports the resolved
       commit, and then reads the pipeline file from the checked-out tree at `PipelinePath`.
-- [ ] The definition phase runs under the F-011 sandbox with only the pure helpers available; a
+- [x] The definition phase runs under the F-011 sandbox with only the pure helpers available; a
       script that calls an I/O primitive (`run`, `shell`, `checkout`, `artifact`, `secret`) from the
       definition gets a clear "available inside steps only" error, not a null-reference crash.
-- [ ] Validation rejects, with the offending field path in the message: unknown keys (pipeline,
+- [x] Validation rejects, with the offending field path in the message: unknown keys (pipeline,
       step), missing/empty/duplicate step names, missing `steps`, more than 200 steps, a step with
       neither or both of `run`/`shell`, non-string or empty argv elements, non-string env values, and
       a non-boolean `continue_on_error`.
-- [ ] A validated spec is frozen on the run (`PipelineSpecJson`), reported before execution starts,
+- [x] A validated spec is frozen on the run (`PipelineSpecJson`), reported before execution starts,
       shown on the run page (step names in order), and re-reading it never re-runs the script.
-- [ ] Missing pipeline file → `Failed/pipeline-missing` naming the path; syntax error →
+- [x] Missing pipeline file → `Failed/pipeline-missing` naming the path; syntax error →
       `Failed/pipeline-syntax` with `source:(line,col)` and nothing executed; invalid spec →
       `Failed/pipeline-invalid` with the field path and nothing executed; definition runaway →
       `Failed/pipeline-timeout`.
-- [ ] Steps execute in order with `ProcessRunner` in `work/{run-id}/repository`, each with the run's
+- [x] Steps execute in order with `ProcessRunner` in `work/{run-id}/repository`, each with the run's
       log stream; a failing step (non-zero exit) stops the run and yields `Failed/step-failed` with
       that exit code recorded on the run; every step's exit code and duration are in the log lines
       this card emits (per-step records are F-015).
-- [ ] Cancellation (F-009) during definition or between steps ends the run `Canceled` and kills the
+- [x] Cancellation (F-009) during definition or between steps ends the run `Canceled` and kills the
       running process tree; the deadline produces `timeout`.
-- [ ] A pipeline run on a worker that has no `git` binary fails with a message that names `git` and
+- [x] A pipeline run on a worker that has no `git` binary fails with a message that names `git` and
       does not leave the run `Running`.
-- [ ] Existing suites stay green; the queue/claim/lease, cancellation and offline behaviors are
+- [x] Existing suites stay green; the queue/claim/lease, cancellation and offline behaviors are
       unchanged, and the Worker stays ASP.NET-free.
 
 ## Subtasks
 
-- [ ] Schema + migration + backfill; `BuildRun.PipelineSpecJson` immutability rule.
-- [ ] Server: trigger endpoint/page branch + spec storage; `definition` report endpoint (commit +
+- [x] Schema + migration + backfill; `BuildRun.PipelineSpecJson` immutability rule.
+- [x] Server: trigger endpoint/page branch + spec storage; `definition` report endpoint (commit +
       spec validation server-side: schema version, step count, size cap); run page step list.
-- [ ] Worker: definition phase (F-011 runtime + prelude `pipeline`/`step`/`log`/`is_*`), spec
+- [x] Worker: definition phase (F-011 runtime + prelude `pipeline`/`step`/`log`/`is_*`), spec
       validator with field-path errors, `PipelineSpec` model, executor loop over `run`/`shell` steps
       using `ProcessRunner`, failure taxonomy mapping.
-- [ ] Prelude (`src/Worker/Lua/prelude.lua`, embedded resource) + a golden test that it is shipped in
+- [x] Prelude (`src/Worker/Lua/prelude.lua`, embedded resource) + a golden test that it is shipped in
       the worker binary.
-- [ ] Tests (`Category=Pipeline`): schema round-trip, every validation rejection, definition-phase
+- [x] Tests (`Category=Pipeline`): schema round-trip, every validation rejection, definition-phase
       I/O refusal, missing file, syntax error position, definition runaway, ordered execution with a
       marker-file proof that the third step did not run after the second failed, branch selection,
       spec frozen before execution.
@@ -180,6 +180,50 @@ Expected:
   env/conditions, per-step records and `secret()` — those are F-015, and the spec schema already
   reserves their fields so the JSON does not need a v2.
 
+### 2026-11-13 — implemented, reviewed, reworked, accepted
+
+- **The commit is reported before the definition runs, not after.** The first review failed the card
+  on exactly this: the worker reported commit and spec together once validation succeeded, so
+  `pipeline-missing`, `pipeline-syntax`, `pipeline-invalid` and `pipeline-timeout` runs ended with a
+  null `GitCommit` and a run page reading "Git commit: -" — the opposite of what this card and PRD §6
+  describe. The endpoint now takes two sends: commit alone right after the clone (stamp only, through
+  the same compare-and-set that refuses a second value), then commit plus the frozen spec once
+  validation passes.
+- **A run the server has disowned is abandoned, not finished.** The second review round found that a
+  definitively refused definition report was still followed by every step, because the reporter's
+  return value was dropped. A refusal now stops the run before any step and sends no completed report;
+  the worker logs one line saying the run is not its to finish, and still drains the log so nothing is
+  lost. Only 400/404/409/410 count as definitive: 408/425/429 retry, so a gateway or a rate limiter
+  cannot make a worker quietly walk away from a run it still owns.
+- **The Lua seam had to grow first.** `LuaExecutionResult` carries a structured `LuaHostValue` now
+  (the string remains for the log), because the card's contract is "the script builds a spec table,
+  the host validates and serialises it". Writing JSON inside Lua and parsing it in C# would have made
+  that sentence false. Tables are walked to `MaxResultDepth` and rejected beyond it rather than
+  truncated, and a mixed-key table is refused instead of guessed at.
+- **Accepting a run was check-then-act, handed over from F-013.** It is now a compare-and-set whose
+  WHERE clause carries the status and the live lease, in the same transaction as the commit stamp, so
+  two concurrent accepts cannot both start the same run.
+- The definition phase loads `prelude.lua` as its own chunk rather than concatenating it, so
+  `source:(line,col)` stays true for the user's file. Both are pinned: a syntax error on line 1 and a
+  runtime error on line 4 of a four-line script, the latter being the only evidence that a runtime
+  position does not shift.
+- Gates that would have been green and wrong: "the third step did not run" is a marker file the third
+  step writes itself, not a log line; "the spec is frozen" edits the pipeline file in the checked-out
+  work tree **and** pushes a different one to the branch, because a clone already put the file
+  locally; the prelude test reads the embedded resource out of the assembly, so
+  `File.ReadAllText("src/Worker/Lua/prelude.lua")` would be a red flag rather than a pass.
+- Gate: `dotnet build -c Release` 0 warnings 0 errors; `Category=Pipeline` 92/0/0; full suite 669/0/0;
+  `Category=Lua` 94, `Category=Secrets` 64, `Category=Git` 48 unchanged; PostgreSQL contract gate exits
+  0 with no running database and the migration carries Npgsql type shapes only.
+- Registered, not changed: pipeline fixtures seed the database directly, so the product path from a
+  project's repository URL to a clone has no end-to-end test yet (Q-002's real-repository harness is
+  the place for it); the abandoned-run branch has runner-level tests but no loop-level one; and nothing
+  asserts that a second definition report carrying a *different* commit cannot overwrite the first —
+  that is guarded by the same compare-and-set the database tests already cover.
+- The migration's `Down` cannot restore argv, so it writes `["argv-not-recoverable"]`: a legal
+  single-element argv whose element is a self-describing sentinel. An empty string would decode as an
+  empty argv, which reads as "this run never had a command" — a quiet lie about a run that really ran.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -194,4 +238,7 @@ Expected:
   `tests/Zenkins.Tests/WorkerRuntime/*`
 - How to run/verify: `dotnet build -c Release`; `dotnet test -c Release --filter "Category=Pipeline"`;
   full suite; PostgreSQL contract gate.
-- Results: not run (card not started).
+- Results: accepted 2026-11-13 after two review rounds and one rework. `dotnet build -c Release`
+  0 warnings 0 errors; `Category=Pipeline` 92/0/0; full suite 669/0/0, zero skipped; `Category=Lua` 94,
+  `Category=Secrets` 64, `Category=Git` 48 unchanged; PostgreSQL contract gate exits 0 without a
+  running database.
