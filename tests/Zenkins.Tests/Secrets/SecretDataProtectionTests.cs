@@ -21,6 +21,7 @@ public sealed class SecretDataProtectionTests
     [Theory]
     [InlineData("explicit-relative-directory")]
     [InlineData("explicit-absolute-directory")]
+    [InlineData("relative-data-source-keeps-the-ring-beside-the-working-directory")]
     [InlineData("sqlite-keeps-the-ring-next-to-the-database")]
     [InlineData("postgres-falls-back-to-the-content-root")]
     public void Each_resolution_branch_lands_where_the_documentation_says(string branch)
@@ -63,6 +64,15 @@ public sealed class SecretDataProtectionTests
                         [SecretDataProtection.KeysDirectoryConfigurationKey] = absoluteKeys,
                     });
                     expected = absoluteKeys;
+                    break;
+
+                case "relative-data-source-keeps-the-ring-beside-the-working-directory":
+                    // Card Q-003 (debt handed over by F-012): the connection string's Data Source can be
+                    // relative, and the resolver documents that Microsoft.Data.Sqlite's own resolution
+                    // applies - relative to the process working directory, NOT the content root. The ring
+                    // therefore lands next to the database file the worker data layer would open.
+                    dataOptions = new ZenkinsDataOptions(DatabaseProvider.Sqlite, "Data Source=App_Data/zenkins.db");
+                    expected = Path.Combine(Directory.GetCurrentDirectory(), "App_Data", "keys");
                     break;
 
                 case "sqlite-keeps-the-ring-next-to-the-database":

@@ -52,6 +52,48 @@ public sealed class PipelineRunEndpointTests
         Assert.Null(run.PipelineSpecJson);
     }
 
+    [Fact]
+    public async Task A_repository_url_saved_through_the_real_form_is_what_the_claim_tells_the_worker_to_clone()
+    {
+        // Card Q-003 (debt handed over by F-014): the pipeline fixtures seed the project row directly,
+        // because their file:// repositories are deliberately refused by the form. That left the
+        // product path - the URL a user types, through the real create form, into the row the claim
+        // reads - unproven. Here the URL goes through the form (it passes the product's own
+        // validation, so no fixture repository is needed), the run is triggered through the real form,
+        // and the assertion is the claim payload itself, not a seeded row.
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        const string repositoryUrl = "https://git.example.test/acme/form-saved.git";
+
+        var created = await OrganizationTestHost.PostFormAsync(
+            owner,
+            "/projects/new",
+            "/projects/create",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = "form-url-project",
+                ["RepositoryUrl"] = repositoryUrl,
+                ["DefaultBranch"] = "main",
+                ["PipelinePath"] = "pipeline.lua",
+            });
+        Assert.True(
+            (int)created.StatusCode is 302 or 303,
+            $"the create form rejected the URL with {(int)created.StatusCode}");
+        var location = created.Headers.Location!.OriginalString;
+        Assert.Contains("?notice=created", location, StringComparison.Ordinal);
+        Assert.Contains(repositoryUrl, await AuthTestHost.GetStringAsync(owner, location), StringComparison.Ordinal);
+        var projectId = Guid.Parse(location["/projects/".Length..].Split('?')[0]);
+
+        var (workerToken, _) = await host.RegisterWorkerAsync(name: "form-url-agent");
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
+
+        using var workerClient = host.Host.CreateClient();
+        using var claimed = await RunTestHost.ClaimAsync(workerClient, workerToken);
+        Assert.Equal(runId, await RunTestHost.ReadClaimedRunIdAsync(claimed));
+
+        Assert.Equal(repositoryUrl, await RunTestHost.ReadClaimStringAsync(claimed, "repositoryUrl"));
+    }
+
     // ------------------------------------------------------------------
     // The definition report freezes the spec
     // ------------------------------------------------------------------
@@ -192,6 +234,45 @@ public sealed class PipelineRunEndpointTests
         }
 
         Assert.Equal(first, (await host.ReadRunAsync(runId)).PipelineSpecJson);
+    }
+
+    [Fact]
+    public async Task A_second_definition_report_carrying_a_different_commit_is_refused_and_the_pinned_commit_is_unchanged()
+    {
+        // Card Q-003 (debt handed over by F-014): the compare-and-set is covered at the database level;
+        // this pins the endpoint's answer. A report that disagrees with the run's pinned commit means
+        // the worker built something other than the run says - a conflict, not a detail to absorb.
+        using var host = await RunTestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync("commit-cas-project");
+        var (workerToken, _) = await host.RegisterWorkerAsync(name: "commit-cas-agent");
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
+        using var workerClient = host.Host.CreateClient();
+        using var claimed = await RunTestHost.ClaimAsync(workerClient, workerToken);
+        Assert.Equal(runId, await RunTestHost.ReadClaimedRunIdAsync(claimed));
+        using var accepted = await RunTestHost.AcceptAsync(workerClient, workerToken, runId);
+
+        const string pinned = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string conflicting = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        var spec = Spec("Build", "Only");
+        using (var first = await RunTestHost.ReportDefinitionAsync(
+                   workerClient, workerToken, runId, PipelineSpecJson.Serialize(spec), gitCommit: pinned))
+        {
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        }
+
+        // The disagreeing commit is refused with the stable code, and nothing is written: the pinned
+        // commit and the frozen spec survive the refusal untouched (the run stays re-reportable).
+        using (var second = await RunTestHost.ReportDefinitionAsync(
+                   workerClient, workerToken, runId, pipelineSpecJson: null, gitCommit: conflicting))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+            Assert.Equal(RunErrorCodes.GitCommitMismatch, await ReadErrorPropertyAsync(second));
+        }
+
+        var run = await host.ReadRunAsync(runId);
+        Assert.Equal(pinned, run.GitCommit);
+        Assert.Equal(PipelineSpecJson.Serialize(spec), run.PipelineSpecJson);
+        Assert.Equal(BuildRunStatus.Running, run.Status);
     }
 
     [Theory]
