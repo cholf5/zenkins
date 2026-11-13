@@ -7,10 +7,15 @@
 @using Zenkins.Server.Runs
 @using Zenkins.Shared.LogStreaming
 
-@* The run's live log (card F-008). The page mints a subscription ticket for the signed-in session
-   and passes it in; this component connects the server-side HubConnection to the browser hub in
-   the same process, joins the run's group, and appends lines as they arrive. Stderr lines are
-   visually distinguished by color. Pause / search / per-step views are Phase 5. *@
+@* The run's live log (card F-008) with its control surface (card D-004). The page mints a
+   subscription ticket for the signed-in session and passes it in; this component connects the
+   server-side HubConnection to the browser hub in the same process, joins the run's group, and
+   appends lines as they arrive. Stderr lines are visually distinguished by color.
+   D-004 adds the client-side controls: pause freezes the VIEWPORT (the stream keeps arriving and
+   being persisted; resuming jumps to the tail), literal case-insensitive search with a match count
+   and next/previous, a per-step filter keyed on the lines' StepId (never text), and a stated render
+   cap - the download link is the way to get everything. All decisions live in RunLogViewModel; this
+   component renders the plan and forwards the user's intent. *@
 <div id="run-log" class="bb:space-y-3">
     <BbCard>
         <BbCardHeader>
@@ -44,23 +49,101 @@
                     <span class="bb:text-sm bb:text-muted-foreground">Reattach the live log stream.</span>
                 </div>
             }
-            @if (_lines.Count == 0)
+            @* D-004's control surface. Every control below writes into the view model and re-plans;
+               none of them reaches the server, so none of them can pause a build. *@
+            <div id="run-log-controls" class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <BbButton id="run-log-pause"
+                          Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
+                          OnClick="TogglePauseAsync">
+                    @(_plan.IsPaused ? "Resume" : "Pause")
+                </BbButton>
+                <span id="run-log-follow-state" role="status" class="bb:text-xs bb:text-muted-foreground">
+                    @_plan.Indicator
+                </span>
+                <span class="bb:flex bb:items-center bb:gap-1">
+                    <input id="run-log-search" type="search" placeholder="Search this log"
+                           class="bb:h-8 bb:w-44 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:text-sm"
+                           @bind="_search" @bind:event="oninput" @bind:after="ApplySearchAsync" />
+                    <BbButton id="run-log-search-previous"
+                              Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
+                              Disabled="@(_plan.MatchCount == 0)"
+                              OnClick="PreviousMatchAsync">
+                        Previous
+                    </BbButton>
+                    <BbButton id="run-log-search-next"
+                              Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
+                              Disabled="@(_plan.MatchCount == 0)"
+                              OnClick="NextMatchAsync">
+                        Next
+                    </BbButton>
+                </span>
+                <span id="run-log-search-summary" role="status" class="bb:text-xs bb:text-muted-foreground">
+                    @_plan.SearchSummary
+                </span>
+                @if (_plan.CurrentMatchIndex > 0)
+                {
+                    @* Next/Previous left the tail; this is the way back (the same jump Resume does). *@
+                    <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" OnClick="JumpToTailAsync">
+                        Back to latest
+                    </BbButton>
+                }
+                <select id="run-log-step-filter"
+                        aria-label="Filter the log to one step"
+                        class="bb:h-8 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:text-sm"
+                        value="@(_plan.StepFilter?.ToString() ?? "")"
+                        @onchange="OnStepFilterSelectedAsync">
+                    <option value="">All steps</option>
+                    @foreach (var step in Steps ?? [])
+                    {
+                        @if (step.Id is { } stepId)
+                        {
+                            var lines = _plan.StepCounts.GetValueOrDefault(stepId);
+                            <option value="@stepId.ToString()">
+                                @step.Index. @step.Name · @(lines == 0 ? "no output" : $"{lines} line{(lines == 1 ? "" : "s")}")
+                            </option>
+                        }
+                        else
+                        {
+                            @* A step the run has not reached yet: no row, no id, nothing to filter on. *@
+                            <option disabled>
+                                @step.Index. @step.Name · not started
+                            </option>
+                        }
+                    }
+                </select>
+            </div>
+            @if (_plan.IsCapped)
+            {
+                @* D-004's stated bound: the cap is said out loud, and the download is named as the
+                   way to get everything. *@
+                <p id="run-log-cap" class="bb:text-xs bb:text-muted-foreground">@_plan.CapNotice</p>
+            }
+            @if (_plan.TotalLines == 0)
             {
                 <p id="run-log-empty" class="bb:text-sm bb:text-muted-foreground">
                     @(_connecting ? "Connecting to the log stream…" : "No output was captured for this run.")
                 </p>
             }
+            else if (_plan.EmptyMessage is { } emptyMessage)
+            {
+                @* A selected step that produced no output, or a search that matched nothing: the
+                   panel says so instead of showing silence. *@
+                <p id="run-log-filter-empty" class="bb:text-sm bb:text-muted-foreground">
+                    @emptyMessage
+                </p>
+            }
             else
             {
                 @* One header per step segment (F-015): a line carries the step it was emitted in, so the log
-                   reads as "what each step printed" instead of one undifferentiated stream. *@
-                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var entry in _entries)
+                   reads as "what each step printed" instead of one undifferentiated stream. The current
+                   search match (D-004's navigation) is highlighted. *@
+                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var entry in _plan.Entries)
 {
     @if (entry.Header is { } header)
     {
         <span class="bb:block bb:mt-1 bb:font-medium bb:text-foreground">@header</span>
     }
-    <span @key="entry.Line.Seq" class="@(IsStdErr(entry.Line) ? "bb:text-red-500" : null)">@entry.Line.Message
+    <span @key="entry.Line.Seq" class="@LineClass(entry.Line)">@entry.Line.Message
 </span>
 }</code></pre>
             }
@@ -79,10 +162,23 @@
 
     /// <summary>
     /// The run's steps in declaration order (card F-015), used to turn a line's <c>StepId</c> into the header
-    /// that names the step whose segment the line belongs to.
+    /// that names the step whose segment the line belongs to, and to fill the step filter's options.
     /// </summary>
     [Parameter]
     public IReadOnlyList<RunStepView>? Steps { get; set; }
+
+    /// <summary>
+    /// The step the page asked the panel to show (D-004: selecting a step in the run's step list
+    /// jumps to the log filtered to that step). Null = all steps. Applied to the view model whenever
+    /// it differs from the filter the panel is already on.
+    /// </summary>
+    [Parameter]
+    public Guid? RequestedStepId { get; set; }
+
+    /// <summary>Reports the panel's own filter changes back to the page, so a step the user picked in
+    /// the dropdown and a step the page pushed stay one state (picking the same step twice still applies).</summary>
+    [Parameter]
+    public EventCallback<Guid?> StepFilterChanged { get; set; }
 
     private readonly RunLogViewModel _viewModel = new();
     private HubConnection? _connection;
@@ -90,12 +186,25 @@
     private bool _connectionClosed;
     private string? _connectionError;
 
-    private IReadOnlyList<LogLineMessage> _lines = [];
+    /// <summary>Everything the panel renders for the current instant, computed by the view model.</summary>
+    private RunLogPlan _plan = RunLogPanel.EmptyPlan();
 
-    /// <summary>The rendered lines, each with the step header it introduces (null when none does).</summary>
-    private IReadOnlyList<RunLogEntry> _entries = [];
+    /// <summary>The search box's text, live-bound; the view model commits it on every keystroke.</summary>
+    private string _search = string.Empty;
 
     private string DownloadUrl => $"/runs/{RunId}/log/download";
+
+    protected override void OnParametersSet()
+    {
+        // The page's step selection wins over whatever the dropdown held: applying a different value
+        // than the view model's is the "selecting a step jumps to the log" rule (D-004).
+        if (RequestedStepId != _viewModel.StepFilter)
+        {
+            _viewModel.SetStepFilter(RequestedStepId);
+        }
+
+        Replan();
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -218,12 +327,80 @@
         }
     }
 
+    // ------------------------------------------------------------------
+    // D-004 control surface: every handler writes intent into the view model and re-plans.
+    // ------------------------------------------------------------------
+
+    /// <summary>Pause freezes the viewport (the stream keeps arriving and being persisted);
+    /// resume jumps to the tail. The indicator on the plan says which state the panel is in.</summary>
+    private Task TogglePauseAsync()
+    {
+        if (_plan.IsPaused)
+        {
+            _viewModel.Resume();
+        }
+        else
+        {
+            _viewModel.Pause();
+        }
+
+        return ReplanAsync();
+    }
+
+    private Task ApplySearchAsync()
+    {
+        _viewModel.SetSearch(_search);
+        return ReplanAsync();
+    }
+
+    private Task NextMatchAsync()
+    {
+        _viewModel.MoveToNextMatch();
+        return ReplanAsync();
+    }
+
+    private Task PreviousMatchAsync()
+    {
+        _viewModel.MoveToPreviousMatch();
+        return ReplanAsync();
+    }
+
+    private Task JumpToTailAsync()
+    {
+        _viewModel.JumpToTail();
+        return ReplanAsync();
+    }
+
+    private Task OnStepFilterSelectedAsync(ChangeEventArgs args)
+    {
+        var value = args?.Value?.ToString();
+        Guid? stepId = Guid.TryParse(value, out var parsed) ? parsed : null;
+        _viewModel.SetStepFilter(stepId);
+        Replan();
+        StateHasChanged();
+        return StepFilterChanged.InvokeAsync(stepId);
+    }
+
     private Task LinesChanged()
     {
-        _lines = _viewModel.Snapshot();
+        // New lines arrived (history chunk or live flush): re-plan from the store. While paused the
+        // plan keeps the frozen window - the indicator's waiting count is what moves instead.
+        Replan();
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
 
-        // F-015: the grouping rule lives in the view model (RunLogViewModel.Segment) so it is testable
-        // without an interactive circuit; the panel only supplies the step headers.
+    private void Replan() => _plan = _viewModel.Plan(BuildStepHeaders());
+
+    private Task ReplanAsync()
+    {
+        Replan();
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Dictionary<Guid, string> BuildStepHeaders()
+    {
         var headers = new Dictionary<Guid, string>();
         foreach (var step in Steps ?? [])
         {
@@ -233,13 +410,41 @@
             }
         }
 
-        _entries = RunLogViewModel.Segment(_lines, headers);
-        StateHasChanged();
-        return Task.CompletedTask;
+        return headers;
     }
 
-    private static bool IsStdErr(LogLineMessage line) =>
-        string.Equals(line.Stream, LogStream.StdErr, StringComparison.Ordinal);
+    /// <summary>A line's classes: stderr in red (F-008), the current search match highlighted.</summary>
+    private string LineClass(LogLineMessage line)
+    {
+        if (_plan.CurrentMatchSeq is { } matchSeq && line.Seq == matchSeq)
+        {
+            return "bb:font-bold bb:text-primary";
+        }
+
+        return string.Equals(line.Stream, LogStream.StdErr, StringComparison.Ordinal)
+            ? "bb:text-red-500"
+            : string.Empty;
+    }
+
+    /// <summary>The plan before the first parameters arrive: an empty panel, following, no search.</summary>
+    private static RunLogPlan EmptyPlan() => new(
+        [],
+        TotalLines: 0,
+        FilteredLines: 0,
+        IsCapped: false,
+        CapNotice: null,
+        IsPaused: false,
+        NewWhilePaused: 0,
+        Indicator: "Following live",
+        SearchActive: false,
+        SearchText: string.Empty,
+        MatchCount: 0,
+        CurrentMatchIndex: 0,
+        CurrentMatchSeq: null,
+        SearchSummary: null,
+        EmptyMessage: null,
+        StepFilter: null,
+        StepCounts: new Dictionary<Guid, int>());
 
     public async ValueTask DisposeAsync()
     {

@@ -46,6 +46,31 @@
             </div>
         }
 
+        @* D-004's failure surface: when the run failed, the reason, the exit code and the failing
+           step are the first thing on the page - no scrolling, no expanding. A run that failed
+           before any step could run says that instead of inventing a step. *@
+        @if (_run.Status == BuildRunStatus.Failed)
+        {
+            <div id="run-failure" role="alert"
+                 class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm">
+                <p id="run-failure-title" class="bb:font-medium bb:text-destructive">This run failed.</p>
+                <dl class="bb:mt-2 bb:space-y-1">
+                    <div class="bb:flex bb:gap-2">
+                        <dt class="bb:text-muted-foreground">Reason</dt>
+                        <dd id="run-failure-reason" class="bb:break-all">@(_run.FailureReason ?? "-")</dd>
+                    </div>
+                    <div class="bb:flex bb:gap-2">
+                        <dt class="bb:text-muted-foreground">Exit code</dt>
+                        <dd id="run-failure-exit-code">@(_run.ExitCode?.ToString() ?? "-")</dd>
+                    </div>
+                    <div class="bb:flex bb:gap-2">
+                        <dt class="bb:text-muted-foreground">Failing step</dt>
+                        <dd id="run-failure-step" class="bb:break-all">@FailingStepText()</dd>
+                    </div>
+                </dl>
+            </div>
+        }
+
         <BbCard>
             <BbCardHeader>
                 <BbCardTitle As="h2">Pipeline</BbCardTitle>
@@ -100,6 +125,21 @@
                                     @if (step.FailureReason is { } reason)
                                     {
                                         <span class="bb:text-xs bb:text-muted-foreground">@StepReasonText(reason)</span>
+                                    }
+                                    @* D-004: selecting a step jumps to the log filtered to that step.
+                                       The fragment brings the panel into view; the handler pushes the
+                                       step row's id down into the panel's filter (StepId, never text).
+                                       data-enhance-nav="none" keeps the jump a native same-document
+                                       fragment scroll - enhanced navigation would re-initialize the
+                                       page and throw away the panel's pause/search state. A step
+                                       without a recorded row has no id to filter on, so it offers no
+                                       link. *@
+                                    @if (step.Id is { } stepRowId)
+                                    {
+                                        <a id="@($"run-step-log-{step.Name}")" href="#run-log"
+                                           data-enhance-nav="none"
+                                           class="bb:text-xs bb:font-medium bb:text-primary bb:hover:underline"
+                                           @onclick="@(() => FilterLogToStep(stepRowId))">View log</a>
                                     }
                                 </div>
                                 @if (step.Index <= pipeline.Steps.Length)
@@ -236,8 +276,11 @@
 
         @* The run's log (F-008): live while the run executes, full history once it is finished.
            The ticket below is minted for this session and lets the panel's server-side
-           HubConnection authenticate to the browser hub (a circuit cannot replay the cookie). *@
-        <RunLogPanel RunId="@_run.Id" Ticket="@_accessTicket" Steps="@_run.StepList" />
+           HubConnection authenticate to the browser hub (a circuit cannot replay the cookie).
+           D-004: the step list and the panel share the filter state - this page holds it, the
+           step list writes it, the panel reads it and reports its own changes back. *@
+        <RunLogPanel RunId="@_run.Id" Ticket="@_accessTicket" Steps="@_run.StepList"
+                     RequestedStepId="@_logStepFilter" StepFilterChanged="OnLogStepFilterChanged" />
     }
 </div>
 
@@ -256,6 +299,14 @@
 
     /// <summary>What the run published (card F-016): every artifact row, with only Ready ones downloadable.</summary>
     private IReadOnlyList<ArtifactView> _artifacts = [];
+
+    /// <summary>
+    /// The step the log panel is narrowed to (card D-004): written by the step list's "View log"
+    /// links and by the panel's own dropdown (through <see cref="OnLogStepFilterChanged"/>, so
+    /// picking the same step twice still applies). The value is the step row's id - the same
+    /// StepId the worker stamps on the log lines - never a text match.
+    /// </summary>
+    private Guid? _logStepFilter;
 
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
@@ -305,6 +356,39 @@
     private static string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds
         ? $"{seconds / 60} min (per-run override)"
         : "default";
+
+    /// <summary>D-004: the step list's "View log" link pushes the step row's id into the panel's filter.</summary>
+    private void FilterLogToStep(Guid stepId) => _logStepFilter = stepId;
+
+    /// <summary>D-004: the panel reports its own dropdown's changes back, so the page's copy of the
+    /// filter and the panel's stay one state (and re-selecting the same step still applies).</summary>
+    private Task OnLogStepFilterChanged(Guid? stepId)
+    {
+        _logStepFilter = stepId;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// D-004's failure surface: the failing step by name (with its exit code), or the honest
+    /// statement that no step failed - a run can fail in the definition phase, before any step ran.
+    /// </summary>
+    private string FailingStepText()
+    {
+        if (_run is null)
+        {
+            return "-";
+        }
+
+        var failing = _run.StepList.FirstOrDefault(step => step.Status == PipelineStepStatus.Failed);
+        if (failing is null)
+        {
+            return "No recorded step failed (the run ended before a step could).";
+        }
+
+        return failing.ExitCode is { } exitCode
+            ? $"{failing.Index}. {failing.Name} (exit {exitCode})"
+            : $"{failing.Index}. {failing.Name}";
+    }
 
     /// <summary>A step's state as a badge (card F-015). Pending is the declared-but-not-reached state.</summary>
     private static BadgeVariant StepBadgeVariant(string status) => status switch
