@@ -19,17 +19,18 @@ sections here instead of restating them.
 
 - PRD §3.3.6 already names MoonSharp and requires a pure C# runtime (no native Lua binary), so the
   engine *family* was not an open question — only the version and the surface are.
-- The runtime sits behind our own seam (`ILuaRuntime` / `IPipelineScriptHost`, see §6), so the
-  engine appears in one file's constructor call and nowhere else.
-- `3.0.0-beta.1` is **behaviourally identical to 2.0.0 for everything we use**, measured (§2).
-  Choosing between them is therefore a stabilisation question, not a feature question, and a
-  shipped stable tag wins.
+- The runtime sits behind our own seam (`ILuaRuntime`, see §6), so the engine appears in one
+  file's constructor call and nowhere else.
+- `3.0.0-beta.1` is **identical to 2.0.0 for every behaviour we depend on**, measured (§2); the
+  documented exceptions are `_VERSION` (`MoonSharp 2.0.0.0` vs `MoonSharp 3.0.0.0`, §2) and the
+  `CallStack` locations of §6.2. Choosing between them is therefore a stabilisation question, not a
+  feature question, and a shipped stable tag wins.
 
 Why not the alternatives:
 
 | Candidate | Why not |
 |---|---|
-| MoonSharp `3.0.0-beta.1` | A single prerelease. Package metadata (NuGet registration; the `.nupkg` entry timestamps say 2026-07-04, the upstream tag says 2026-03-03) *suggests* it lags upstream, but that was not verified from this machine and is not load-bearing: the beta already reproduces the `pcall`-with-`__call` defect that upstream fixed in 2026-10, so being on a prerelease buys neither the fix nor a stable API, and costs a Central Package Management prerelease entry. |
+| MoonSharp `3.0.0-beta.1` | A single prerelease. Package metadata (NuGet registration; the `.nupkg` entry timestamps say 2026-07-04, the upstream tag says 2026-03-03 — *upstream metadata, not verifiable from this machine*) *suggests* it lags upstream, but that was not verified here and is not load-bearing: the beta already reproduces the `pcall`-with-`__call` defect that upstream is said to have fixed in 2026-10 (*upstream metadata, not verifiable from this machine* — what *is* measured is that the beta still has the defect, §2), so being on a prerelease buys neither the fix nor a stable API, and costs a Central Package Management prerelease entry. |
 | Hand-rolled interpreter | Not a v0.3-sized task: it is a Lua implementation plus a sandbox plus a debugger story, competing with a mature interpreter on a schedule that also has git, artifacts and webhooks in it. |
 | NLua / KeraLua / native Lua | Violates PRD §3.3.6 ("不依赖 Native Lua Runtime") and multiplies the cross-platform packaging problem (three RIDs, three native binaries) on a product whose selling point is `dotnet run`. |
 | MoonSharp `2.x` + local patches | Only if a defect blocks us. See the switch triggers below. |
@@ -46,16 +47,20 @@ Why not the alternatives:
 
 Same probe source, two packages, `net10.0`:
 
+Timing-dependent cells are one representative run; they vary between runs on the same machine (the
+assertable form is in §9 #14).
+
 | Probe | MoonSharp 2.0.0 | MoonSharp 3.0.0-beta.1 |
 |---|---|---|
 | Best asset for `net10.0` | `netstandard1.6` | `netstandard2.0` |
 | Transitive dependencies | **0** (nuspec has no `<dependencies>`) | **0** |
 | Build with `TreatWarningsAsErrors` | 0 warnings, 0 errors | 0 warnings, 0 errors |
-| `lua result` on a two-function script | `HELLO sum=5` | identical |
+| `_VERSION` | `MoonSharp 2.0.0.0` | `MoonSharp 3.0.0.0` |
 | `//`, `<<`, `&`, `math.type`, `utf8`, `<const>` | unsupported (5.2) | unsupported (5.2) |
 | `goto` / `::label::`, `bit32`, `select('#')` | work (`goto-ok`, `8`, `3`) | identical |
 | Sandbox module sets | identical | identical |
 | Runtime error text | `pipeline.lua:(2,28-41): bad thing` | identical |
+| `CallStack` `Location` per frame | only the raising frame | every frame (§6.2) |
 | Syntax error text | `pipeline.lua:(1,10-11): unexpected symbol near '='` | identical |
 | `collectgarbage('count')` | `nil` | `nil` |
 | `pcall(callable table)` | `attempt to pcall a non-function` | same defect |
@@ -63,7 +68,9 @@ Same probe source, two packages, `net10.0`:
 | 100 000 Lua→C# callbacks | 27–29 ms | 29 ms |
 | `while true do end`, 300 ms budget | 7 190 budget yields | 7 137 |
 | 8 scripts on 8 threads | 234–398 ms, no exceptions | identical |
-| 400 KB by O(n²) `..` concatenation | 0.8–3.6 s across three sessions | 0.77 s |
+| 400 KB by O(n²) `..` concatenation | 0.8–4.3 s across sessions (this run 3.5–4.3 s) | 0.77 s |
+
+That a script of ours runs at all is fixture 1 and fixture 2 of §9, both printed in Appendix A §K.
 
 Two conclusions worth keeping:
 
@@ -72,7 +79,7 @@ Two conclusions worth keeping:
   `<const>`.
 - **The engine is not a performance concern for orchestration.** A million VM iterations cost ~220 ms
   and 100 000 host callbacks ~28 ms. What is slow is Lua-side string building: the same 400 KB took
-  0.8 s in one session and 1.6–3.6 s in others, because immutable-string concatenation is O(n²) and
+  0.8 s in one session and 1.6–4.3 s in others, because immutable-string concatenation is O(n²) and
   depends on allocation/GC timing — which is why logging is a C# primitive (§7), and why nobody
   should budget on the lower figure.
 
@@ -85,7 +92,7 @@ behaviour (Appendix A §C):
 |---|---|---|---|
 | `pcall` / `xpcall` | function | function | **nil** |
 | `setmetatable` / `getmetatable` | function | function | **nil** |
-| `coroutine` | function | function | **nil** |
+| `coroutine.create` | function | function | **nil** |
 | `dynamic` / `json` | nil | **table** | nil |
 | `os` | table (no `execute`/`exit`/`getenv`) | table (same) | **nil** (so no `os.time`) |
 | `io` / `load` / `dofile` / `require` / `debug` | nil | nil | nil |
@@ -116,9 +123,10 @@ script.Globals["_MOONSHARP"] = DynValue.Nil; // banner/version/platform metadata
 script.Globals["print"]   = /* the run-log sink */;
 ```
 
-**The registry is a second door, but only if `Dynamic`/`Json` is composed in.** With the contract
-composition, `package.loaded` contains `bit32, coroutine, math, os, string, table` — no `dynamic`,
-nothing to reach. Compose `Dynamic` back in (or use `Preset_Default`) and `dynamic = nil` no longer
+**The registry is a second door, and any module that registers a live table into `package.loaded`
+opens it.** With the contract composition, `package.loaded` contains `bit32, coroutine, math, os,
+string, table` — no `dynamic`, nothing to reach. Add a module that registers something dangerous —
+`Dynamic` and `Json` are the obvious ones, and `IO` is worse — and nil-ing the global no longer
 holds:
 
 ```lua
@@ -127,10 +135,23 @@ package.loaded.dynamic.eval('1+1')   -- 2   (composition includes Dynamic)
 ```
 
 Measured for all three shapes (Appendix A §D): `explicit` → escape unreachable, `explicit|Dynamic`
-→ `2`, `Preset_Default` → `2`. So the rule is not "nil the global and you are done"; it is **never
-compose `Dynamic` or `Json`, and nil the globals as well** so that a future edit that adds a module
-does not silently reopen the door. `package` exists only as a handle to `loaded` here — no `path`, no
-`loadlib`, no searchers — which is why nil-ing it costs nothing.
+→ `2`, `Preset_Default` → `2`. `Preset_Default` also shows what "dangerous" means beyond the CLR
+bridge: its `package.loaded.io` is the real `io` table, and the probe opens a file and writes to it
+through that table (Appendix A §D: `Preset_Default io through the registry: wrote file`).
+
+The rule therefore has two halves, and only the second one closes the door:
+
+- **Nil-ing the global per module is not enough.** It closes the name a script would reach for, not
+  the copy the module has already registered in `package.loaded` (measured: `dynamic = nil` followed
+  by `package.loaded.dynamic.eval('1+1')` still yields `2`).
+- **Nil-ing `package` is what closes it** (measured: `type(package)` is `nil`, and
+  `pcall(function() return package.loaded.dynamic end)` returns `false` with `attempt to index a
+  nil value` — Appendix A §D2: fixture 12b, the gate F-011 implements).
+
+Both are done — never compose a module we do not need, and nil the globals *and* `package` — so that
+a future edit that adds a module fails a fixture instead of silently reopening the door. `package`
+exists only as a handle to `loaded` here (no `path`, no `loadlib`, no searchers), which is why
+nil-ing it costs nothing.
 
 ### 3.2 Self-check, in tests and at startup
 
@@ -205,9 +226,25 @@ try
             return Abandon(co);              // never resume again; kill the process tree
         }
 
-        result = co.State == CoroutineState.ForceSuspended
-            ? co.Resume()                                   // args MUST be empty
-            : co.Resume(DynValue.NewString(await RunAsync(pending.Dequeue()))); // answer the call
+        switch (co.State)
+        {
+            case CoroutineState.ForceSuspended:
+                result = co.Resume();        // the instruction budget: args MUST be empty
+                break;
+
+            case CoroutineState.Suspended when pending.Count > 0:
+                // the I/O completes first and the owning thread resumes afterwards: never
+                // `Resume(await ...)`, which would resume from the continuation's thread.
+                var answer = await RunAsync(pending.Dequeue());
+                result = co.Resume(DynValue.NewString(answer));
+                break;
+
+            case CoroutineState.Suspended:
+                return Abandon(co);          // the script yielded on its own: a script violation
+
+            default:
+                return Abandon(co);          // no other state exists today; treat one as unsafe
+        }
     }
 }
 catch (ScriptRuntimeException ex)   { /* script failed: render ex.DecoratedMessage */ }
@@ -216,24 +253,44 @@ catch (SyntaxErrorException ex)     { /* did not compile: render ex.DecoratedMes
 
 - `CoroutineState.ForceSuspended` is the instruction-budget yield: `Resume(value)` throws
   `ArgumentException: When resuming a force-suspended coroutine, args must be empty.` (measured).
-- `CoroutineState.Suspended` is an SDK call asking the host for something: `Resume()` with no
-  argument delivers `nil` to the call site (measured: `got:nil`), so the host must supply the answer.
+- `CoroutineState.Suspended` is *a suspension*, not *a host call*. A script that calls
+  `coroutine.yield('user-payload')` produces the same state with an empty queue (measured,
+  Appendix A §E: `state=Suspended res.Type=String res=user-payload pending=0`), and then the obvious
+  `pending.Dequeue()` throws `InvalidOperationException: Queue empty.` — which neither handler above
+  catches, so a seven-line pipeline could take a worker down. Hence the third branch: `Suspended`
+  with nothing pending is a script violation and the run is abandoned (fixture 18). `Resume()` with
+  no argument delivers `nil` to a genuine host call (measured: `got:nil`), so "did I get a value
+  back" is not a discriminator either.
+- `State` alone is not a safe discriminator, and the queue alone fixes the count but not the
+  identity: one dequeued request per suspension, in order, with nothing tying a request to the
+  suspension that asked for it. A production driver therefore also has every primitive yield a
+  **private sentinel** — a `DynValue` table created once by the host and never exposed to Lua — and
+  answers only suspensions that carry it. The queue is the first lock, the sentinel the second.
 - The `Resume` result is informational, not the discriminator: after a budget yield it is a
   `YieldRequest`, after an explicit yield it is that yield's own return values (`Nil` when the
-  primitive yields none). Branch on `State`.
-- Starting the loop with `RecursionGuard`: nothing here re-enters the script from a C# callback;
-  if a future primitive ever needs to, that is a new design (see §6.1), not a variation of this loop.
+  primitive yields none). Branch on `State` (plus the sentinel), never on the result.
+- The loop never re-enters the script from a C# callback: every host call is answered by a `Resume`
+  from this loop, and no primitive runs Lua code of its own. If a future primitive has to call back
+  into the same `Script` (a Lua callback handed to `run()`), that is a new design under §6.1, not a
+  variation of this loop — there is no engine-level re-entrancy guard to lean on.
 - Measured: `while true do end`, `local i=0 while true do i=i+1 end` and `while true do local t={} end`
-  all return control to the host in milliseconds and are abandonable at any yield point (7 190
-  budget yields inside a 300 ms budget).
+  all return control to the host in milliseconds and are abandonable at any yield point (the tight
+  loop gets 6 844–9 221 budget yields inside a 300 ms budget, the two others 3 609–5 629; Appendix
+  A §J, three runs each).
 
 **Abandonment** means: stop resuming, kill the process tree, discard the `Script`. The coroutine is
 technically still resumable, but we never resume it — the engine has no way to stop a frame cleanly
 and the run is already terminal.
 
-Thread affinity: `ScriptOptions.CheckThreadAccess` stays at its default (on). One `Script` belongs
-to one thread for its whole life; a run owns its own `Script`. Eight concurrent runs = eight
-`Script` instances on eight threads, measured clean (234–398 ms for 8×300 k iterations).
+Thread affinity: `ScriptOptions.CheckThreadAccess` is `true` by default, but it does **not** reject
+cross-thread use — measured (Appendix A §K, fixture 19): `DoString` and `Resume` called from a foreign
+thread are silently accepted (`accepted, 42`), and only *concurrent* reuse of one `Script` corrupts
+the interpreter (`NullReferenceException`/`IndexOutOfRangeException`, non-deterministic). Single-
+thread ownership is therefore **our discipline, not an engine guarantee**: one `Script`, one owning
+thread, from construction to abandonment. The snippet is written for that — the I/O is awaited
+*before* `Resume`, so the resume happens on the owning thread (never inside `Resume(await …)`).
+A run owns its own `Script`; eight concurrent runs = eight `Script` instances on eight threads,
+measured clean (234–398 ms for 8×300 k iterations, Appendix A §J).
 
 ### 5.2 The host-call protocol (this is how `run()` works)
 
@@ -251,20 +308,29 @@ final: state=Dead value=pipeline-ok
 
 Rules that follow:
 
-- Only I/O primitives may yield: `run`, `shell`, `checkout`, `artifact`. Everything else
-  (`log`, `env`, `secret`, `is_*`, `fail`, `pipeline`, `step`) is synchronous and must not.
-- The resumed value is an ordinary `DynValue` and may be a string, number, table or nil (all four
-  measured). The SDK keeps the public surface string/number/boolean; anything richer is a `Table`
-  built by the host through the seam, never a live CLR object.
+- Only I/O primitives may yield: `run`, `shell`, `checkout`, `artifact` — and in v0.3 the pipeline
+  never calls them itself, the C# executor does (§6). Everything else (`log`, `env`, `secret`, `is_*`,
+  `fail`, `pipeline`, `step`) is synchronous and must not yield.
+- The resumed value is an ordinary `DynValue` and may be a string, number, table or nil — all four
+  measured (Appendix A §F: `wrapped:VAL` for the string, then `resume number -> number:number`,
+  `resume table -> table:table,v`, `resume nil -> nil:nil`). The SDK keeps the public surface
+  string/number/boolean; anything richer is a `Table` built by the host through the seam, never a
+  live CLR object.
 - **A resumed value crosses Lua frames.** Measured: a Lua wrapper function, `pcall`, `xpcall`, a
   `for` loop body and an `__index` metamethod all receive it (`wrapped:VAL`, `pcall:true,VAL`,
   `xpcall:true,VAL`, `for:VAL;VAL;`, `meta:VAL`). So the Lua prelude may wrap an I/O primitive
   freely — it costs one suspension per call, not a rewrite. What does *not* work is yielding from a
   C# callback on behalf of a Lua frame that is waiting inside another C# callback; no primitive in
   §6 does that, and a future one must be designed for it.
-- A primitive that yields must record its request before returning, because the driver answers the
-  request it dequeues — the yield's own return values are not a request channel (measured: `res.Type`
-  was `Nil` for a yield with no return values).
+- A primitive that yields records its request before returning, because the driver answers the
+  request it dequeues. `DynValue.NewYieldReq(args)` *does* hand those args back to the host as the
+  `Resume` result (measured, Appendix A §E: `YieldReq(["user-payload"])` → `res.Type=String
+  res=user-payload`), so the payload *could* carry the request. The contract still uses the queue
+  (plus the sentinel of §5.1), because what it needs is the pairing of a request with its answer,
+  and the `Resume` result is not a request channel: any suspension can produce one, including a
+  script's own `coroutine.yield` (fixture 18).
+- Only the host creates a suspension the driver answers. A suspension with an empty request queue is
+  the script's own `coroutine.yield` and is a script violation (§5.1), not a request to be answered.
 
 ### 5.3 Time and resource budgets
 
@@ -301,6 +367,12 @@ pipeline.lua  (user code, Lua 5.2)
           log(text)  env(name)  secret(name)  is_windows/linux/macos  fail(message)
 ```
 
+The four I/O primitives are **C# executor code owned by F-014** in v0.3: a run produces a
+`pipeline{}` spec, the host validates it and executes the steps in C# (§6.1), so a v0.3
+`pipeline.lua` never calls `run()`, `shell()`, `checkout()` or `artifact()` itself. The imperative
+form — a Lua `step()` that calls `run()` and receives its answer through a suspension — is the later
+capability §6.1 describes; the protocol in §5.2 exists now so that form does not need a new driver.
+
 Why this split:
 
 - Every primitive that touches the host is one auditable C# function with a fixed signature; there
@@ -334,10 +406,12 @@ validates it, serialises it, and executes the steps **in C#**:
   across `pcall`.
 - Syntax and runtime errors carry `source:(line,col-col)` — `pipeline.lua:(2,28-41): bad thing`,
   `pipeline.lua:(1,10-11): unexpected symbol near '='` — which the run log shows verbatim as one
-  line. The exception's `CallStack` has a `Location` only on the raising frame (measured:
-  `error@[0]* (2, 28) -> (2, 41)` then `inner (local)@`, `outer (local)@`, `@`), so we render the
-  position from the decorated message and the frame names separately. We do not dump CLR stack
-  traces into the build log.
+  line. On the pinned 2.0.0 the exception's `CallStack` carries a `Location` only on the raising
+  frame (measured: `error@[0]* (2, 28) -> (2, 41)` then `inner (local)@`, `outer (local)@`, `@`); on
+  3.0.0-beta.1 every frame carries one (`inner (local)@[0]* (2, 28) -> (2, 41)`, `outer (local)@[0]*
+  (3, 28) -> (3, 30)`, `@[0]* (4, 5) -> (4, 7)`). We therefore render the position from the decorated
+  message and the frame names separately, and re-measure this if the engine is switched. We do not
+  dump CLR stack traces into the build log.
 - `pcall(callableTable)` is broken in both candidate packages (`false,attempt to pcall a
   non-function`). The prelude must not rely on it (no callable-table steps), and no SDK
   documentation suggests it.
@@ -348,7 +422,7 @@ validates it, serialises it, and executes the steps **in C#**:
 ## 7. Logging and redaction
 
 - **`log()` is a C# primitive**, not Lua string building. Measured: 100 000 C# callback invocations
-  cost 27–29 ms, while building 400 KB by `..` cost 0.8–3.6 s (O(n²), GC-dependent).
+  cost 27–29 ms, while building 400 KB by `..` cost 0.8–4.3 s (O(n²), GC-dependent).
 - `print` is re-bound to the same sink so a user's `print("...")` appears in the run log instead of
   the worker's console (the engine's default `DebugPrint` writes to `Console` — i.e. outside the log
   pipeline, invisible in the UI and unredactable).
@@ -369,14 +443,25 @@ validates it, serialises it, and executes the steps **in C#**:
 - **Analyzers:** the package must build at 0 warnings with `TreatWarningsAsErrors` — verified for
   both candidates.
 - **Audit:** 0 transitive dependencies means nothing new for NuGet audit to flag.
-- **License: BSD-3-Clause, and the notices file needs the whole text.** The 2.0.0 package ships no
-  `LICENSE` file at all (only a `licenseUrl`); the text is in the repository and in the 3.0.0
-  package, and it is not a plain BSD-3 header: it also carries attribution for the KopiLua-derived
-  string library (Copyright LoDC), MIT-licensed code from `vscode-mono-debug` (Copyright Microsoft),
-  Eclipse-project debugger icons, and the MoonSharp icon (Copyright Isaac). BSD-3 requires
-  reproducing the copyright notice and conditions, so `THIRD-PARTY-NOTICES.md` must copy the file
-  verbatim rather than paraphrase it. That file is part of the card that adds the dependency
-  (F-011), not a later chore.
+- **License: BSD-3-Clause, and the notices file needs the whole text plus two MIT texts.** The
+  2.0.0 package ships no `LICENSE` file at all (only a `licenseUrl`); the text is in the upstream
+  repository and in the 3.0.0-beta.1 package (`moonsharp.3.0.0-beta.1.nupkg` → `LICENSE`, read for
+  this section). It is not a plain BSD-3 header, and copying it verbatim is **not sufficient**: the
+  file names the KopiLua-derived string library (Copyright (c) 2012 LoDC) and MIT-licensed code
+  from `vscode-mono-debug` (Copyright (c) Microsoft Corporation - released under MIT license), but it
+  carries **no MIT licence body** for either. `THIRD-PARTY-NOTICES.md` must therefore copy the BSD-3
+  text verbatim *and* add the two MIT texts, in this order:
+  1. the BSD-3-Clause text exactly as shipped, including the `{organization}` placeholder left
+     unreplaced (it is in the upstream file; substituting our own name would misquote the licence);
+  2. `Copyright (c) 2014-2016, Marco Mastropaolo` and `All rights reserved.`;
+  3. the KopiLua attribution line and link, **plus** the full MIT licence text;
+  4. the `vscode-mono-debug` attribution line and link, **plus** the full MIT licence text;
+  5. the Eclipse icon attribution (`Copyright of The Eclipse Foundation`), with a note that upstream
+     states no licence for the icons and that we do not redistribute them;
+  6. the MoonSharp icon attribution (`The MoonSharp icon is (c) Isaac, 2014-2015`);
+  7. a scope note: the redistributed payload is the single `MoonSharp.Interpreter` assembly from the
+     package — no `MoonSharp.Debugger`/`MoonSharp.REPL` console, no VS Code extension.
+  That file is part of the card that adds the dependency (F-011), not a later chore.
 
 ## 9. Conformance fixtures — the engine-switch gate
 
@@ -384,15 +469,21 @@ These are the behaviours any engine must reproduce, written as assertions with t
 output. (Rows marked *pinned defect* are today's documented behaviour and are *not* a requirement on
 a future engine — a fix is welcome, a change must be noticed.)
 
+Every row is printed by Appendix A: §A–§C for the package, the globals and the module sets, §D/§D2
+for the registry, §E for the drive protocol, §F for frame propagation, §G for memory, §H for errors,
+§I for the language ceiling, §J for budgets and threads, and §K for the fixtures with no other home.
+
 | # | Fixture | Expected (measured) |
 |---|---|---|
 | 1 | `return ('x'):rep(3) .. tostring(2^10)` | `xxx1024` |
 | 2 | `local function c() local n=0 return function() n=n+1 return n end end; local f=c(); f(); return f()` | `2` |
-| 3 | `local n,a,b = select('#', 'x','y'), ...` → `return n .. a .. b` with `('x','y')` | `2xy` |
-| 4 | `bit32.band(12,10)`; `select('#',1,2,3)`; `goto x ::x:: return 'goto-ok'` | `8`; `3`; `goto-ok` |
-| 5 | `V` with `__index/__add/__tostring/__call`; `tostring(v2) .. ' ' .. v2('x')` | `V(5) 5` |
-| 6 | `pcall(function() error('m') end)` | `false`, message containing `source:(line,col-col)` |
-| 7 | `xpcall(function() error('m') end, function(e) return 'h:' .. e end)` | `false`, handler result prefixed `h:` |
+| 3 | `local function f(...) local n = select('#', ...) local a, b = ... return n .. a .. b end return f('x','y')` | `2xy` |
+| 4a | `return bit32.band(12, 10)` | `8` |
+| 4b | `return select('#', 1, 2, 3)` | `3` |
+| 4c | `goto x ::x:: return 'goto-ok'` | `goto-ok` |
+| 5 | `V` with `__index`/`__add`/`__tostring`/`__call` (full source in Appendix A §K); assert `tostring(v2) .. ' ' .. v2('x')` | `V(5) 5` |
+| 6 | chunk `pipeline.lua`: `local ok, e = pcall(function() error('m') end) return tostring(ok) .. ' \| ' .. tostring(e)` | `false \| pipeline.lua:(1,36-41): m` |
+| 7 | chunk `pipeline.lua`: the same with `xpcall(…, function(e) return 'h:' .. e end)` | `false \| h:pipeline.lua:(1,37-42): m` |
 | 8 | `pcall(function() error({code=42}) end)` | `false,string,nil` (pinned defect) |
 | 9 | `pcall(setmetatable({}, {__call=function() return 1 end}))` | `false,attempt to pcall a non-function` (pinned defect) |
 | 10a | `return 7 // 2` | `SyntaxErrorException: unexpected symbol near '/'` |
@@ -401,13 +492,17 @@ a future engine — a fix is welcome, a change must be noticed.)
 | 10d | `return math.type(1)` | `ScriptRuntimeException: attempt to call a nil value` |
 | 10e | `return utf8.len('hello')` | `ScriptRuntimeException: attempt to index a nil value` |
 | 10f | `local t <const> = 1` | `SyntaxErrorException: unexpected symbol near '<'` |
-| 11 | For each denied name: `return type(<name>)` | `nil` (and `type(package)` in particular `nil`) |
-| 12 | Registry, **only when `Dynamic`/`Json` is composed in**: `dynamic = nil; package.loaded.dynamic.eval('1+1')` | `2` under `explicit\|Dynamic` and `Preset_Default` — the regression this fixture exists to catch if someone composes those modules back |
+| 11 | one chunk per name in the §3.2 deny list: `return type(<name>)` — seventeen assertions, never one loop | `nil` for every name |
+| 12a | **records the hazard; do not run it hardened:** composition `explicit \| Dynamic`, `dynamic = nil return package.loaded.dynamic.eval('1+1')` | `2` |
+| 12b | **the production shape, and the real gate:** composition `explicit \| Dynamic` + all of §3.1; `return type(package)` and `pcall(function() return package.loaded.dynamic end)` | `nil`; `false` plus a message containing `attempt to index a nil value` |
 | 13 | `collectgarbage('count') == nil` | `true` (pinned defect) |
-| 14 | `while true do end` with `AutoYieldCounter = 10_000` | state `ForceSuspended`, > 1 000 resumes within 300 ms |
-| 15 | Two host calls with answers, then `return 'pipeline-ok'` | logs `build -> exit=0`, `test -> exit=0`, final value `pipeline-ok` |
-| 16 | Resumed value through wrapper / `pcall` / `for` / `__index` | `wrapped:VAL`, `pcall:true,VAL`, `for:VAL;VAL;`, `meta:VAL` |
-| 17 | 8 threads × 1 `Script` each | no exception; all results identical |
+| 14 | `while true do end` with `AutoYieldCounter = 10_000` | state `ForceSuspended`, at least 5 000 resumes inside 300 ms (observed 6 453–9 221; the count tracks machine load) |
+| 15a | two host calls with answers (`run_process('make build')`, `run_process('make test')`) | log lines `build -> exit=0` and `test -> exit=0` |
+| 15b | …then `return 'pipeline-ok'` | final value `pipeline-ok` |
+| 16 | resumed value through wrapper / `pcall` / `xpcall` / `for` / `__index` | `wrapped:VAL`, `pcall:true,VAL`, `xpcall:true,VAL`, `for:VAL;VAL;`, `meta:VAL` |
+| 17 | 8 threads × 1 `Script` each | no exception, every result `1800006`; the probe observed 8 distinct `ManagedThreadId`, which is a thread-pool property and is recorded, not asserted |
+| 18 | a script's own `coroutine.yield('user-payload')` under the §5.1 driver | `Suspended` with an empty queue → no dequeue, run abandoned as a script violation (dequeuing would throw `InvalidOperationException: Queue empty.`) |
+| 19 | cross-thread use with `CheckThreadAccess` at its default | `DoString` and `Resume` from a foreign thread are both accepted, no exception — the engine provides no protection, so the single-thread discipline of §5.1 is ours |
 
 ## 10. Known limitations and open risks
 
@@ -431,7 +526,10 @@ a future engine — a fix is welcome, a change must be noticed.)
 
 A scratch console app (`net10.0`), run against `dotnet add package MoonSharp --version 2.0.0` and
 `--version 3.0.0-beta.1`. It prints one section per claim in this document; the output below is from
-the 2.0.0 run on the machine named at the top.
+the 2.0.0 run on the machine named at the top. The added sections carry the evidence the round-3
+review asked for: `D2` (the hardened registry), the last three lines of `E` (a script's own
+`coroutine.yield`), the last three of `F` (number/table/nil resumed through Lua frames), the
+three-run form of `J` and the whole of `K` (the §9 fixtures with no other home).
 
 ```csharp
 // Zenkins Lua runtime probe. Scratch console app (net10.0) — not part of the repository.
@@ -517,6 +615,19 @@ foreach (var (label, modules) in new (string, CoreModules)[]
     Console.WriteLine($"{label,-16} loaded=[{loaded}] escape={escape}");
 }
 
+var ioPath = Path.Combine(Path.GetTempPath(), "moonsharp-io-escape.txt").Replace("\\", "/");
+var preset = new Script(CoreModules.Preset_Default);
+Console.WriteLine("Preset_Default io through the registry: " + preset.DoString(
+    "local f = package.loaded.io.open('" + ioPath + "', 'w') if f == nil then return 'no handle' end f:write('escaped\\n') f:close() return 'wrote file'").String);
+
+Section("D2. the same escape after the §3.1 hardening (fixture 12b)");
+{
+    var s = Build(explicitModules | CoreModules.Dynamic);
+    Console.WriteLine("  hardened type(package) = " + Try(s, "return type(package)"));
+    var f = s.LoadString("local ok, e = pcall(function() return package.loaded.dynamic end) return tostring(ok) .. ' | ' .. tostring(e)", null, "pipeline.lua");
+    Console.WriteLine("  hardened pcall(package.loaded) = " + s.Call(f).String);
+}
+
 Section("E. drive protocol");
 {
     var s = Build();
@@ -555,6 +666,15 @@ Section("E. drive protocol");
     co3.Resume();
     try { co3.Resume(DynValue.NewString("x")); Console.WriteLine("  Resume(value) on ForceSuspended -> accepted (unexpected)"); }
     catch (Exception ex) { Console.WriteLine($"  Resume(value) on ForceSuspended -> {ex.GetType().Name}: {ex.Message.Split('\n')[0]}"); }
+
+    var own = Build();
+    var co4 = own.CreateCoroutine(own.LoadString("coroutine.yield('user-payload') return 'after'", null, "pipeline.lua")).Coroutine;
+    co4.AutoYieldCounter = 10_000;
+    var r4 = co4.Resume();
+    Console.WriteLine($"  script's own coroutine.yield -> state={co4.State} res.Type={r4.Type} res={r4.ToPrintString()} pending=0");
+    try { new Queue<string>().Dequeue(); Console.WriteLine("  Dequeue() on an empty queue -> ok (unexpected)"); }
+    catch (Exception ex) { Console.WriteLine($"  Dequeue() on an empty queue -> {ex.GetType().Name}: {ex.Message}"); }
+    Console.WriteLine($"  driver decision -> abandon (script violation); state stays {co4.State}");
 }
 
 Section("F. does a resumed value cross Lua frames?");
@@ -574,6 +694,21 @@ foreach (var (label, src) in new[]
     int resumes = 0;
     while (co.State != CoroutineState.Dead && resumes++ < 20) r = co.Resume(DynValue.NewString("VAL"));
     Console.WriteLine($"  {label,-14} state={co.State} resumes={resumes} -> {r.ToPrintString()}");
+}
+
+foreach (var kind in new[] { "number", "table", "nil" })
+{
+    var s = Build();
+    s.Globals["run_process"] = (Func<string, DynValue>)(_ => DynValue.NewYieldReq(Array.Empty<DynValue>()));
+    var src = "local v = run_process('x') local extra = '' if type(v) == 'table' then extra = ',' .. tostring(v.k) end return '" + kind + ":' .. type(v) .. extra";
+    var co = s.CreateCoroutine(s.LoadString(src, null, "pipeline.lua")).Coroutine;
+    co.Resume();
+    DynValue answer;
+    if (kind == "number") answer = DynValue.NewNumber(7);
+    else if (kind == "table") { var t = new Table(s); t["k"] = DynValue.NewString("v"); answer = DynValue.NewTable(t); }
+    else answer = DynValue.Nil;
+    var r = co.Resume(answer);
+    Console.WriteLine($"  resume {kind,-6} state={co.State} -> {r.ToPrintString()}");
 }
 
 Section("G. memory introspection");
@@ -626,23 +761,63 @@ Section("J. throughput, runaway, concurrency");
     }
     Console.WriteLine($"  400 KB by concatenation (3 runs): {string.Join(", ", concat)} ms");
 
-    foreach (var body in new[] { "while true do end", "while true do local t = {} end" })
+    foreach (var body in new[] { "while true do end", "local i=0 while true do i=i+1 end", "while true do local t = {} end" })
     {
-        var rs = Build();
-        var co = rs.CreateCoroutine(rs.LoadString(body, null, "pipeline.lua")).Coroutine;
-        co.AutoYieldCounter = 10_000;
-        sw.Restart();
-        co.Resume();
-        int ticks = 0;
-        while (co.State != CoroutineState.Dead && sw.ElapsedMilliseconds < 300) { ticks++; co.Resume(); }
-        Console.WriteLine($"  runaway '{body}': state={co.State} yields={ticks} elapsed={sw.ElapsedMilliseconds} ms");
+        var yields = new List<int>();
+        var states = new List<string>();
+        for (var run = 0; run < 3; run++)
+        {
+            var rs = Build();
+            var co = rs.CreateCoroutine(rs.LoadString(body, null, "pipeline.lua")).Coroutine;
+            co.AutoYieldCounter = 10_000;
+            co.Resume();
+            int ticks = 0;
+            var budget = Stopwatch.StartNew();
+            while (co.State != CoroutineState.Dead && budget.ElapsedMilliseconds < 300) { ticks++; co.Resume(); }
+            yields.Add(ticks);
+            states.Add(co.State.ToString());
+        }
+        Console.WriteLine($"  runaway '{body}': yields={string.Join(", ", yields)} states={string.Join(",", states.Distinct())} budget=300 ms x3");
     }
 
     sw.Restart();
+    var threadIds = new HashSet<int>();
     var tasks = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
-        Build().DoString("local n=0 for i=1,300000 do n = n + i % 13 end return n").Number)).ToArray();
+    {
+        lock (threadIds) { threadIds.Add(Environment.CurrentManagedThreadId); }
+        return Build().DoString("local n=0 for i=1,300000 do n = n + i % 13 end return n").Number;
+    })).ToArray();
     Task.WaitAll(tasks);
-    Console.WriteLine($"  8 scripts on 8 threads: {sw.ElapsedMilliseconds} ms, values={string.Join(",", tasks.Select(t => t.Result.ToString("F0")).Distinct())}");
+    var results = tasks.Select(t => t.Result).ToArray();
+    Console.WriteLine($"  8 scripts on 8 threads: {sw.ElapsedMilliseconds} ms, threads={threadIds.Count}, values={string.Join(",", results.Select(v => v.ToString("F0")).Distinct())}, all={(results.Distinct().Count() == 1 ? "true" : "false")}");
+}
+
+Section("K. §9 fixtures with no other home");
+{
+    Console.WriteLine("  1  " + Try(Build(), "return ('x'):rep(3) .. tostring(2^10)"));
+    Console.WriteLine("  2  " + Try(Build(), "local function c() local n=0 return function() n=n+1 return n end end local f=c() f() return f()"));
+    Console.WriteLine("  3  " + Try(Build(), "local function f(...) local n = select('#', ...) local a, b = ... return n .. a .. b end return f('x','y')"));
+    Console.WriteLine("  5  " + Try(Build(), "local V = {} V.__index = V V.__add = function(a, b) return setmetatable({n = a.n + b.n}, V) end V.__tostring = function(self) return 'V(' .. self.n .. ')' end V.__call = function(self, x) return self.n end local v1 = setmetatable({n = 2}, V) local v2 = v1 + setmetatable({n = 3}, V) return tostring(v2) .. ' ' .. v2('x')"));
+
+    var e6 = Build();
+    Console.WriteLine("  6  " + e6.Call(e6.LoadString("local ok, e = pcall(function() error('m') end) return tostring(ok) .. ' | ' .. tostring(e)", null, "pipeline.lua")).String);
+    var e7 = Build();
+    Console.WriteLine("  7  " + e7.Call(e7.LoadString("local ok, e = xpcall(function() error('m') end, function(e) return 'h:' .. e end) return tostring(ok) .. ' | ' .. tostring(e)", null, "pipeline.lua")).String);
+
+    string[] denied = { "io", "load", "loadfile", "loadstring", "dofile", "require", "debug", "dynamic", "json", "package", "_MOONSHARP", "os.execute", "os.exit", "os.getenv", "os.remove", "os.rename", "os.tmpname" };
+    Console.WriteLine("  11 " + string.Join(" ", denied.Select(n => n + "=" + Try(Build(), "return type(" + n + ")"))));
+
+    var th = Build();
+    string crossDo;
+    try { crossDo = "accepted, " + Task.Run(() => th.DoString("return 40 + 2").Number).Result; }
+    catch (Exception ex) { crossDo = "threw " + ex.GetType().Name; }
+    var th2 = Build();
+    var co19 = th2.CreateCoroutine(th2.LoadString("local x = 1 coroutine.yield() return x + 41", null, "pipeline.lua")).Coroutine;
+    co19.Resume();
+    string crossResume;
+    try { crossResume = "accepted, " + Task.Run(() => co19.Resume(DynValue.NewString("x")).Number).Result; }
+    catch (Exception ex) { crossResume = "threw " + ex.GetType().Name; }
+    Console.WriteLine($"  19 CheckThreadAccess={th.Options.CheckThreadAccess}; cross-thread DoString -> {crossDo}; cross-thread Resume -> {crossResume}");
 }
 ```
 
@@ -670,6 +845,11 @@ Preset_HardSandbox: pcall=nil xpcall=nil setmetatable=nil getmetatable=nil corou
 explicit         loaded=[bit32,coroutine,math,os,string,table] escape=unreachable
 explicit|Dynamic loaded=[bit32,coroutine,dynamic,math,os,string,table] escape=2
 Preset_Default   loaded=[bit32,coroutine,dynamic,io,json,math,os,string,table] escape=2
+Preset_Default io through the registry: wrote file
+
+### D2. the same escape after the §3.1 hardening (fixture 12b)
+  hardened type(package) = nil
+  hardened pcall(package.loaded) = false | pipeline.lua:(1,31-60): attempt to index a nil value
 
 ### E. drive protocol
   after first Resume: state=Suspended res.Type=Nil pending=1
@@ -680,6 +860,9 @@ Preset_Default   loaded=[bit32,coroutine,dynamic,io,json,math,os,string,table] e
   final: state=Dead value=pipeline-ok
   Resume() with no arg on a Suspended coroutine -> got:nil
   Resume(value) on ForceSuspended -> ArgumentException: When resuming a force-suspended coroutine, args must be empty.
+  script's own coroutine.yield -> state=Suspended res.Type=String res=user-payload pending=0
+  Dequeue() on an empty queue -> InvalidOperationException: Queue empty.
+  driver decision -> abandon (script violation); state stays Suspended
 
 ### F. does a resumed value cross Lua frames?
   lua wrapper    state=Dead resumes=1 -> wrapped:VAL
@@ -687,6 +870,9 @@ Preset_Default   loaded=[bit32,coroutine,dynamic,io,json,math,os,string,table] e
   inside xpcall  state=Dead resumes=1 -> xpcall:true,VAL
   inside for     state=Dead resumes=2 -> for:VAL;VAL;
   via __index    state=Dead resumes=1 -> meta:VAL
+  resume number state=Dead -> number:number
+  resume table  state=Dead -> table:table,v
+  resume nil    state=Dead -> nil:nil
 
 ### G. memory introspection
   collectgarbage('count') = nil
@@ -712,10 +898,21 @@ Preset_Default   loaded=[bit32,coroutine,dynamic,io,json,math,os,string,table] e
   return select('#', 1, 2, 3)        -> 3
 
 ### J. throughput, runaway, concurrency
-  1e6 iterations: 223 ms (result 2999998)
+  1e6 iterations: 214 ms (result 2999998)
   100k C# callbacks: 27 ms (100000)
-  400 KB by concatenation (3 runs): 3579, 2864, 3125 ms
-  runaway 'while true do end': state=ForceSuspended yields=7190 elapsed=300 ms
-  runaway 'while true do local t = {} end': state=ForceSuspended yields=3415 elapsed=300 ms
-  8 scripts on 8 threads: 234 ms, values=1800006
+  400 KB by concatenation (3 runs): 4258, 4100, 3484 ms
+  runaway 'while true do end': yields=6844, 8049, 8070 states=ForceSuspended budget=300 ms x3
+  runaway 'local i=0 while true do i=i+1 end': yields=5551, 5442, 5629 states=ForceSuspended budget=300 ms x3
+  runaway 'while true do local t = {} end': yields=3609, 3615, 3621 states=ForceSuspended budget=300 ms x3
+  8 scripts on 8 threads: 238 ms, threads=8, values=1800006, all=true
+
+### K. §9 fixtures with no other home
+  1  xxx1024
+  2  2
+  3  2xy
+  5  V(5) 5
+  6  false | pipeline.lua:(1,36-41): m
+  7  false | h:pipeline.lua:(1,37-42): m
+  11 io=nil load=nil loadfile=nil loadstring=nil dofile=nil require=nil debug=nil dynamic=nil json=nil package=nil _MOONSHARP=nil os.execute=nil os.exit=nil os.getenv=nil os.remove=nil os.rename=nil os.tmpname=nil
+  19 CheckThreadAccess=True; cross-thread DoString -> accepted, 42; cross-thread Resume -> accepted, 42
 ```

@@ -42,12 +42,20 @@ Decisions:
   the table alive (`package.loaded.dynamic.eval('1+1')` → `2`). Hence `package` is nilled too, and
   the regression test composes `Dynamic` on purpose to prove the hazard is handled.
 - **The seam is ours**: `ILuaRuntime` exposing
-  `Execute(source, name, LuaExecutionBudget, CancellationToken)` → either a result or a
-  `LuaScriptException` carrying `(Message, Source, Line, Column)`. No MoonSharp type appears outside
-  `ILuaRuntime`'s implementation and the host-primitive registration surface.
+  `Execute(source, name, deadline, CancellationToken)` → either a result or a
+  `LuaScriptException` carrying `(Message, Source, Line, Column)`. `deadline` is the run's remaining
+  wall clock (`BuildRun.DeadlineAt`, frozen at accept time by F-009 — `docs/lua-runtime.md` §5.3),
+  not a Lua-specific budget type. No MoonSharp type appears outside `ILuaRuntime`'s implementation
+  and the host-primitive registration surface.
 - **Suspension is a first-class seam capability** even though no primitive yields yet: the driver
   handles both yield kinds and the seam exposes `RegisterHostFunction` for primitives that return a
   yield request. F-014/F-015 need it, and retrofitting it later would mean rewriting the driver.
+- **A suspension is not a host call.** `CoroutineState.Suspended` is produced both by a primitive
+  asking for I/O and by the script calling `coroutine.yield` itself (measured: `state=Suspended
+  res.Type=String res=user-payload pending=0`). The driver must branch on the request queue (or, in
+  production, on a private sentinel — `docs/lua-runtime.md` §5.1), because the naive
+  `pending.Dequeue()` on an empty queue throws `InvalidOperationException: Queue empty.`, which is
+  not one of the two exceptions the loop catches.
 - **One `Script` per execution**, thread-affine, never pooled (§5.1). Abandonment = stop resuming,
   discard the `Script`.
 - **No CLR registration anywhere**: no `UserData.RegisterType/RegisterAssembly`, no proxy types.
@@ -57,20 +65,27 @@ Decisions:
 - [ ] `Directory.Packages.props` pins MoonSharp 2.0.0 with a rationale comment; only
       `Zenkins.Worker` references it; `dotnet build -c Release` stays at 0 warnings with
       `TreatWarningsAsErrors` and the repository's analyzer set.
-- [ ] `THIRD-PARTY-NOTICES.md` exists at the repository root and copies the MoonSharp `LICENSE`
-      **verbatim** (the 2.0.0 package ships no such file; the text is in the upstream repository and
-      the 3.0.0 package, and carries the KopiLua string-library notice, the MIT-licensed
-      `vscode-mono-debug` portions, the Eclipse debugger-icon attribution and the MoonSharp icon
-      attribution); the README license section links it.
+- [ ] `THIRD-PARTY-NOTICES.md` exists at the repository root and carries, in this order: the
+      MoonSharp `LICENSE` copied **verbatim** (including the `{organization}` placeholder as
+      shipped), the Marco Mastropaolo copyright and `All rights reserved.` lines, the KopiLua/LoDC
+      attribution **plus the full MIT text**, the `vscode-mono-debug` attribution **plus the full
+      MIT text**, the Eclipse icon attribution (with a note that upstream states no licence and we
+      do not redistribute the icons), the MoonSharp icon attribution, and a scope note (only the
+      `MoonSharp.Interpreter` assembly is redistributed — no debugger console, no REPL, no
+      extension). Verbatim alone is not enough: the 2.0.0 package ships no `LICENSE` file at all,
+      and the 3.0.0-beta.1 text names two MIT-licensed parts without carrying either MIT body
+      (`docs/lua-runtime.md` §8). The README license section links it.
 - [ ] A sandbox self-check runs as a test over the full deny list, asserting each name through
       `DoString("return type(<name>)")` (not through the C# `Globals` enumeration, which still lists
       nil-valued keys): `io`, `load`, `loadfile`, `loadstring`, `dofile`, `require`, `debug`,
       `dynamic`, `json`, `package`, `_MOONSHARP`, `os.execute`, `os.exit`, `os.getenv`, `os.remove`,
       `os.rename`, `os.tmpname` are all `nil`; `os.clock/date/difftime/time` are functions;
       `pcall`, `xpcall`, `setmetatable`, `getmetatable`, `coroutine` and `_G` are present.
-- [ ] The registry hazard is pinned by a test that composes `Dynamic` deliberately and proves
-      `package.loaded.dynamic.eval` is unreachable afterwards — the test fails if the `package`
-      hardening is removed.
+- [ ] The registry hazard is pinned by a test that composes `Dynamic` deliberately and proves the
+      hardened runtime exposes no registry at all — the test fails if the `package` hardening is
+      removed (measured shape: `type(package)` is `nil`, `pcall(function() return
+      package.loaded.dynamic end)` is `false` with `attempt to index a nil value`; without the
+      hardening the same source returns `2`).
 - [ ] A runaway script (`while true do end`, and a tight allocation loop) is abandoned at its
       budget: the call returns within the budget plus a small margin, the coroutine is never
       resumed again, and the discarded `Script` is not reused.
@@ -83,6 +98,10 @@ Decisions:
       through a Lua wrapper, `pcall` and an `__index` metatable (fixtures 15–16 in
       `docs/lua-runtime.md` §9). The driver branches on `CoroutineState`, so a budget yield is
       resumed with no arguments and an SDK call is resumed with its answer.
+- [ ] A script that yields on its own (`coroutine.yield('x')`) is treated as a script violation: the
+      driver does not dequeue an empty request queue, it abandons the run — the
+      `InvalidOperationException: Queue empty.` path must not exist (`docs/lua-runtime.md` §5.1 and
+      fixture 18).
 - [ ] `print` from Lua reaches the runtime's log sink, not the worker's console.
 - [ ] Existing behavior is unchanged: the whole suite still passes and argv runs (F-006/F-007) still
       execute exactly as before; the Worker stays ASP.NET-free (`WorkerRuntimeConfigTests`).
@@ -90,7 +109,7 @@ Decisions:
 ## Subtasks
 
 - [ ] Package pin, project reference, notices file, README link.
-- [ ] `src/Worker/Lua/{ILuaRuntime,LuaRuntime,LuaScriptException,LuaExecutionBudget,LuaLogSink}.cs`
+- [ ] `src/Worker/Lua/{ILuaRuntime,LuaRuntime,LuaScriptException,LuaLogSink}.cs`
       (new): composition, hardening, driver, error mapping, thread affinity.
 - [ ] `LuaSandboxProbe` (test helper) that builds a script through the real runtime and asserts the
       deny list, so the fixtures cannot drift from the implementation.
@@ -119,14 +138,18 @@ Expected:
 
 Steps:
 1. Build a runtime whose composition deliberately includes `CoreModules.Dynamic` (to exercise the
-   hazard), harden it as production does, then evaluate
-   `dynamic = nil; local d = package.loaded.dynamic; return d and d.eval('1+1') or 'gone'`.
+   hazard), harden it exactly as production does, then evaluate `return type(package)` and
+   `local ok, e = pcall(function() return package.loaded.dynamic end) return tostring(ok) .. '|' ..
+   tostring(e)`.
 2. Build the production composition and assert `type(package)` is `nil` and that `package.loaded`
    is unreachable.
 
 Expected:
-- (1) `gone` — the `package` hardening closes the registry door even when the module is composed in;
-  removing that hardening makes it return `2`, which is what the test is for.
+- (1) `type(package)` is `nil`; the `pcall` returns `false` and a message containing
+  `attempt to index a nil value` (measured: `false | pipeline.lua:(1,31-60): attempt to index a nil
+  value`). Removing the `package` hardening makes the same source return `2` via
+  `package.loaded.dynamic.eval('1+1')` — that shape is fixture 12a, recorded only to show what the
+  hazard looks like, and is **not** the assertion.
 - (2) `nil` both, and `type(dynamic)`/`type(json)` are `nil`.
 
 ### TC-003: Runaway script is abandoned, not hung

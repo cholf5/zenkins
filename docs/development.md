@@ -561,9 +561,17 @@ A run killed by the OS is reported `Failed` with the worker's report; it is neve
 ### Secrets key ring
 
 When secrets exist (F-012), the server's Data Protection key ring is what makes stored ciphertexts
-readable. It is persisted under `App_Data/keys` and must be backed up with the database: losing it
-means every stored secret has to be re-entered, not restored. Restrict its permissions to the
-service account.
+readable — and the same ring mints the F-008 log-subscription tickets
+(`src/Server/LogStreaming/RunLogAccess.cs`), so losing it also invalidates live log streams.
+
+**Today** the ring lives wherever the framework default puts it: `~/.aspnet/DataProtection-Keys` on
+Linux and macOS, `%LOCALAPPDATA%\ASP.NET\DataProtection-Keys` on Windows. Nothing in `src/` calls
+`PersistKeysToFileSystem` yet, so `App_Data/keys` does not exist, and a machine move silently
+invalidates every stored ciphertext.
+
+**After F-012** the ring is pinned to `App_Data/keys` and must be backed up with the database:
+losing it means every stored secret has to be re-entered, not restored. Restrict its permissions to
+the service account.
 
 ## Current state (what you can actually do)
 
