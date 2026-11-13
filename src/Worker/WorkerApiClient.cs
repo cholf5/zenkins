@@ -44,6 +44,13 @@ public sealed record WorkerClaimResponse(
     IReadOnlyList<string> Command,
     DateTimeOffset LeaseExpiresAt);
 
+/// <summary>
+/// The accepted report payload (card F-013 extends the bodyless accepted report): the exact commit the
+/// worker checked out, when it cloned one. <c>null</c> for a run that has no repository. The server
+/// records it once and never rewrites it.
+/// </summary>
+public sealed record WorkerAcceptRequest(string? GitCommit);
+
 /// <summary>The completed report payload: exit 0 → Success on the server, anything else → Failed.</summary>
 public sealed record WorkerCompleteRequest(int ExitCode);
 
@@ -146,16 +153,23 @@ public sealed class WorkerApiClient(HttpClient httpClient)
     /// per-run outcome (not-my-lease / expired / foreign id): it is surfaced as a
     /// <see cref="WorkerApiRejectedException"/> and the run is given up, never retried.
     /// </summary>
+    /// <param name="gitCommit">
+    /// The exact commit the worker checked out (card F-013), or <see langword="null"/> for a run with no
+    /// repository. The server writes it once and never rewrites it.
+    /// </param>
     public async Task AcceptAsync(
         string workerToken,
         Guid runId,
+        string? gitCommit,
         CancellationToken cancellationToken)
     {
         using var inFlight = await SendAsync(
             () => CreateRequest(
                 HttpMethod.Post,
                 $"api/workers/runs/{runId}/accepted",
-                workerToken),
+                workerToken,
+                new WorkerAcceptRequest(gitCommit),
+                WorkerJsonContext.Default.WorkerAcceptRequest),
             cancellationToken);
         await EnsureSuccessAsync(
             inFlight.Response,
@@ -351,6 +365,7 @@ public sealed class WorkerApiClient(HttpClient httpClient)
 [JsonSerializable(typeof(WorkerRegistrationResponse))]
 [JsonSerializable(typeof(WorkerHeartbeatResponse))]
 [JsonSerializable(typeof(WorkerClaimResponse))]
+[JsonSerializable(typeof(WorkerAcceptRequest))]
 [JsonSerializable(typeof(WorkerCompleteRequest))]
 [JsonSerializable(typeof(WorkerCanceledRequest))]
 [JsonSerializable(typeof(WorkerCancelRequest))]

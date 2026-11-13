@@ -89,6 +89,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only secret.</summary>
     public static readonly Guid SecretBId = new("b0000000-0000-4000-8000-000000000062");
 
+    /// <summary>A's only Git credential, the positive control for the F-013 probes.</summary>
+    public static readonly Guid GitCredentialAId = new("a0000000-0000-4000-8000-000000000071");
+
+    /// <summary>B's only Git credential.</summary>
+    public static readonly Guid GitCredentialBId = new("b0000000-0000-4000-8000-000000000072");
+
     public const string OrgAName = "Alpha";
     public const string OrgBName = "Beta";
 
@@ -120,6 +126,13 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string SecretBName = "BETA_TOKEN";
     public const string SecretACiphertext = "CfDJ8-fixture-alpha-ciphertext";
     public const string SecretBCiphertext = "CfDJ8-fixture-beta-ciphertext";
+
+    // F-013: one Git credential per organization, same placeholder-ciphertext discipline as the
+    // secrets above (the tenancy probes never decrypt).
+    public const string GitCredentialAName = "ALPHA_DEPLOY_TOKEN";
+    public const string GitCredentialBName = "BETA_DEPLOY_TOKEN";
+    public const string GitCredentialACiphertext = "CfDJ8-fixture-alpha-git-ciphertext";
+    public const string GitCredentialBCiphertext = "CfDJ8-fixture-beta-git-ciphertext";
 
     private readonly string _databasePath;
     private bool _migrated;
@@ -396,6 +409,28 @@ public sealed class TwoOrgsFixture : IDisposable
                 OrganizationId = OrgBId,
                 Name = SecretBName,
                 Ciphertext = SecretBCiphertext,
+                CreatedByUserId = OrgBOwnerUserId,
+            });
+
+        // F-013: one Git credential per organization, so the read/write/find probes are not vacuous.
+        context.GitCredentials.AddRange(
+            new GitCredential
+            {
+                Id = GitCredentialAId,
+                OrganizationId = OrgAId,
+                Name = GitCredentialAName,
+                Kind = "HttpsToken",
+                Ciphertext = GitCredentialACiphertext,
+                UserName = "x-access-token",
+                CreatedByUserId = OrgAOwnerUserId,
+            },
+            new GitCredential
+            {
+                Id = GitCredentialBId,
+                OrganizationId = OrgBId,
+                Name = GitCredentialBName,
+                Kind = "SshKey",
+                Ciphertext = GitCredentialBCiphertext,
                 CreatedByUserId = OrgBOwnerUserId,
             });
 

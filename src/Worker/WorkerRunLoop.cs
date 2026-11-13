@@ -184,7 +184,9 @@ public sealed class WorkerRunLoop(
         if (!await ReportAsync(
                 runId,
                 "accepted",
-                (token, cancellationToken) => api.AcceptAsync(token, runId, cancellationToken),
+                // F-013: the accepted report can carry the commit the run cloned. The clone itself is
+                // wired here by F-014; this card ships the report contract and the git layer.
+                (token, cancellationToken) => api.AcceptAsync(token, runId, gitCommit: null, cancellationToken),
                 shutdown))
         {
             return;

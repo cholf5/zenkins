@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Git;
 using Zenkins.Server.Secrets;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Tenancy;
@@ -96,6 +97,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Encrypted organization secrets (F-012). Write-only above this layer: nothing outside
     /// <c>SecretService.TryGetValueAsync</c> ever decrypts a row, and no endpoint returns a value.</summary>
     public DbSet<Secret> Secrets => Set<Secret>();
+
+    /// <summary>Encrypted Git credentials (F-013). Write-only above this layer: the only decrypt path
+    /// is <c>GitCredentialService.FetchMaterialForRunAsync</c>, which serves one run's worker.</summary>
+    public DbSet<GitCredential> GitCredentials => Set<GitCredential>();
 
     /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
     public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
@@ -384,6 +389,30 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 cancellationToken);
 
     /// <summary>
+    /// F-013: records the commit a worker reported with its <c>accepted</c> report, as a guarded
+    /// compare-and-set. The WHERE is <c>GitCommit IS NULL</c>, so the column is written exactly once:
+    /// a re-delivered accept, a second report, or a future caller cannot rewrite what the run built.
+    /// The SET is fixed here (never caller-supplied text) and the WHERE goes through the tenant query
+    /// filter, which is the same discipline <see cref="TryLeaseBuildRunAsync"/> follows.
+    /// </summary>
+    /// <returns>1 when this call recorded the commit, 0 when the column was already set.</returns>
+    public Task<int> TryStampGitCommitAsync(
+        Guid runId,
+        string gitCommit,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(gitCommit);
+
+        return BuildRuns
+            .Where(run => run.Id == runId && run.GitCommit == null)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.GitCommit, gitCommit)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+    }
+
+    /// <summary>
     /// F-010: the offline monitor's Online → Offline flip of one stale worker, as a guarded
     /// compare-and-set. Only the sweep that wins this statement may mark the worker's runs Lost,
     /// which is what makes the Lost transition exactly once even when monitor ticks race.
@@ -652,6 +681,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
 
             entity.HasQueryFilter(secret => secret.OrganizationId == CurrentOrganizationId);
         });
+
+        // F-013: the Git credential entity (tenant-owned, name-unique) and BuildRun.GitCommit's bounded
+        // column. The configuration lives next to the feature (src/Server/Git) so the model grows by one
+        // call here, not by two blocks; the tenant predicate is installed there against this instance.
+        modelBuilder.ConfigureGitCredentials(this);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

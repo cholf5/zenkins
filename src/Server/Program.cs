@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
+using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Organizations;
 using Zenkins.Server.Projects;
@@ -28,6 +29,7 @@ builder.Services.AddZenkinsWorkers();
 builder.Services.AddZenkinsRuns();
 builder.Services.AddZenkinsLogs(builder.Configuration);
 builder.Services.AddZenkinsSecrets();
+builder.Services.AddZenkinsGit();
 
 // F-012: the Data Protection key ring is data, not a machine default. It encrypts every stored
 // secret and mints the F-008 log-subscription tickets, so it is persisted next to the database and
@@ -173,6 +175,7 @@ app.MapProjectEndpoints();
 // Secret create/rotate/delete (F-012). Owner-only, form-bound; there is deliberately no
 // value-returning route at all - SecretRouteShapeTests pins the route table.
 app.MapSecretEndpoints();
+app.MapGitCredentialEndpoints();
 
 // Worker registration/heartbeat API (token-authenticated, exempt from cookie auth) and the
 // Owner-only registration-token form endpoints (F-004). See WorkerEndpoints for why the two

@@ -25,6 +25,12 @@ namespace Zenkins.Worker;
 /// held while the upstream connection is down; drop-oldest beyond it, with an honest synthetic
 /// marker line reporting the loss; default 10 000).
 /// </para>
+/// <para>
+/// F-013 adds the Git knobs: <c>ZENKINS_GIT_DEPTH</c> (clone depth; <c>0</c>, the default, is a full
+/// clone), <c>ZENKINS_GIT_KNOWN_HOSTS</c> (a pinned known-hosts file for SSH remotes; when unset the
+/// worker uses <c>accept-new</c> against a per-run file) and <c>ZENKINS_GIT_TIMEOUT_SECONDS</c> (the
+/// budget of one git invocation, always additionally capped by what is left of the run's deadline).
+/// </para>
 /// </summary>
 public sealed record WorkerConfiguration(
     Uri ServerUrl,
@@ -37,7 +43,10 @@ public sealed record WorkerConfiguration(
     bool CleanupTemp,
     int MaxConcurrency,
     TimeSpan ClaimPollInterval,
-    int LogBufferLines)
+    int LogBufferLines,
+    int GitDepth = WorkerConfiguration.DefaultGitDepth,
+    string? GitKnownHostsPath = null,
+    TimeSpan? GitOperationTimeout = null)
 {
     public const string ServerUrlVariable = "ZENKINS_SERVER_URL";
     public const string RegistrationTokenVariable = "ZENKINS_REGISTRATION_TOKEN";
@@ -50,6 +59,9 @@ public sealed record WorkerConfiguration(
     public const string WorkerConcurrencyVariable = "ZENKINS_WORKER_CONCURRENCY";
     public const string ClaimSecondsVariable = "ZENKINS_CLAIM_SECONDS";
     public const string LogBufferLinesVariable = "ZENKINS_LOG_BUFFER_LINES";
+    public const string GitDepthVariable = "ZENKINS_GIT_DEPTH";
+    public const string GitKnownHostsVariable = "ZENKINS_GIT_KNOWN_HOSTS";
+    public const string GitTimeoutSecondsVariable = "ZENKINS_GIT_TIMEOUT_SECONDS";
 
     /// <summary>PRD §3.4.5: default heartbeat interval and maximum concurrent tasks of 1.</summary>
     public const int DefaultHeartbeatSeconds = 15;
@@ -76,6 +88,23 @@ public sealed record WorkerConfiguration(
     /// everything on the first hiccup; a million lines is already an outlier-sized run.</summary>
     public const int MinLogBufferLines = 1;
     public const int MaxLogBufferLines = 1_000_000;
+
+    /// <summary>
+    /// F-013 defaults: full clone (depth 0), no pinned known-hosts file, five minutes per git
+    /// invocation. A depth is opt-in because a shallow clone cannot resolve an older pinned commit.
+    /// </summary>
+    public const int DefaultGitDepth = 0;
+
+    /// <summary>One git invocation's default budget: a clone of a large repository, not a hung one.</summary>
+    public static readonly TimeSpan DefaultGitOperationTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>Bounds for <c>ZENKINS_GIT_DEPTH</c>: 0 (full) up to a six-digit depth.</summary>
+    public const int MinGitDepth = 0;
+    public const int MaxGitDepth = 100_000;
+
+    /// <summary>Bounds for <c>ZENKINS_GIT_TIMEOUT_SECONDS</c>: one second up to a day.</summary>
+    public const int MinGitTimeoutSeconds = 1;
+    public const int MaxGitTimeoutSeconds = 86_400;
 
     private static readonly string DefaultDataDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -206,6 +235,39 @@ public sealed record WorkerConfiguration(
                 + $"between {MinLogBufferLines} and {MaxLogBufferLines}.");
         }
 
+        // F-013: the Git knobs. 0 means a full clone; a shallow clone is opt-in per deployment.
+        var gitDepthText = environment.GetValueOrDefault(GitDepthVariable)?.Trim();
+        int gitDepth;
+        if (string.IsNullOrEmpty(gitDepthText))
+        {
+            gitDepth = DefaultGitDepth;
+        }
+        else if (!int.TryParse(gitDepthText, NumberStyles.Integer, CultureInfo.InvariantCulture, out gitDepth)
+            || gitDepth < MinGitDepth
+            || gitDepth > MaxGitDepth)
+        {
+            return WorkerConfigurationResult.Invalid(
+                $"configuration error: {GitDepthVariable}='{gitDepthText}' is not a whole number between "
+                + $"{MinGitDepth} (full clone) and {MaxGitDepth}.");
+        }
+
+        var gitKnownHostsPath = environment.GetValueOrDefault(GitKnownHostsVariable)?.Trim();
+
+        var gitTimeoutText = environment.GetValueOrDefault(GitTimeoutSecondsVariable)?.Trim();
+        int gitTimeoutSeconds;
+        if (string.IsNullOrEmpty(gitTimeoutText))
+        {
+            gitTimeoutSeconds = (int)DefaultGitOperationTimeout.TotalSeconds;
+        }
+        else if (!int.TryParse(gitTimeoutText, NumberStyles.Integer, CultureInfo.InvariantCulture, out gitTimeoutSeconds)
+            || gitTimeoutSeconds < MinGitTimeoutSeconds
+            || gitTimeoutSeconds > MaxGitTimeoutSeconds)
+        {
+            return WorkerConfigurationResult.Invalid(
+                $"configuration error: {GitTimeoutSecondsVariable}='{gitTimeoutText}' is not a whole number "
+                + $"between {MinGitTimeoutSeconds} and {MaxGitTimeoutSeconds}.");
+        }
+
         return WorkerConfigurationResult.Valid(new WorkerConfiguration(
             serverUrl,
             string.IsNullOrEmpty(registrationToken) ? null : registrationToken,
@@ -217,7 +279,10 @@ public sealed record WorkerConfiguration(
             cleanupTemp,
             maxConcurrency,
             TimeSpan.FromSeconds(claimSeconds),
-            logBufferLines));
+            logBufferLines,
+            gitDepth,
+            gitKnownHostsPath,
+            TimeSpan.FromSeconds(gitTimeoutSeconds)));
     }
 
     /// <summary>Builds the registration payload the server expects (PRD §3.4.2 fields).</summary>
@@ -238,6 +303,27 @@ public sealed record WorkerConfiguration(
         Tags,
         Environment.ProcessorCount,
         MaxConcurrency);
+
+    /// <summary>
+    /// The per-run Git layer's options for one run's work directory (card F-013). F-014 builds a
+    /// <see cref="Git.GitWorkspace"/> from this at accept time; nothing here clones anything by itself.
+    /// </summary>
+    /// <param name="work">The run's prepared directory trio.</param>
+    /// <param name="runDeadline">The run's <c>DeadlineAt</c>, so no invocation outlives the run.</param>
+    /// <param name="log">Where the git layer writes its (already redacted) lines.</param>
+    public Git.GitWorkspaceOptions BuildGitWorkspaceOptions(
+        RunWorkDirectory work,
+        DateTimeOffset? runDeadline = null,
+        Action<string>? log = null) =>
+        new()
+        {
+            Work = work,
+            Depth = GitDepth,
+            KnownHostsPath = string.IsNullOrEmpty(GitKnownHostsPath) ? null : GitKnownHostsPath,
+            OperationTimeout = GitOperationTimeout ?? DefaultGitOperationTimeout,
+            RunDeadline = runDeadline,
+            Log = log,
+        };
 
     private static string PlatformName() =>
         OperatingSystem.IsWindows() ? "Windows"

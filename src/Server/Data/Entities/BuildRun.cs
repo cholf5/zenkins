@@ -91,8 +91,21 @@ public sealed class BuildRun : ITenantOwned
     /// acceptance - a running run has no lease.</summary>
     public DateTimeOffset? LeaseExpiresAt { get; set; }
 
-    /// <summary>Set when the run is accepted (Queued → Running).</summary>
+    /// <summary>When the run is accepted (Queued → Running).</summary>
     public DateTimeOffset? StartedAt { get; set; }
+
+    /// <summary>
+    /// The exact commit the worker checked out, reported with the <c>accepted</c> report (card F-013).
+    /// <para>
+    /// <b>Written once, never derived.</b> The value is an object name (hex sha) produced by
+    /// <c>git rev-parse HEAD</c> on the worker, never something the server infers from a branch label:
+    /// a branch moves, and the point of the column is to say what this run actually built. The server
+    /// stamps it inside the accept transition only when the column is still empty
+    /// (<c>ZenkinsDbContext.TryStampGitCommitAsync</c>), so a second report - or a re-delivery of the
+    /// same one - can never rewrite it.
+    /// </para>
+    /// </summary>
+    public string? GitCommit { get; set; }
 
     /// <summary>Set when the run reaches a terminal state. Duration is derived on display.</summary>
     public DateTimeOffset? EndedAt { get; set; }

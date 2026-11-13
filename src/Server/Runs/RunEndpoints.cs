@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Zenkins.Server.Workers;
 using Zenkins.Shared.RunCancellation;
 
@@ -134,11 +135,16 @@ public static class RunEndpoints
 
     private static async Task<IResult> AcceptAsync(
         Guid runId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] AcceptRunRequest? request,
         HttpContext httpContext,
         RunService runs) =>
         MapReport(await runs.AcceptAsync(
             WorkerEndpoints.BearerToken(httpContext),
             runId,
+
+            // F-013: the exact commit the run cloned, when it cloned one. Optional so an older worker
+            // (and every F-006/F-007 test) keeps posting an empty body.
+            request?.GitCommit,
             httpContext.RequestAborted));
 
     private static async Task<IResult> CompleteAsync(
@@ -226,6 +232,16 @@ public static class RunEndpoints
     /// <summary>Empty form binding: the parameter makes the cancel POST form-bound (antiforgery).</summary>
     public sealed class CancelRunForm
     {
+    }
+
+    /// <summary>
+    /// The accepted report body (card F-013). The body is optional: the field is additive, and a
+    /// worker that has no repository report keeps sending an empty POST.
+    /// </summary>
+    public sealed class AcceptRunRequest
+    {
+        /// <summary>The exact commit (<c>git rev-parse HEAD</c>) the worker checked out, or null.</summary>
+        public string? GitCommit { get; set; }
     }
 
     public sealed class CompleteRunRequest

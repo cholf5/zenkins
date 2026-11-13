@@ -67,6 +67,33 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     [Fact]
+    public Task Git_credentials_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<GitCredential>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Cross_tenant_git_credential_write_is_rejected_and_persists_nothing() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<GitCredential>(
+            _fixture,
+            () => new GitCredential
+            {
+                // The fixture seeds one credential per organization, so a cross-tenant insert is refused
+                // by the tenant guard - never persisted, never a unique-index accident.
+                Name = "SMUGGLED_DEPLOY_TOKEN",
+                Kind = "HttpsToken",
+                Ciphertext = "CfDJ8-smuggled-ciphertext",
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_git_credentials() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<GitCredential>(
+            _fixture,
+            TwoOrgsFixture.GitCredentialAId,
+            TwoOrgsFixture.GitCredentialBId,
+            CancellationToken);
+
+    [Fact]
     public Task Find_after_a_tenant_switch_returns_null_for_secrets() =>
         TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<Secret>(
             _fixture,

@@ -5,6 +5,7 @@ using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Workers;
@@ -456,10 +457,29 @@ public sealed class RunService(
     /// Reports that the worker accepted a run it holds a valid lease for: the single
     /// <c>Queued → Running</c> transition, start time recorded, lease cleared (after acceptance
     /// there is no lease - cancellation F-009 and offline detection F-010 own the rest).
+    /// <para>
+    /// <b>F-013's accepted-report extension.</b> <paramref name="gitCommit"/> carries the exact commit
+    /// the worker checked out (<c>git rev-parse HEAD</c>), or <see langword="null"/> for a run with no
+    /// repository. It is validated as an object name (never a branch label, never a revision
+    /// expression) and stamped through the guarded compare-and-set
+    /// <see cref="ZenkinsDbContext.TryStampGitCommitAsync"/> - once. The column is never derived from
+    /// the branch and never rewritten: a re-delivered accept, or a second accept, leaves the first
+    /// value in place.
+    /// </para>
+    /// <para>
+    /// <b>The transition and the commit are one transaction (review M6).</b> They are two statements -
+    /// an entity update for the state and a guarded <c>ExecuteUpdate</c> for the commit - so without a
+    /// transaction an interruption between them would leave the run <c>Running</c> with
+    /// <c>GitCommit</c> NULL. That state is unrecoverable by design: <c>Running → Running</c> is not a
+    /// legal transition, so every retried accepted report is a 409 and the missing commit could never be
+    /// filled in. Committing both together means an interrupted attempt changes nothing at all - the run
+    /// stays <c>Queued</c> with its lease intact - so the worker's retry completes it.
+    /// </para>
     /// </summary>
     public async Task<RunReportResult> AcceptAsync(
         string? plaintextToken,
         Guid runId,
+        string? gitCommit,
         CancellationToken cancellationToken = default)
     {
         var (workerToken, worker, context) = await AuthenticateWithWorkerAsync(plaintextToken, cancellationToken);
@@ -477,6 +497,13 @@ public sealed class RunService(
             {
                 // Foreign or unknown id: the same 404, no existence oracle.
                 return RunReportResult.NotFound();
+            }
+
+            // Authentication and run ownership are settled above; the commit shape is validated before
+            // the transition so a malformed report cannot leave a half-accepted run behind.
+            if (gitCommit is not null && !GitCommitValidation.IsValid(gitCommit))
+            {
+                return RunReportResult.Invalid(GitCommitValidation.InvalidCode);
             }
 
             var now = DateTimeOffset.UtcNow;
@@ -510,14 +537,43 @@ public sealed class RunService(
                 ? TimeSpan.FromSeconds(seconds)
                 : options.DefaultTimeout;
             run.DeadlineAt = now + timeout;
+
+            // F-013 + review M6: the status transition and the commit stamp are ONE unit of work.
+            // They are two statements (an entity update and a guarded ExecuteUpdate), so without a
+            // transaction an interruption between them would leave the run Running with
+            // GitCommit NULL - and the run's own state guard (Running -> Running is not a legal
+            // transition, so every retry is a 409) would make that state permanently unrecoverable.
+            // Inside one transaction either both land or neither does; a failed attempt leaves the
+            // run Queued and still leased, so the worker's retried accepted report completes it.
+            await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+
             await context.SaveChangesAsync(cancellationToken);
 
+            string? recordedCommit = null;
+            if (gitCommit is not null)
+            {
+                // The CAS's WHERE is "GitCommit IS NULL", so a second report (or a re-delivery of this
+                // one) updates zero rows and the first value - the commit this run actually built -
+                // survives. A zero-row answer inside this path means a concurrent accept already
+                // stamped it; the recorded value is read back for the log rather than assumed.
+                var stamped = await context.TryStampGitCommitAsync(run.Id, gitCommit, now, cancellationToken);
+                recordedCommit = stamped == 1
+                    ? gitCommit
+                    : await context.BuildRuns
+                        .Where(candidate => candidate.Id == run.Id)
+                        .Select(candidate => candidate.GitCommit)
+                        .SingleOrDefaultAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+
             logger.LogInformation(
-                "Run accepted. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} DeadlineAt={DeadlineAt}",
+                "Run accepted. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} DeadlineAt={DeadlineAt} GitCommit={GitCommit}",
                 workerToken.OrganizationId,
                 run.Id,
                 worker.Id,
-                run.DeadlineAt);
+                run.DeadlineAt,
+                recordedCommit);
             return RunReportResult.Success(BuildRunStatus.Running);
         }
         finally

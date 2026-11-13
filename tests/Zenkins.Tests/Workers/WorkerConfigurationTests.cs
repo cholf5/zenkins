@@ -217,6 +217,84 @@ public sealed class WorkerConfigurationTests
         Assert.NotNull(result.Error);
     }
 
+    // ------------------------------------------------------------------
+    // F-013: the Git knobs
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void The_git_knobs_default_to_a_full_clone_without_a_pinned_known_hosts_file()
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+        });
+
+        var configuration = AssertGetValue(result);
+
+        // Depth 0 is a full clone: a shallow clone is opt-in, because a truncated history cannot resolve
+        // an older pinned commit.
+        Assert.Equal(0, configuration.GitDepth);
+        Assert.Null(configuration.GitKnownHostsPath);
+        Assert.Equal(TimeSpan.FromMinutes(5), configuration.GitOperationTimeout);
+    }
+
+    [Fact]
+    public void The_git_knobs_parse_and_reach_the_workspace_options()
+    {
+        var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [WorkerConfiguration.GitDepthVariable] = "25",
+            [WorkerConfiguration.GitKnownHostsVariable] = "/etc/zenkins/known_hosts",
+            [WorkerConfiguration.GitTimeoutSecondsVariable] = "90",
+        });
+
+        var configuration = AssertGetValue(result);
+        Assert.Equal(25, configuration.GitDepth);
+        Assert.Equal("/etc/zenkins/known_hosts", configuration.GitKnownHostsPath);
+        Assert.Equal(TimeSpan.FromSeconds(90), configuration.GitOperationTimeout);
+
+        var work = new RunWorkDirectory(
+            Guid.NewGuid(),
+            "run-root",
+            "run-root/repository",
+            "run-root/artifacts",
+            "run-root/temp");
+        var options = configuration.BuildGitWorkspaceOptions(
+            work,
+            runDeadline: DateTimeOffset.UtcNow.AddMinutes(3),
+            log: _ => { });
+
+        Assert.Equal(25, options.Depth);
+        Assert.Equal("/etc/zenkins/known_hosts", options.KnownHostsPath);
+        Assert.Equal(TimeSpan.FromSeconds(90), options.OperationTimeout);
+        Assert.NotNull(options.RunDeadline);
+        Assert.Same(work, options.Work);
+    }
+
+    [Theory]
+    [InlineData(WorkerConfiguration.GitDepthVariable, "-1")]
+    [InlineData(WorkerConfiguration.GitDepthVariable, "not-a-number")]
+    [InlineData(WorkerConfiguration.GitDepthVariable, "100001")]
+    [InlineData(WorkerConfiguration.GitTimeoutSecondsVariable, "0")]
+    [InlineData(WorkerConfiguration.GitTimeoutSecondsVariable, "86401")]
+    [InlineData(WorkerConfiguration.GitTimeoutSecondsVariable, "soon")]
+    public void An_invalid_git_knob_is_one_clear_line_naming_the_variable(string variable, string value)
+    {
+        var environment = new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "http://localhost",
+            [variable] = value,
+        };
+
+        var result = WorkerConfiguration.FromEnvironment(environment);
+
+        Assert.Null(result.Configuration);
+        Assert.NotNull(result.Error);
+        Assert.StartsWith("configuration error: " + variable, result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Registration_and_heartbeat_payloads_carry_the_platform_capabilities()
     {
