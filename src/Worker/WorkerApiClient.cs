@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using Zenkins.Shared.RunCancellation;
 
 namespace Zenkins.Worker;
 
@@ -25,7 +26,16 @@ public sealed record WorkerHeartbeatRequest(
 
 public sealed record WorkerRegistrationResponse(string WorkerId, string WorkerToken, string WorkerName);
 
-public sealed record WorkerHeartbeatResponse(string WorkerId, DateTimeOffset LastHeartbeatAt);
+/// <summary>
+/// The heartbeat response. <see cref="CancelRequestedRuns"/> is F-009's fallback cancel channel:
+/// the server's still-Running runs with a pending cancel request for this worker. Null when the
+/// server predates the field (and on any response that omits it) - the heartbeat loop treats that
+/// as "no cancellations pending".
+/// </summary>
+public sealed record WorkerHeartbeatResponse(
+    string WorkerId,
+    DateTimeOffset LastHeartbeatAt,
+    WorkerCancelRequest[]? CancelRequestedRuns = null);
 
 /// <summary>A queued run handed over by the claim endpoint (F-006 contract; camelCase on the wire).</summary>
 public sealed record WorkerClaimResponse(
@@ -36,6 +46,10 @@ public sealed record WorkerClaimResponse(
 
 /// <summary>The completed report payload: exit 0 → Success on the server, anything else → Failed.</summary>
 public sealed record WorkerCompleteRequest(int ExitCode);
+
+/// <summary>The canceled report payload (F-009): <c>canceled</c> or <c>timeout</c>; the server owns
+/// the mapping to the terminal state.</summary>
+public sealed record WorkerCanceledRequest(string Outcome);
 
 /// <summary>The server answered with a definitive failure (e.g. 401); retries cannot fix it.</summary>
 public sealed class WorkerApiRejectedException(string message, int statusCode) : Exception(message)
@@ -176,6 +190,35 @@ public sealed class WorkerApiClient(HttpClient httpClient)
             treatAllClientErrorsAsDefinitive: true);
     }
 
+    /// <summary>
+    /// Reports that a server-requested cancellation killed the run (F-009). The outcome selects
+    /// the server-side mapping: <c>canceled</c> → Canceled with the recorded cancel reason,
+    /// <c>timeout</c> → Failed with reason <c>timeout</c> - one kill, one endpoint. Any 4xx is a
+    /// definitive per-run outcome (a 409 means the run already reached a terminal state, e.g. a
+    /// Lost transition won the race): it is surfaced as a
+    /// <see cref="WorkerApiRejectedException"/> and the run is given up, never retried.
+    /// </summary>
+    public async Task ReportCanceledAsync(
+        string workerToken,
+        Guid runId,
+        string outcome,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/runs/{runId}/canceled",
+                workerToken,
+                new WorkerCanceledRequest(outcome),
+                WorkerJsonContext.Default.WorkerCanceledRequest),
+            cancellationToken);
+        await EnsureSuccessAsync(
+            inFlight.Response,
+            "reporting the run canceled",
+            inFlight.Timeout,
+            treatAllClientErrorsAsDefinitive: true);
+    }
+
     private static HttpRequestMessage CreateRequest(HttpMethod method, string path, string token)
     {
         var request = new HttpRequestMessage(method, path);
@@ -309,6 +352,8 @@ public sealed class WorkerApiClient(HttpClient httpClient)
 [JsonSerializable(typeof(WorkerHeartbeatResponse))]
 [JsonSerializable(typeof(WorkerClaimResponse))]
 [JsonSerializable(typeof(WorkerCompleteRequest))]
+[JsonSerializable(typeof(WorkerCanceledRequest))]
+[JsonSerializable(typeof(WorkerCancelRequest))]
 internal sealed partial class WorkerJsonContext : System.Text.Json.Serialization.JsonSerializerContext
 {
 }

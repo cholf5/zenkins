@@ -5,14 +5,15 @@ using Microsoft.Extensions.Logging;
 namespace Zenkins.Server.Runs;
 
 /// <summary>
-/// The scheduler's background half (card F-006): it assigns nothing by itself - workers pull via
-/// <c>POST /api/workers/claim</c> - its only job is expiring leases. On every tick it returns
-/// claimed-but-never-accepted runs whose lease window passed to <c>Queued</c>; a run that was
-/// accepted (no lease anymore) is unreachable for the statement, no matter how late a tick fires.
+/// The scheduler's background half (card F-006, deadline half F-009): it assigns nothing by itself
+/// - workers pull via <c>POST /api/workers/claim</c> - its jobs are expiring leases (F-006) and
+/// enforcing run deadlines (F-009: a run past its deadline gets a timeout cancel request; one still
+/// Running after the grace period is honestly marked Lost). On every tick both sweeps run; neither
+/// ever requeues or retries a finished run (terminal states are closed).
 /// <para>
-/// Failures are logged and the loop continues: a transient database hiccup delays the requeue by
-/// one interval, it never kills the host. Tests drive <see cref="RunService.SweepExpiredLeasesAsync"/>
-/// directly instead of waiting for real time.
+/// Failures are logged and the loop continues: a transient database hiccup delays a sweep by one
+/// interval, it never kills the host. Tests drive <see cref="RunService.SweepExpiredLeasesAsync"/>
+/// and <see cref="RunService.SweepDeadlinesAsync"/> directly instead of waiting for real time.
 /// </para>
 /// </summary>
 public sealed class LeaseSweeper(
@@ -28,6 +29,7 @@ public sealed class LeaseSweeper(
             try
             {
                 await SweepOnceAsync(stoppingToken);
+                await SweepDeadlinesOnceAsync(stoppingToken);
                 if (!await timer.WaitForNextTickAsync(stoppingToken))
                 {
                     return;
@@ -61,5 +63,14 @@ public sealed class LeaseSweeper(
         await using var scope = scopeFactory.CreateAsyncScope();
         var runs = scope.ServiceProvider.GetRequiredService<RunService>();
         return await runs.SweepExpiredLeasesAsync(cancellationToken);
+    }
+
+    /// <summary>One deadline-sweep tick in its own DI scope. Test seam (F-009).</summary>
+    public async Task<RunService.DeadlineSweepResult> SweepDeadlinesOnceAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var runs = scope.ServiceProvider.GetRequiredService<RunService>();
+        return await runs.SweepDeadlinesAsync(cancellationToken);
     }
 }

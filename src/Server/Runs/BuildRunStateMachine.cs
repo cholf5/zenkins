@@ -14,11 +14,13 @@ public static class RunErrorCodes
     public const string ArgvArgumentTooLong = "argv-argument-too-long";
     public const string TagUnknown = "tag-unknown";
     public const string TagInvalid = "tag-invalid";
+    public const string TimeoutInvalid = "timeout-invalid";
 
     // Worker run-API conflicts (409).
     public const string RunNotAssignedToWorker = "run-not-assigned-to-worker";
     public const string LeaseExpired = "lease-expired";
     public const string InvalidTransition = "invalid-transition";
+    public const string CancelNotRequested = "cancel-not-requested";
 
     // Reporting payload validation (400).
     public const string FieldInvalid = "field-invalid";

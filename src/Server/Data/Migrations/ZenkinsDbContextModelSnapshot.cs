@@ -149,11 +149,21 @@ namespace Zenkins.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("CancelReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset?>("CancelRequestedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("CommandJson")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("DeadlineAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("EndedAt")
@@ -187,6 +197,9 @@ namespace Zenkins.Server.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
+
+                    b.Property<int?>("TimeoutSeconds")
+                        .HasColumnType("integer");
 
                     b.Property<string>("TriggerType")
                         .IsRequired()

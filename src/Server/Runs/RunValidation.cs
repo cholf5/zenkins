@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace Zenkins.Server.Runs;
@@ -20,6 +21,35 @@ public static class RunValidation
     public const int MaxArgumentLength = 32 * 1024;
     public const int MaxRequiredTagsLength = 400;
     public const int MaxTagLength = 64;
+
+    /// <summary>The per-run timeout override's bounds in minutes (F-009): one minute .. one week.</summary>
+    public const int MinTimeoutMinutes = 1;
+    public const int MaxTimeoutMinutes = 10_080;
+
+    /// <summary>
+    /// Validates the optional per-run timeout override (F-009, minutes). Blank means "use the
+    /// server default" (<c>Runs:DefaultTimeoutMinutes</c>); anything that is not a whole number
+    /// between <see cref="MinTimeoutMinutes"/> and <see cref="MaxTimeoutMinutes"/> is a field
+    /// error - a silently dropped override would run with the wrong deadline.
+    /// </summary>
+    public static string? ValidateTimeoutMinutes(string? text, out int? timeoutMinutes)
+    {
+        timeoutMinutes = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (!int.TryParse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            || parsed < MinTimeoutMinutes
+            || parsed > MaxTimeoutMinutes)
+        {
+            return RunErrorCodes.TimeoutInvalid;
+        }
+
+        timeoutMinutes = parsed;
+        return null;
+    }
 
     /// <summary>
     /// Validates the command textarea and yields the argv. Returns an error code

@@ -229,6 +229,194 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 cancellationToken);
     }
 
+    /// <summary>
+    /// F-009: the user-facing cancel of one queued run, as a guarded compare-and-set (the claim's
+    /// CAS counterpart). The WHERE restates the eligibility - the run must still be
+    /// <c>Queued</c> - so under a concurrent claim storm exactly one of the two statements can win
+    /// the row: a claim that leases first leaves the run <c>Queued</c> (leased) and this cancel
+    /// then still cancels it (the documented race-window semantic: the leaseholder's accept is a
+    /// 409), while a cancel that lands first makes every claim's WHERE (<c>Status == Queued</c>)
+    /// re-evaluate to false. Tenant-scoped like <see cref="TryLeaseBuildRunAsync"/>: the user
+    /// path runs behind the active organization's filter. The lease columns are cleared with the
+    /// terminal state - a canceled run never carries a stale lease.
+    /// </summary>
+    /// <returns>1 when this call canceled the run, 0 when it was no longer queued (leased onward,
+    /// already canceled, or terminal).</returns>
+    public Task<int> TryCancelQueuedBuildRunAsync(
+        Guid runId,
+        string failureReason,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        BuildRuns
+            .Where(run => run.Id == runId
+                && run.Status == BuildRunStatus.Queued)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.Status, BuildRunStatus.Canceled)
+                .SetProperty(run => run.EndedAt, (DateTimeOffset?)now)
+                .SetProperty(run => run.FailureReason, failureReason)
+                .SetProperty(run => run.WorkerId, (Guid?)null)
+                .SetProperty(run => run.LeaseExpiresAt, (DateTimeOffset?)null)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+
+    /// <summary>
+    /// F-009: marks a <c>Running</c> run cancel-requested (the Queued case never gets here - a
+    /// queued cancel is terminal via <see cref="TryCancelQueuedBuildRunAsync"/>). The run keeps
+    /// <c>Running</c> until its worker kills the process tree and reports through the canceled
+    /// endpoint; the recorded reason becomes the terminal <c>FailureReason</c>. The
+    /// <c>CancelRequestedAt IS NULL</c> condition makes the first request win: a double cancel or
+    /// a user cancel racing the deadline sweeper records one reason, never overwrites one.
+    /// Tenant-scoped (the user path); the deadline sweeper uses the cross-tenant variant below.
+    /// </summary>
+    /// <returns>1 when this call recorded the request, 0 when one was already pending or the run
+    /// left <c>Running</c> meanwhile.</returns>
+    public Task<int> TryRequestBuildRunCancelAsync(
+        Guid runId,
+        string reason,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        BuildRuns
+            .Where(run => run.Id == runId
+                && run.Status == BuildRunStatus.Running
+                && run.CancelRequestedAt == null)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.CancelRequestedAt, (DateTimeOffset?)now)
+                .SetProperty(run => run.CancelReason, reason)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+
+    /// <summary>
+    /// F-009: the deadline sweeper's variant of <see cref="TryRequestBuildRunCancelAsync"/> for
+    /// every organization at once. Cross-tenant by design, so it requires an active
+    /// <see cref="ISystemDataScope"/> and bypasses the query filters - same discipline as
+    /// <see cref="RequeueExpiredBuildRunLeaseAsync"/>.
+    /// </summary>
+    public Task<int> TryRequestBuildRunCancelAcrossTenantsAsync(
+        Guid runId,
+        string reason,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_systemDataScope.IsActive)
+        {
+            throw new InvalidOperationException(
+                $"Requesting run cancellations across tenants requires an active {nameof(ISystemDataScope)} scope.");
+        }
+
+        return BuildRuns
+            .IgnoreQueryFilters()
+            .Where(run => run.Id == runId
+                && run.Status == BuildRunStatus.Running
+                && run.CancelRequestedAt == null)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.CancelRequestedAt, (DateTimeOffset?)now)
+                .SetProperty(run => run.CancelReason, reason)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// F-009/F-010: the server-side terminal transition of one <c>Running</c> run (the grace
+    /// period's <c>Lost</c> and the offline monitor's <c>Lost</c>). The WHERE is the compare-and-set:
+    /// exactly one sweep wins the Running state, so a late concurrent tick can never duplicate or
+    /// overwrite a recorded transition (a re-terminated run would move <c>EndedAt</c>). Cross-tenant
+    /// by design (both callers are background sweeps), so it requires an active
+    /// <see cref="ISystemDataScope"/>.
+    /// </summary>
+    /// <returns>1 when this call terminated the run, 0 when it had already left <c>Running</c>.</returns>
+    public Task<int> TryTerminateRunningBuildRunAsync(
+        Guid runId,
+        string targetStatus,
+        string failureReason,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_systemDataScope.IsActive)
+        {
+            throw new InvalidOperationException(
+                $"Terminating runs across tenants requires an active {nameof(ISystemDataScope)} scope.");
+        }
+
+        return BuildRuns
+            .IgnoreQueryFilters()
+            .Where(run => run.Id == runId
+                && run.Status == BuildRunStatus.Running)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.Status, targetStatus)
+                .SetProperty(run => run.FailureReason, failureReason)
+                .SetProperty(run => run.EndedAt, (DateTimeOffset?)now)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// F-009: the executing worker's canceled report, as a guarded compare-and-set. The WHERE
+    /// restates the caller's authority - the run must still be <c>Running</c> AND assigned to this
+    /// worker - so a report racing the grace-period/offline Lost transitions updates zero rows and
+    /// the endpoint answers the honest 409 instead of overwriting a recorded terminal state. The
+    /// target (<c>Canceled</c> or <c>Failed</c> for the timeout outcome) and the reason are the
+    /// server's, never caller-supplied free text. Tenant-scoped: the worker token selected the
+    /// tenant before this runs.
+    /// </summary>
+    /// <returns>1 when this call recorded the terminal state, 0 when the run had already left
+    /// <c>Running</c>.</returns>
+    public Task<int> TryReportCanceledBuildRunAsync(
+        Guid runId,
+        Guid workerId,
+        string targetStatus,
+        string failureReason,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        BuildRuns
+            .Where(run => run.Id == runId
+                && run.WorkerId == workerId
+                && run.Status == BuildRunStatus.Running)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.Status, targetStatus)
+                .SetProperty(run => run.FailureReason, failureReason)
+                .SetProperty(run => run.EndedAt, (DateTimeOffset?)now)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+
+    /// <summary>
+    /// F-010: the offline monitor's Online → Offline flip of one stale worker, as a guarded
+    /// compare-and-set. Only the sweep that wins this statement may mark the worker's runs Lost,
+    /// which is what makes the Lost transition exactly once even when monitor ticks race.
+    /// <para>
+    /// <paramref name="observedLastHeartbeatAt"/> is the staleness evidence: the heartbeat value
+    /// the sweep's snapshot read. The WHERE demands it still be the row's current heartbeat, so a
+    /// fresh heartbeat that lands between the snapshot and this statement leaves zero rows - the
+    /// sweep skips that worker's runs and the next tick re-evaluates it from a fresh snapshot.
+    /// Without the guard, a beat landing in that window would still be flipped Offline and its
+    /// Running runs wrongly Lost. Cross-tenant by design, so it requires an active
+    /// <see cref="ISystemDataScope"/>.
+    /// </para>
+    /// </summary>
+    /// <returns>1 when this call flipped the worker, 0 when it was already Offline or a fresh
+    /// heartbeat had replaced the observed one.</returns>
+    public Task<int> TryMarkWorkerOfflineAsync(
+        Guid workerId,
+        DateTimeOffset observedLastHeartbeatAt,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_systemDataScope.IsActive)
+        {
+            throw new InvalidOperationException(
+                $"Marking workers Offline across tenants requires an active {nameof(ISystemDataScope)} scope.");
+        }
+
+        return Workers
+            .IgnoreQueryFilters()
+            .Where(worker => worker.Id == workerId
+                && worker.Status == WorkerStatus.Online
+                && worker.LastHeartbeatAt == observedLastHeartbeatAt)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(worker => worker.Status, WorkerStatus.Offline)
+                .SetProperty(worker => worker.UpdatedAt, now),
+                cancellationToken);
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Identity configuration first (F-001 re-bases this model on IdentityUserContext); a missing
@@ -381,6 +569,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // No max length on purpose: an argv can be 100 x 32 KiB, so the column is text.
             entity.Property(run => run.CommandJson).IsRequired();
             entity.Property(run => run.FailureReason).HasMaxLength(200);
+
+            // F-009: the reason a cancellation was requested (canceled-by-user <user>, timeout),
+            // bounded like FailureReason which it becomes when the worker reports the kill.
+            entity.Property(run => run.CancelReason).HasMaxLength(200);
 
             // The claim query filters by tenant + status and orders by creation (FIFO); the project
             // runs list filters by project. Both are small explicit indexes.

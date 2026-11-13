@@ -20,8 +20,27 @@
                 <BbCardTitle As="h1" tabindex="-1">Run @(_run.Id.ToString("N")[..8])</BbCardTitle>
                 <BbBadge Variant="@RunBadgeVariant(_run.Status)">@_run.Status</BbBadge>
             </div>
-            <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">All runs</BbButton>
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                @* F-009: cancel is offered while the run can still be stopped. A Queued run is
+                   canceled atomically; a Running run gets a cancel request the worker acts on.
+                   The POST is form-bound (antiforgery), a terminal run answers a friendly no-op
+                   notice instead of an error. *@
+                @if (_run.Status is BuildRunStatus.Queued or BuildRunStatus.Running)
+                {
+                    <form method="post" action="@($"/runs/{_run.Id}/cancel")" data-zenkins-antiforgery>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Cancel run</BbButton>
+                    </form>
+                }
+                <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">All runs</BbButton>
+            </div>
         </div>
+
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
 
         <BbCard>
             <BbCardHeader>
@@ -86,6 +105,14 @@
                         <dd>@_run.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
                     </div>
                     <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Timeout</dt>
+                        <dd id="run-timeout">@(FormatTimeout(_run.TimeoutSeconds))</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Deadline</dt>
+                        <dd id="run-deadline">@(_run.DeadlineAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-") UTC</dd>
+                    </div>
+                    <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Failure reason</dt>
                         <dd>@(_run.FailureReason ?? "-")</dd>
                     </div>
@@ -115,6 +142,19 @@
     /// <summary>The subscription ticket the log panel presents to the browser hub. Only minted for
     /// a member session after the run itself was readable - the page is the only minter.</summary>
     private string? _accessTicket;
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        // F-009's cancel outcomes (PRG): a cancel that landed, a cancel the worker is acting on,
+        // and the friendly no-op for a run that had already finished.
+        "canceled" => "The run was canceled.",
+        "cancel-requested" => "The worker has been asked to cancel the run; the status updates when the worker reports.",
+        "already-finished" => "The run had already finished, so it was not changed.",
+        _ => null,
+    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -152,8 +192,15 @@
         BuildRunStatus.Running => BadgeVariant.Default,
         BuildRunStatus.Success => BadgeVariant.Success,
         BuildRunStatus.Failed => BadgeVariant.Destructive,
+        BuildRunStatus.Canceled => BadgeVariant.Outline,
+        BuildRunStatus.Lost => BadgeVariant.Destructive,
         _ => BadgeVariant.Outline,
     };
+
+    /// <summary>The per-run timeout display: the override in minutes, or the server default.</summary>
+    private static string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds
+        ? $"{seconds / 60} min (per-run override)"
+        : "default";
 
     /// <summary>Duration from the persisted start and end times; "-" while the run has no end.</summary>
     private static string FormatDuration(DateTimeOffset? startedAt, DateTimeOffset? endedAt)

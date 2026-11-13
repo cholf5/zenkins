@@ -3,6 +3,7 @@ using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.RunCancellation;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Workers;
@@ -98,14 +99,23 @@ public sealed record WorkerRegistrationResult(
         new(WorkerOperationStatus.InvalidInput, ErrorCode: errorCode);
 }
 
-/// <summary>Outcome of a heartbeat: enough for the worker to keep its loop running.</summary>
+/// <summary>Outcome of a heartbeat: enough for the worker to keep its loop running - plus the
+/// runs the server has asked this worker to cancel (F-009's fallback signal channel: a worker
+/// whose SignalR connection is down learns the cancel request at most one heartbeat period late).</summary>
 public sealed record WorkerHeartbeatResult(
     WorkerOperationStatus Status,
     Guid? WorkerId = null,
-    DateTimeOffset? LastHeartbeatAt = null)
+    DateTimeOffset? LastHeartbeatAt = null,
+    IReadOnlyList<WorkerCancelRequest>? CancelRequestedRuns = null)
 {
     public static WorkerHeartbeatResult Success(Guid workerId, DateTimeOffset lastHeartbeatAt) =>
         new(WorkerOperationStatus.Success, workerId, lastHeartbeatAt);
+
+    public static WorkerHeartbeatResult Success(
+        Guid workerId,
+        DateTimeOffset lastHeartbeatAt,
+        IReadOnlyList<WorkerCancelRequest> cancelRequestedRuns) =>
+        new(WorkerOperationStatus.Success, workerId, lastHeartbeatAt, cancelRequestedRuns);
 
     public static WorkerHeartbeatResult InvalidToken() => new(WorkerOperationStatus.InvalidToken);
 }
@@ -567,7 +577,24 @@ public sealed class WorkerService(
             return WorkerHeartbeatResult.InvalidToken();
         }
 
-        return WorkerHeartbeatResult.Success(worker.Id, now);
+        // F-009's fallback signal channel: every Running run of this worker with a pending cancel
+        // request rides the heartbeat response (one heartbeat period at most of added latency).
+        // The SignalR cancelRun signal is the primary channel; the two carry the same payload.
+        var pendingCancels = await context.BuildRuns
+            .AsNoTracking()
+            .Where(run => run.WorkerId == worker.Id
+                && run.Status == BuildRunStatus.Running
+                && run.CancelRequestedAt != null)
+            .OrderBy(run => run.Id)
+            .Select(run => new { run.Id, run.CancelReason })
+            .ToListAsync(cancellationToken);
+
+        return WorkerHeartbeatResult.Success(
+            worker.Id,
+            now,
+            pendingCancels
+                .Select(run => new WorkerCancelRequest(run.Id, run.CancelReason))
+                .ToArray());
     }
 
     /// <summary>

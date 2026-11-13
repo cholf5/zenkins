@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.RunCancellation;
 
 namespace Zenkins.Server.Workers;
 
@@ -87,7 +88,8 @@ public static class WorkerEndpoints
         {
             WorkerOperationStatus.Success => Results.Json(new WorkerHeartbeatResponse(
                 result.WorkerId!.Value,
-                result.LastHeartbeatAt!.Value)),
+                result.LastHeartbeatAt!.Value,
+                result.CancelRequestedRuns ?? [])),
             WorkerOperationStatus.InvalidToken => Unauthorized(),
 
             // A malformed payload from an authenticated worker is the worker's bug to fix.
@@ -218,7 +220,10 @@ public static class WorkerEndpoints
 
     public sealed record WorkerRegistrationResponse(Guid WorkerId, string WorkerToken, string WorkerName);
 
-    public sealed record WorkerHeartbeatResponse(Guid WorkerId, DateTimeOffset LastHeartbeatAt);
+    public sealed record WorkerHeartbeatResponse(
+        Guid WorkerId,
+        DateTimeOffset LastHeartbeatAt,
+        IReadOnlyList<WorkerCancelRequest> CancelRequestedRuns);
 
     public sealed record WorkerApiError(string Error);
 }

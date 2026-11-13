@@ -20,7 +20,7 @@ builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
 builder.Services.AddZenkinsWorkers();
-builder.Services.AddZenkinsRuns(builder.Configuration);
+builder.Services.AddZenkinsRuns();
 builder.Services.AddZenkinsLogs(builder.Configuration);
 
 // EF logs every SQL command at Information; keep that out of the production log so a parameter

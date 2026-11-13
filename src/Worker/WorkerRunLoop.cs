@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.RunCancellation;
 
 namespace Zenkins.Worker;
 
@@ -24,11 +25,15 @@ namespace Zenkins.Worker;
 /// lives in its own <c>work/{run-id}</c> tree, and no writable path is shared between runs.
 /// </para>
 /// <para>
-/// <b>Definitive vs transient.</b> A 4xx on claim/accepted/completed is a definitive per-run or
-/// credential answer: it is logged once and the run is given up (the server owns the run's state;
-/// a 409 on a completed retry means the first report already landed). Transport failures and
-/// request timeouts back off and retry. A shutdown while a process runs kills the whole tree and
-/// skips the completed report - the run's <c>Lost</c> transition is F-010's business.
+/// <b>Definitive vs transient.</b> A 4xx on claim/accepted/completed/canceled is a definitive
+/// per-run or credential answer: it is logged once and the run is given up (the server owns the
+/// run's state; a 409 on a completed/canceled retry means the first report already landed).
+/// Transport failures and request timeouts back off and retry. A shutdown while a process runs
+/// kills the whole tree and skips the completed report - the run's <c>Lost</c> transition is
+/// F-010's business. A server cancel request (F-009, via the shared <see cref="RunCancelSignal"/>)
+/// kills the tree through the same F-007 kill path, drains the partial log upstream, and reports
+/// through the <c>canceled</c> endpoint - the server maps the outcome (timeout → Failed, else
+/// Canceled).
 /// </para>
 /// </summary>
 public sealed class WorkerRunLoop(
@@ -39,7 +44,8 @@ public sealed class WorkerRunLoop(
     LogStreamClient logStreams,
     BackoffScheduler backoff,
     TextWriter log,
-    TextWriter errorLog)
+    TextWriter errorLog,
+    RunCancelSignal? cancelSignal = null)
 {
     /// <summary>
     /// Exit code reported for a run that never produced one of its own (the work directory could
@@ -173,7 +179,8 @@ public sealed class WorkerRunLoop(
         var runId = claim.RunId;
 
         // 1. Accept first: it is the lease-clearing Queued → Running edge. A definitive 4xx (the
-        //    lease expired, the run is not ours) gives the run up before anything is executed.
+        //    lease expired, the run is not ours, or the run was canceled while leased - F-009's
+        //    race-window semantic) gives the run up before anything is executed.
         if (!await ReportAsync(
                 runId,
                 "accepted",
@@ -201,50 +208,109 @@ public sealed class WorkerRunLoop(
 
         await log.WriteLineAsync($"Zenkins Worker: run {runId} executing in {work.RepositoryPath}.");
 
-        // 3. Execute the argv as a native process, streaming each output stream into its temp log.
-        var exitCode = await ExecuteProcessAsync(claim, work, shutdown);
-        if (exitCode is null)
+        // F-009: the per-run cancel gate. The shared bus carries every cancel request; this loop
+        // completes its gate only for its own run id. Killing the process tree happens through
+        // the cancellation token of the process wait itself (ProcessRunner kills on cancel), so
+        // the cancel path reuses exactly the shutdown kill path's machinery.
+        var cancelRequested = new TaskCompletionSource<RunCancelRequest>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancelScope = new CancellationTokenSource();
+        void OnCancelRequested(RunCancelRequest request)
         {
-            // Shutdown arrived mid-run; the process tree was killed. No completed report: F-010's
-            // offline detection owns this run's Lost transition.
-            return;
+            if (request.RunId != runId)
+            {
+                return;
+            }
+
+            cancelRequested.TrySetResult(request);
+            cancelScope.Cancel();
         }
 
-        // 4. Delete temp/ per configuration BEFORE the completed report: when the server records
-        //    the terminal state, the run's temp is already gone (repository/ and artifacts/ stay).
-        if (configuration.CleanupTemp)
+        using var cancelSubscription = cancelSignal?.Subscribe(OnCancelRequested);
+        try
         {
-            try
-            {
-                workDirectories.CleanupTemp(work);
-            }
-            catch (Exception failure)
-            {
-                await errorLog.WriteLineAsync(
-                    $"Zenkins Worker: run {runId} temp cleanup failed ({failure.Message}); leaving it in place.");
-            }
-        }
+            var result = await ExecuteProcessAsync(claim, work, shutdown, cancelScope.Token, cancelRequested.Task);
 
-        // 5. Report the exit code (0 → Success, non-zero → Failed, server-side mapping).
-        await ReportCompletionAsync(runId, exitCode.Value, shutdown);
+            if (result.CancelOutcome is { } outcome)
+            {
+                // 3. Killed by a server cancel request (user cancel or deadline). Same
+                //    cleanup-before-report discipline as the completed path: temp first, then the
+                //    report - when the server records the terminal state, the run's temp is
+                //    already gone and the drained log lines are on their way upstream.
+                if (configuration.CleanupTemp)
+                {
+                    try
+                    {
+                        workDirectories.CleanupTemp(work);
+                    }
+                    catch (Exception failure)
+                    {
+                        await errorLog.WriteLineAsync(
+                            $"Zenkins Worker: run {runId} temp cleanup failed ({failure.Message}); leaving it in place.");
+                    }
+                }
+
+                await log.WriteLineAsync(
+                    $"Zenkins Worker: run {runId} was canceled by the server (reason: {result.CancelReason ?? "canceled"}); "
+                    + "reporting it canceled.");
+                await ReportCanceledAsync(runId, outcome, shutdown);
+                return;
+            }
+
+            if (result.ExitCode is null)
+            {
+                // Shutdown arrived mid-run; the process tree was killed. No completed report: F-010's
+                // offline detection owns this run's Lost transition.
+                return;
+            }
+
+            // 4. Delete temp/ per configuration BEFORE the completed report: when the server records
+            //    the terminal state, the run's temp is already gone (repository/ and artifacts/ stay).
+            if (configuration.CleanupTemp)
+            {
+                try
+                {
+                    workDirectories.CleanupTemp(work);
+                }
+                catch (Exception failure)
+                {
+                    await errorLog.WriteLineAsync(
+                        $"Zenkins Worker: run {runId} temp cleanup failed ({failure.Message}); leaving it in place.");
+                }
+            }
+
+            // 5. Report the exit code (0 → Success, non-zero → Failed, server-side mapping).
+            await ReportCompletionAsync(runId, result.ExitCode.Value, shutdown);
+        }
+        finally
+        {
+            cancelSubscription?.Dispose();
+        }
     }
+
+    /// <summary>How one execution ended: a real exit code, a server-requested cancellation (with
+    /// the outcome to report), or a shutdown kill (both null - no report, F-010's business).</summary>
+    private sealed record RunExecutionResult(int? ExitCode, string? CancelOutcome, string? CancelReason = null);
 
     /// <summary>
     /// Starts the run's process and waits for its exit, streaming stdout/stderr lines into
     /// <c>temp/stdout.log</c> and <c>temp/stderr.log</c> as they are produced. Returns the exit
-    /// code, or <see langword="null"/> when shutdown killed the run.
+    /// code, the cancel outcome when the server requested the kill, or both null when shutdown
+    /// killed the run.
     /// </summary>
-    private async Task<int?> ExecuteProcessAsync(
+    private async Task<RunExecutionResult> ExecuteProcessAsync(
         WorkerClaimResponse claim,
         RunWorkDirectory work,
-        CancellationToken shutdown)
+        CancellationToken shutdown,
+        CancellationToken cancelKill,
+        Task<RunCancelRequest> cancelRequested)
     {
         if (claim.Command.Count == 0)
         {
             await errorLog.WriteLineAsync(
                 $"Zenkins Worker: run {claim.RunId} was claimed with an empty command. "
                 + $"Reporting exit code {InfrastructureFailureExitCode}.");
-            return InfrastructureFailureExitCode;
+            return new RunExecutionResult(InfrastructureFailureExitCode, null);
         }
 
         // Fresh empty logs per execution (a retried claim of the same run must not append stale
@@ -262,6 +328,10 @@ public sealed class WorkerRunLoop(
         var logBuffer = new RunLogBuffer(
             claim.RunId, configuration.LogBufferLines, errorLog, isConnected: () => logStreams.IsConnected);
         var pump = logBuffer.DrainAsync(logStreams, shutdown);
+
+        // The kill token: shutdown OR the server's cancel request for this run. ProcessRunner
+        // kills the whole tree on cancellation either way (F-007's kill path, reused verbatim).
+        using var killTokens = CancellationTokenSource.CreateLinkedTokenSource(shutdown, cancelKill);
 
         using var runner = new ProcessRunner(
             new ProcessRunnerOptions
@@ -293,8 +363,29 @@ public sealed class WorkerRunLoop(
 
         try
         {
-            var exitCode = await runner.RunAsync(shutdown);
-            return await FinishDrainAsync(logBuffer, pump, exitCode);
+            var exitCode = await runner.RunAsync(killTokens.Token);
+            return new RunExecutionResult(await FinishDrainAsync(logBuffer, pump, exitCode), null);
+        }
+        catch (OperationCanceledException) when (cancelKill.IsCancellationRequested && !shutdown.IsCancellationRequested)
+        {
+            // The server asked for this run's cancellation (user cancel or deadline): the tree is
+            // killed and the pipes drained (the F-007 cancellation path). Drain the log buffer so
+            // the partial output is on its way upstream, then report through the canceled endpoint
+            // - the server maps the outcome (timeout → Failed, otherwise Canceled).
+            var request = await cancelRequested;
+            await log.WriteLineAsync(
+                $"Zenkins Worker: run {claim.RunId} received the server's cancel request "
+                + $"(reason: {request.Reason ?? "canceled"}); the process tree was killed.");
+            logBuffer.CompleteInput();
+            if (logStreams.HasEverConnected)
+            {
+                await pump;
+            }
+
+            var outcome = RunCancelReasons.IsTimeout(request.Reason)
+                ? RunCanceledOutcomes.Timeout
+                : RunCanceledOutcomes.Canceled;
+            return new RunExecutionResult(null, outcome, request.Reason);
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
         {
@@ -302,7 +393,7 @@ public sealed class WorkerRunLoop(
                 $"Zenkins Worker: run {claim.RunId} was killed by shutdown (whole process tree); no completed report.");
             logBuffer.CompleteInput();
             await pump;
-            return null;
+            return new RunExecutionResult(null, null);
         }
         catch (Exception failure)
         {
@@ -317,7 +408,7 @@ public sealed class WorkerRunLoop(
             await errorLog.WriteLineAsync(
                 $"Zenkins Worker: run {claim.RunId} could not be executed ({failure.Message}). "
                 + $"Reporting exit code {InfrastructureFailureExitCode}.");
-            return InfrastructureFailureExitCode;
+            return new RunExecutionResult(InfrastructureFailureExitCode, null);
         }
     }
 
@@ -348,6 +439,15 @@ public sealed class WorkerRunLoop(
             runId,
             "completed",
             (token, cancellationToken) => api.CompleteAsync(token, runId, exitCode, cancellationToken),
+            shutdown);
+
+    /// <summary>Reports a server-requested cancellation (F-009): one endpoint, the outcome selects
+    /// the terminal state server-side (timeout → Failed, otherwise Canceled).</summary>
+    private Task ReportCanceledAsync(Guid runId, string outcome, CancellationToken shutdown) =>
+        ReportAsync(
+            runId,
+            $"canceled (outcome {outcome})",
+            (token, cancellationToken) => api.ReportCanceledAsync(token, runId, outcome, cancellationToken),
             shutdown);
 
     /// <summary>

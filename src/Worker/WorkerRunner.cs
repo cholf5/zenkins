@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using Microsoft.AspNetCore.Http.Connections.Client;
 
 namespace Zenkins.Worker;
 
@@ -24,7 +25,8 @@ public sealed class WorkerRunner(
     WorkDirectoryService workDirectories,
     BackoffScheduler backoff,
     TextWriter log,
-    TextWriter errorLog)
+    TextWriter errorLog,
+    Action<HttpConnectionOptions>? configureConnection = null)
 {
     /// <summary>Exit code for invalid configuration / unusable persisted state.</summary>
     public const int ConfigurationExitCode = 2;
@@ -54,12 +56,21 @@ public sealed class WorkerRunner(
         Log($"run execution starts on {configuration.MaxConcurrency} loop(s); "
             + $"claiming every {configuration.ClaimPollInterval.TotalSeconds:0.#} second(s).");
 
-        // F-008: one shared upstream log-stream connection (worker-token authenticated, its own
-        // reconnect loop next to the heartbeat), owned by every run loop's drain tasks.
-        await using var logStream = new LogStreamClient(
-            configuration, workerToken, BackoffScheduler.Default(), log, errorLog);
+        // F-009: the in-process cancel bus. The upstream log-stream connection's cancelRun handler
+        // and the heartbeat loop's cancelRequestedRuns fallback both raise onto it; every run loop
+        // subscribes and reacts only to its own run id.
+        var cancelSignal = new RunCancelSignal();
 
-        var heartbeat = HeartbeatLoopAsync(workerToken, shutdown);
+        // F-008: one shared upstream log-stream connection (worker-token authenticated, its own
+        // reconnect loop next to the heartbeat), owned by every run loop's drain tasks. The
+        // connection configurator (optional, in-process test seam) reaches the same options the
+        // connection builder passes to the transport.
+        await using var logStream = new LogStreamClient(
+            configuration, workerToken, BackoffScheduler.Default(), log, errorLog,
+            configureConnection,
+            cancelSignal: cancelSignal);
+
+        var heartbeat = HeartbeatLoopAsync(workerToken, cancelSignal, shutdown);
         var logStreamLoop = logStream.RunAsync(shutdown);
         var runLoops = Enumerable.Range(0, configuration.MaxConcurrency)
             .Select(_ => new WorkerRunLoop(
@@ -70,7 +81,8 @@ public sealed class WorkerRunner(
                 logStream,
                 BackoffScheduler.Default(),
                 log,
-                errorLog).RunAsync(shutdown))
+                errorLog,
+                cancelSignal).RunAsync(shutdown))
             .ToArray();
         await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops]);
 
@@ -79,8 +91,17 @@ public sealed class WorkerRunner(
         return 0;
     }
 
-    /// <summary>The F-005 heartbeat loop, unchanged in behaviour: heartbeat, back off, reconnect.</summary>
-    private async Task HeartbeatLoopAsync(string workerToken, CancellationToken shutdown)
+    /// <summary>
+    /// The F-005 heartbeat loop, unchanged in behaviour except for F-009's fallback channel: every
+    /// heartbeat response's <c>cancelRequestedRuns</c> entries are raised onto the shared cancel
+    /// bus, so a worker whose SignalR connection is down still observes a cancel within one
+    /// heartbeat period. Retry/backoff/reconnect semantics untouched: heartbeat, back off,
+    /// reconnect.
+    /// </summary>
+    private async Task HeartbeatLoopAsync(
+        string workerToken,
+        RunCancelSignal cancelSignal,
+        CancellationToken shutdown)
     {
         var announceOnFirstSuccess = true;
         var reconnecting = false;
@@ -93,6 +114,11 @@ public sealed class WorkerRunner(
                     workerToken,
                     configuration.BuildHeartbeatRequest(),
                     shutdown);
+
+                foreach (var cancel in response.CancelRequestedRuns ?? [])
+                {
+                    cancelSignal.Raise(new RunCancelRequest(cancel.RunId, cancel.Reason));
+                }
 
                 if (announceOnFirstSuccess)
                 {

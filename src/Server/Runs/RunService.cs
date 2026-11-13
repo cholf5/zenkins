@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System.Runtime.CompilerServices;
 using Zenkins.Server.Auth;
@@ -8,6 +9,7 @@ using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Workers;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.RunCancellation;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Runs;
@@ -41,10 +43,11 @@ public static class RunFields
 {
     public const string Command = "command";
     public const string RequiredTags = "requiredTags";
+    public const string Timeout = "timeoutMinutes";
 }
 
 /// <summary>The raw trigger-form values, before trimming and validation.</summary>
-public sealed record RunTriggerInput(string? Command, string? RequiredTags);
+public sealed record RunTriggerInput(string? Command, string? RequiredTags, string? TimeoutMinutes = null);
 
 /// <summary>Result of triggering a run. <see cref="RunId"/> is the redirect target on success.</summary>
 public sealed record RunTriggerResult(
@@ -79,7 +82,50 @@ public sealed record RunView(
     int? ExitCode,
     string? FailureReason,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    int? TimeoutSeconds = null,
+    DateTimeOffset? DeadlineAt = null);
+
+/// <summary>The failure reasons the server itself records (the worker's exit code needs none).</summary>
+public static class RunFailureReasons
+{
+    /// <summary>F-010: the worker stopped heartbeating while the run was still running.</summary>
+    public const string WorkerOffline = "worker-offline";
+
+    /// <summary>F-009 (PM ruling): the run passed its deadline plus the grace period without any
+    /// terminal report from the worker. Honest wording: the result is unknown - the server never
+    /// fabricates a Failed for a run it did not see end.</summary>
+    public const string RunDeadlineExceededResultUnknown = "run-deadline-exceeded-result-unknown";
+}
+
+/// <summary>What a user cancel did. <see cref="RunCancelOutcome.AlreadyFinished"/> is the friendly
+/// no-op: a terminal run cannot be canceled again, and the page says so instead of erroring.</summary>
+public enum RunCancelOutcome
+{
+    /// <summary>The run was queued and is now <c>Canceled</c> (immediate, atomic).</summary>
+    Canceled = 0,
+
+    /// <summary>The run was running; the worker has been asked to cancel it.</summary>
+    CancelRequested = 1,
+
+    /// <summary>The run had already reached a terminal state; nothing was changed.</summary>
+    AlreadyFinished = 2,
+}
+
+/// <summary>Outcome of the user-facing cancel action (the run page's cancel button).</summary>
+public sealed record RunCancelResult(RunOperationStatus Status, RunCancelOutcome Outcome, string? Message = null)
+{
+    public static RunCancelResult Canceled() => new(RunOperationStatus.Success, RunCancelOutcome.Canceled);
+
+    public static RunCancelResult CancelRequested() => new(RunOperationStatus.Success, RunCancelOutcome.CancelRequested);
+
+    public static RunCancelResult AlreadyFinished() => new(RunOperationStatus.Success, RunCancelOutcome.AlreadyFinished);
+
+    public static RunCancelResult Forbidden(string message) =>
+        new(RunOperationStatus.Forbidden, RunCancelOutcome.AlreadyFinished, message);
+
+    public static RunCancelResult NotFound() => new(RunOperationStatus.NotFound, RunCancelOutcome.AlreadyFinished);
+}
 
 /// <summary>A queued run handed to a worker by the claim endpoint.</summary>
 public sealed record RunClaimResult(
@@ -146,6 +192,8 @@ public sealed class RunService(
     WorkerService workerService,
     RunLogIngest runLogIngest,
     RunOptions options,
+    WorkerMonitorOptions workerMonitorOptions,
+    IHubContext<WorkerLogHub> workerLogHubs,
     ILogger<RunService> logger)
 {
     /// <summary>
@@ -209,6 +257,12 @@ public sealed class RunService(
             return RunTriggerResult.Invalid(new RunFieldError(RunFields.RequiredTags, tagsError));
         }
 
+        var timeoutError = RunValidation.ValidateTimeoutMinutes(input.TimeoutMinutes, out var timeoutMinutes);
+        if (timeoutError is not null)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Timeout, timeoutError));
+        }
+
         if (requiredTags.Length > 0)
         {
             var knownTags = (await context.Workers.ToListAsync(cancellationToken))
@@ -232,6 +286,7 @@ public sealed class RunService(
             TriggerUserId = actingUserId,
             RequiredTags = requiredTags,
             CommandJson = RunValidation.EncodeCommandJson(argv),
+            TimeoutSeconds = timeoutMinutes is { } minutes ? minutes * 60 : null,
         };
         context.BuildRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken);
@@ -447,13 +502,22 @@ public sealed class RunService(
             run.Status = BuildRunStatus.Running;
             run.StartedAt = now;
             run.LeaseExpiresAt = null;
+
+            // F-009: the execution deadline is frozen at accept - the run's per-run override or
+            // the server default. The deadline sweeper never touches the run before this instant,
+            // and a later configuration change never moves an accepted run's deadline.
+            var timeout = run.TimeoutSeconds is { } seconds
+                ? TimeSpan.FromSeconds(seconds)
+                : options.DefaultTimeout;
+            run.DeadlineAt = now + timeout;
             await context.SaveChangesAsync(cancellationToken);
 
             logger.LogInformation(
-                "Run accepted. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId}",
+                "Run accepted. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} DeadlineAt={DeadlineAt}",
                 workerToken.OrganizationId,
                 run.Id,
-                worker.Id);
+                worker.Id,
+                run.DeadlineAt);
             return RunReportResult.Success(BuildRunStatus.Running);
         }
         finally
@@ -583,6 +647,424 @@ public sealed class RunService(
     }
 
     // ---------------------------------------------------------------------
+    // User cancel (F-009): the run page's cancel button
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Cancels a run on behalf of an organization member (Owner or Member - the trigger right).
+    /// <list type="bullet">
+    /// <item><c>Queued</c>: a guarded compare-and-set flips it to <c>Canceled</c> atomically. Under
+    /// a concurrent claim storm exactly one of the two statements can win the row (both WHEREs
+    /// require <c>Status == Queued</c>); a run canceled after a claim but before its accept makes
+    /// the leaseholder's accepted report a 409, so the process is never started.</item>
+    /// <item><c>Running</c>: the run is marked cancel-requested (reason
+    /// <c>canceled-by-user &lt;user&gt;</c>, first request wins) and the worker is signaled over
+    /// its hub connection (the heartbeat response is the fallback). The run stays Running until
+    /// the worker kills the tree and reports through the canceled endpoint.</item>
+    /// <item>Terminal: a friendly no-op - nothing changes, the page says the run had finished.
+    /// Double-cancel is the same no-op.</item>
+    /// </list>
+    /// A foreign-organization run is indistinguishable from a missing one (404, no existence
+    /// oracle); a non-member gets 403.
+    /// </summary>
+    public async Task<RunCancelResult> CancelAsync(
+        string actingUserId,
+        Guid runId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        if (tenantContext.OrganizationId is null)
+        {
+            return RunCancelResult.Forbidden(
+                "You are not a member of an organization, so there is no run to cancel.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await context.OrganizationMembers.AnyAsync(
+                member => member.UserId == actingUserId,
+                cancellationToken))
+        {
+            return RunCancelResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var run = await context.BuildRuns.SingleOrDefaultAsync(
+            candidate => candidate.Id == runId,
+            cancellationToken);
+        if (run is null)
+        {
+            // Foreign or unknown id: the same 404, no existence oracle.
+            return RunCancelResult.NotFound();
+        }
+
+        var actor = await context.Users
+            .Where(user => user.Id == actingUserId)
+            .Select(user => user.Email)
+            .FirstOrDefaultAsync(cancellationToken);
+        var reason = RunCancelReasons.ForUser(actor ?? actingUserId);
+        var now = DateTimeOffset.UtcNow;
+
+        if (run.Status is BuildRunStatus.Queued or BuildRunStatus.Running)
+        {
+            // Still non-terminal: the only two states with outgoing edges.
+            if (run.Status == BuildRunStatus.Queued)
+            {
+                var canceled = await context.TryCancelQueuedBuildRunAsync(runId, reason, now, cancellationToken);
+                if (canceled == 1)
+                {
+                    logger.LogInformation(
+                        "Queued run canceled. OrganizationId={OrganizationId} RunId={RunId} ByUserId={UserId}",
+                        run.OrganizationId,
+                        runId,
+                        actingUserId);
+                    return RunCancelResult.Canceled();
+                }
+
+                // Lost the race: the run left Queued between the read and the CAS. Re-read and
+                // fall through - it is either Running now (cancel-request path) or terminal
+                // (the friendly no-op).
+                var reread = await context.BuildRuns.SingleOrDefaultAsync(
+                    candidate => candidate.Id == runId,
+                    cancellationToken);
+                if (reread is null)
+                {
+                    // The run's project (and with it the run) is gone; nothing left to cancel.
+                    return RunCancelResult.NotFound();
+                }
+
+                run = reread;
+            }
+
+            if (run.Status == BuildRunStatus.Running)
+            {
+                // First request wins (CancelRequestedAt IS NULL in the CAS): a double cancel or a
+                // user cancel racing the deadline sweeper records one reason and never overwrites.
+                await context.TryRequestBuildRunCancelAsync(runId, reason, now, cancellationToken);
+                if (run.WorkerId is { } workerId)
+                {
+                    await BroadcastCancelAsync(workerId, runId, reason, cancellationToken);
+                }
+
+                logger.LogInformation(
+                    "Running run cancel requested. OrganizationId={OrganizationId} RunId={RunId} ByUserId={UserId}",
+                    run.OrganizationId,
+                    runId,
+                    actingUserId);
+                return RunCancelResult.CancelRequested();
+            }
+        }
+
+        // Terminal (including a run that turned terminal during the race above): friendly no-op.
+        return RunCancelResult.AlreadyFinished();
+    }
+
+    // ---------------------------------------------------------------------
+    // Worker canceled report (F-009)
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Records the terminal state of a run its worker killed on a server cancel request. The
+    /// worker's outcome selects the mapping (the server owns it): <c>canceled</c> →
+    /// <c>Canceled</c> with the recorded cancel reason (<c>canceled-by-user &lt;user&gt;</c>),
+    /// <c>timeout</c> → <c>Failed</c> with reason <c>timeout</c>. One endpoint for both so a kill
+    /// never needs a second action.
+    /// <para>
+    /// Guards: worker token (bare 401), tenant-filtered run lookup (foreign id 404), own-run check
+    /// (409), a pending cancel request (409 <c>cancel-not-requested</c> - the worker may only kill
+    /// what the server asked it to kill), and the compare-and-set on <c>Status == Running</c>
+    /// (409 - the report racing a Lost transition loses and answers honestly).
+    /// </para>
+    /// </summary>
+    public async Task<RunReportResult> ReportCanceledAsync(
+        string? plaintextToken,
+        Guid runId,
+        string? outcome,
+        CancellationToken cancellationToken = default)
+    {
+        // Authentication before payload validation (the accepted/completed pattern).
+        var (workerToken, worker, context) = await AuthenticateWithWorkerAsync(plaintextToken, cancellationToken);
+        if (workerToken is null || worker is null)
+        {
+            return RunReportResult.InvalidToken();
+        }
+
+        try
+        {
+            var mappedOutcome = outcome switch
+            {
+                null or "" or RunCanceledOutcomes.Canceled => RunCanceledOutcomes.Canceled,
+                RunCanceledOutcomes.Timeout => RunCanceledOutcomes.Timeout,
+                _ => null,
+            };
+            if (mappedOutcome is null)
+            {
+                return RunReportResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
+            var run = await context.BuildRuns.SingleOrDefaultAsync(
+                candidate => candidate.Id == runId,
+                cancellationToken);
+            if (run is null)
+            {
+                return RunReportResult.NotFound();
+            }
+
+            if (run.WorkerId != worker.Id)
+            {
+                return RunReportResult.Conflict(RunErrorCodes.RunNotAssignedToWorker);
+            }
+
+            if (run.CancelRequestedAt is null)
+            {
+                return RunReportResult.Conflict(RunErrorCodes.CancelNotRequested);
+            }
+
+            var (target, failureReason) = mappedOutcome == RunCanceledOutcomes.Timeout
+                ? (BuildRunStatus.Failed, RunCancelReasons.Timeout)
+                : (BuildRunStatus.Canceled, run.CancelReason ?? RunCancelReasons.CanceledByUser);
+
+            var now = DateTimeOffset.UtcNow;
+            var reported = await context.TryReportCanceledBuildRunAsync(
+                runId,
+                worker.Id,
+                target,
+                failureReason,
+                now,
+                cancellationToken);
+            if (reported != 1)
+            {
+                // The run left Running between the read and the CAS (a Lost transition won).
+                return RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
+            }
+
+            // Terminal: flush the ingest tail and evict the run's buffer (the same completed-path
+            // discipline F-008 established; closes the Canceled-run gap its log recorded).
+            await runLogIngest.CompleteRunAsync(run.Id);
+
+            logger.LogInformation(
+                "Run canceled by its worker. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Status={Status} Reason={Reason}",
+                workerToken.OrganizationId,
+                runId,
+                worker.Id,
+                target,
+                failureReason);
+            return RunReportResult.Success(target);
+        }
+        finally
+        {
+            await context.DisposeAsync();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Deadline sweep (F-009) and offline sweep (F-010) - background services
+    // ---------------------------------------------------------------------
+
+    /// <summary>The deadline sweep's effects: how many runs got a timeout cancel request, how many
+    /// were honestly marked Lost after the grace period.</summary>
+    public sealed record DeadlineSweepResult(int CancelRequested, int Lost);
+
+    /// <summary>
+    /// The deadline sweeper (F-009): every <c>Running</c> run past its <see cref="Entities.BuildRun.DeadlineAt"/>
+    /// gets a cancel request (reason <c>timeout</c>, signaled like a user cancel); a run still
+    /// Running after the grace period (deadline + 2 × <c>Workers:OfflineAfterSeconds</c>, the PM
+    /// ruling that closes F-007's online-but-unreportable gap) is marked <c>Lost</c> with reason
+    /// <c>run-deadline-exceeded-result-unknown</c> - never Failed, never requeued: the result is
+    /// unknown, not a failure. Before the deadline the sweep changes nothing.
+    /// <para>
+    /// Spans tenants (system scope). The expiry comparison happens in memory - SQLite cannot
+    /// compare DateTimeOffset values in SQL (the lease sweep's discovery) - and each per-run write
+    /// is a compare-and-set, so a run that leaves Running during the sweep is never touched.
+    /// </para>
+    /// </summary>
+    public async Task<DeadlineSweepResult> SweepDeadlinesAsync(CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var grace = TimeSpan.FromSeconds(2 * workerMonitorOptions.OfflineAfterSeconds);
+        using var scope = systemDataScope.BeginScope();
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var running = await context.BuildRuns
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .Where(run => run.Status == BuildRunStatus.Running)
+            .Select(run => new { run.Id, run.WorkerId, run.DeadlineAt, run.CancelRequestedAt })
+            .ToListAsync(cancellationToken);
+
+        var result = new DeadlineSweepResult(0, 0);
+        foreach (var run in running)
+        {
+            if (run.DeadlineAt is not { } deadline || deadline > now)
+            {
+                continue;
+            }
+
+            if (deadline + grace > now)
+            {
+                // Within the grace period: ask the worker to kill the run (timeout). The CAS only
+                // records the request when none is pending and the run is still Running.
+                var requested = await context.TryRequestBuildRunCancelAcrossTenantsAsync(
+                    run.Id,
+                    RunCancelReasons.Timeout,
+                    now,
+                    cancellationToken);
+                if (requested == 1)
+                {
+                    result = result with { CancelRequested = result.CancelRequested + 1 };
+                    if (run.WorkerId is { } workerId)
+                    {
+                        await BroadcastCancelAsync(workerId, run.Id, RunCancelReasons.Timeout, cancellationToken);
+                    }
+                }
+            }
+            else
+            {
+                // Grace over, no terminal report: the honest unknown. A Lost run never requeues.
+                var lost = await context.TryTerminateRunningBuildRunAsync(
+                    run.Id,
+                    BuildRunStatus.Lost,
+                    RunFailureReasons.RunDeadlineExceededResultUnknown,
+                    now,
+                    cancellationToken);
+                if (lost == 1)
+                {
+                    result = result with { Lost = result.Lost + 1 };
+                    await runLogIngest.CompleteRunAsync(run.Id);
+                }
+            }
+        }
+
+        if (result.CancelRequested > 0 || result.Lost > 0)
+        {
+            logger.LogInformation(
+                "Deadline sweep: {CancelRequested} timeout cancel request(s), {Lost} run(s) marked Lost after the grace period.",
+                result.CancelRequested,
+                result.Lost);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The offline sweep (F-010): every Online worker whose last heartbeat is older than the
+    /// threshold is flipped Offline through a compare-and-set, and only the sweep that wins a
+    /// worker's flip marks that worker's <c>Running</c> runs <c>Lost</c> (reason
+    /// <c>worker-offline</c>) - the exactly-once guarantee for concurrent ticks. Claimed-but-not-
+    /// accepted leases are deliberately left alone: the lease sweeper requeues them (they never
+    /// executed, so a requeue is not a retry), and a Lost marking there would be a lie.
+    /// <para>
+    /// Spans tenants (system scope); the staleness comparison happens in memory (SQLite cannot
+    /// compare DateTimeOffset values in SQL). A worker with no heartbeat timestamp is never
+    /// flipped - unknown data must not produce an Offline. The flip's compare-and-set also carries
+    /// the snapshot's heartbeat value as its staleness evidence: a fresh heartbeat that lands
+    /// between the snapshot read and the flip leaves zero rows, the tick skips that worker's runs
+    /// entirely (no fake Offline, no wrong Lost), and the next tick re-evaluates it from a fresh
+    /// snapshot.
+    /// </para>
+    /// </summary>
+    public async Task<OfflineSweepResult> SweepOfflineWorkersAsync(
+        TimeSpan offlineAfter,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        using var scope = systemDataScope.BeginScope();
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var onlineWorkers = await context.Workers
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .Where(worker => worker.Status == WorkerStatus.Online)
+            .Select(worker => new { worker.Id, worker.OrganizationId, worker.LastHeartbeatAt })
+            .ToListAsync(cancellationToken);
+
+        var result = new OfflineSweepResult(0, 0);
+        foreach (var worker in onlineWorkers)
+        {
+            if (worker.LastHeartbeatAt is not { } lastHeartbeat || lastHeartbeat > now - offlineAfter)
+            {
+                // Inside the threshold (or no heartbeat data at all): no flapping on one beat.
+                continue;
+            }
+
+            var offlined = await context.TryMarkWorkerOfflineAsync(
+                worker.Id,
+                lastHeartbeat,
+                now,
+                cancellationToken);
+            if (offlined != 1)
+            {
+                // Another sweep already flipped the worker, or a fresh heartbeat landed after the
+                // snapshot read (the CAS's observed-heartbeat evidence no longer matches): this
+                // tick skips the worker and its runs - the next tick re-evaluates from a fresh
+                // snapshot.
+                continue;
+            }
+
+            result = result with { WorkersOfflined = result.WorkersOfflined + 1 };
+
+            // Exactly the runs still Running on the lost worker become Lost - the claimed-but-
+            // unaccepted lease stays Queued for the lease sweeper (F-010's decision).
+            var runningIds = await context.BuildRuns
+                .AsNoTracking()
+                .IgnoreQueryFilters()
+                .Where(run => run.WorkerId == worker.Id && run.Status == BuildRunStatus.Running)
+                .Select(run => run.Id)
+                .ToListAsync(cancellationToken);
+            foreach (var runId in runningIds)
+            {
+                var lost = await context.TryTerminateRunningBuildRunAsync(
+                    runId,
+                    BuildRunStatus.Lost,
+                    RunFailureReasons.WorkerOffline,
+                    now,
+                    cancellationToken);
+                if (lost == 1)
+                {
+                    result = result with { RunsLost = result.RunsLost + 1 };
+                    await runLogIngest.CompleteRunAsync(runId);
+                }
+            }
+
+            logger.LogInformation(
+                "Worker {WorkerId} (organization {OrganizationId}) went Offline after a stale heartbeat; "
+                + "{RunsLost} running run(s) marked Lost.",
+                worker.Id,
+                worker.OrganizationId,
+                result.RunsLost);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Pushes the cancelRun signal to one worker's hub group. Fire-and-forget by design: a missed
+    /// signal is recovered by the heartbeat response's cancelRequested fallback (F-009's decision),
+    /// so a broadcast failure is logged, never thrown into the cancel path.
+    /// </summary>
+    private async Task BroadcastCancelAsync(
+        Guid workerId,
+        Guid runId,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await workerLogHubs.Clients
+                .Group(WorkerLogGroups.ForWorker(workerId))
+                .SendAsync("cancelRun", runId, reason, cancellationToken);
+        }
+        catch (Exception failure)
+        {
+            logger.LogWarning(
+                failure,
+                "Broadcasting the cancel signal for run {RunId} to worker {WorkerId} failed; "
+                + "the heartbeat fallback will deliver it.",
+                runId,
+                workerId);
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // Shared plumbing
     // ---------------------------------------------------------------------
 
@@ -675,6 +1157,8 @@ public sealed class RunService(
             run.ExitCode,
             run.FailureReason,
             run.CreatedAt,
-            run.UpdatedAt)).ToList();
+            run.UpdatedAt,
+            run.TimeoutSeconds,
+            run.DeadlineAt)).ToList();
     }
 }

@@ -128,6 +128,20 @@
                                 <p id="run-required-tags-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@tagsError</p>
                             }
                         </div>
+                        <div>
+                            <label for="run-timeout-minutes" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Timeout in minutes (optional)</label>
+                            <input id="run-timeout-minutes"
+                                   name="TimeoutMinutes"
+                                   type="number"
+                                   min="1"
+                                   max="10080"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="default (60)" />
+                            @if (TimeoutError is { } timeoutError)
+                            {
+                                <p id="run-timeout-minutes-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@timeoutError</p>
+                            }
+                        </div>
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Start run</BbButton>
                     </div>
                 </form>
@@ -172,6 +186,12 @@
     {
         RunErrorCodes.TagUnknown => "No registered worker in this organization has one of these tags.",
         RunErrorCodes.TagInvalid => "Required tags are comma-separated text, at most 64 characters per tag.",
+        _ => null,
+    };
+
+    private string? TimeoutError => RunErrorCode switch
+    {
+        RunErrorCodes.TimeoutInvalid => "The timeout is a whole number of minutes between 1 and 10080; leave it blank for the server default.",
         _ => null,
     };
 

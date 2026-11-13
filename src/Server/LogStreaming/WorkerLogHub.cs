@@ -8,9 +8,20 @@ using Zenkins.Shared.LogStreaming;
 
 namespace Zenkins.Server.LogStreaming;
 
+/// <summary>Group names for the worker upstream hub. One group per worker id, joined on connect,
+/// is how the server addresses a worker's cancel signals (F-009) without keeping connection
+/// registries: a reconnecting worker re-joins through its connect handler automatically.</summary>
+public static class WorkerLogGroups
+{
+    public static string ForWorker(Guid workerId) => $"worker:{workerId.ToString("N")}";
+}
+
 /// <summary>
-/// The worker upstream run-log hub (card F-008): the executing worker pushes captured stdout/stderr
-/// lines here as they are produced. Authentication is the worker token (the same credential the
+/// The worker upstream run-log hub (card F-008) and the worker's cancel-signal receive point
+/// (card F-009): the executing worker pushes captured stdout/stderr lines here as they are
+/// produced, and receives <c>cancelRun(runId, reason)</c> on the same connection - the outbound
+/// direction the PRD §3.4.5 cancel requirement rides, with the heartbeat response as the fallback
+/// channel. Authentication is the worker token (the same credential the
 /// F-004/F-006 HTTP API accepts), enforced at negotiate time by the
 /// <see cref="WorkerTokenAuthenticationDefaults.AuthenticationScheme"/> - an unauthenticated or
 /// invalid connection is a bare 401 before any hub method can run.
@@ -35,7 +46,7 @@ public sealed class WorkerLogHub(
     /// <summary>The plaintext token is kept per connection for the per-method re-validation.</summary>
     private const string TokenItemKey = "zenkins.workerToken";
 
-    public override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
         var token = WorkerTokenAuthenticationHandler.ReadToken(Context.GetHttpContext());
         if (!string.IsNullOrEmpty(token))
@@ -43,7 +54,15 @@ public sealed class WorkerLogHub(
             Context.Items[TokenItemKey] = token;
         }
 
-        return base.OnConnectedAsync();
+        // F-009: join this worker's per-worker group so the server can address it with the
+        // cancelRun signal. Groups are per connection, so every (re)connect re-joins here - the
+        // SignalR fallback channel survives reconnects without server-side connection registries.
+        if (Guid.TryParse(Context.User?.FindFirstValue(ZenkinsClaims.WorkerId), out var workerId))
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, WorkerLogGroups.ForWorker(workerId));
+        }
+
+        await base.OnConnectedAsync();
     }
 
     /// <summary>

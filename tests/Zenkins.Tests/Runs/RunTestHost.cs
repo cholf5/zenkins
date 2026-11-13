@@ -156,7 +156,8 @@ public sealed class RunTestHost : IDisposable
         HttpClient client,
         Guid projectId,
         string? command,
-        string? requiredTags = null) =>
+        string? requiredTags = null,
+        string? timeoutMinutes = null) =>
         OrganizationTestHost.PostFormAsync(
             client,
             $"/projects/{projectId}",
@@ -165,6 +166,7 @@ public sealed class RunTestHost : IDisposable
             {
                 ["Command"] = command ?? string.Empty,
                 ["RequiredTags"] = requiredTags ?? string.Empty,
+                ["TimeoutMinutes"] = timeoutMinutes ?? string.Empty,
             });
 
     /// <summary>Triggers a run through the real form and returns the new run's id (asserts PRG).</summary>
@@ -172,9 +174,10 @@ public sealed class RunTestHost : IDisposable
         HttpClient client,
         Guid projectId,
         string command = "dotnet\n--version",
-        string? requiredTags = null)
+        string? requiredTags = null,
+        string? timeoutMinutes = null)
     {
-        var response = await StartRunAsync(client, projectId, command, requiredTags);
+        var response = await StartRunAsync(client, projectId, command, requiredTags, timeoutMinutes);
         Assert.True((int)response.StatusCode is 302 or 303,
             $"Expected a redirect, got {(int)response.StatusCode}.");
         var location = response.Headers.Location!.OriginalString;

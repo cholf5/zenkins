@@ -24,10 +24,12 @@ public interface ILogStreamSink
 }
 
 /// <summary>
-/// The worker's upstream log-stream connection (card F-008): a single
-/// <see cref="HubConnection"/> to the server's <c>/hubs/worker-logs</c>, authenticated with the
-/// worker token (SignalR presents it as <c>Authorization: Bearer …</c> on negotiate and as the
-/// <c>access_token</c> query string on the WebSocket handshake - the server's scheme reads both).
+/// The worker's upstream log-stream connection (card F-008) and cancel-signal receive point
+/// (card F-009): a single <see cref="HubConnection"/> to the server's <c>/hubs/worker-logs</c>,
+/// authenticated with the worker token (SignalR presents it as <c>Authorization: Bearer …</c> on
+/// negotiate and as the <c>access_token</c> query string on the WebSocket handshake - the server's
+/// scheme reads both). While connected it also receives the server's <c>cancelRun(runId, reason)</c>
+/// signals (F-009's primary cancel channel) and raises them on the shared <see cref="RunCancelSignal"/>.
 /// <para>
 /// <b>Lifecycle.</b> One connection for the whole worker process, owned by <see cref="RunAsync"/>:
 /// connect, stay connected until the server or the network closes it, then reconnect with the
@@ -51,7 +53,8 @@ public sealed class LogStreamClient(
     BackoffScheduler backoff,
     TextWriter log,
     TextWriter errorLog,
-    Action<HttpConnectionOptions>? configureConnection = null) : IAsyncDisposable, ILogStreamSink
+    Action<HttpConnectionOptions>? configureConnection = null,
+    RunCancelSignal? cancelSignal = null) : IAsyncDisposable, ILogStreamSink
 {
     /// <summary>Raised after every successful (re)connect; wakes the per-run drain pumps.</summary>
     public event Action? Connected;
@@ -113,6 +116,15 @@ public sealed class LogStreamClient(
                 closed.TrySetResult(failure);
                 return Task.CompletedTask;
             };
+
+            // F-009: the cancelRun signal rides the same upstream connection. Registered per
+            // connection (handlers are per connection); the heartbeat response's
+            // cancelRequestedRuns list is the fallback channel for a connection that is down.
+            if (cancelSignal is not null)
+            {
+                connection.On<Guid, string?>("cancelRun", (runId, reason) =>
+                    cancelSignal.Raise(new RunCancelRequest(runId, reason)));
+            }
 
             try
             {

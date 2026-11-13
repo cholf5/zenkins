@@ -104,6 +104,35 @@ public sealed class BuildRun : ITenantOwned
     /// worker-offline). Null for a plain non-zero exit - the exit code is the reason.</summary>
     public string? FailureReason { get; set; }
 
+    /// <summary>
+    /// Per-run timeout override in seconds (the trigger form collects minutes); <c>null</c> when
+    /// the trigger used the server default (<c>Runs:DefaultTimeoutMinutes</c>, F-009). The
+    /// effective timeout is frozen into <see cref="DeadlineAt"/> at accept time, so a later
+    /// configuration change never moves an existing run's deadline.
+    /// </summary>
+    public int? TimeoutSeconds { get; set; }
+
+    /// <summary>
+    /// The execution deadline, frozen at accept time: <c>StartedAt + effective timeout</c> where
+    /// the effective timeout is this run's <see cref="TimeoutSeconds"/> override or the server
+    /// default. Null until accepted (a queued run has no deadline). The deadline sweeper
+    /// (F-009) never touches a run before this instant.
+    /// </summary>
+    public DateTimeOffset? DeadlineAt { get; set; }
+
+    /// <summary>
+    /// Set when a cancellation was requested for the still-running run (F-009): a user cancel
+    /// (<see cref="CancelReason"/> = <c>canceled-by-user …</c>) or the deadline sweeper's timeout
+    /// request. The worker kills the process tree on the signal and reports through the
+    /// <c>canceled</c> endpoint; until that report the run stays <c>Running</c>.
+    /// </summary>
+    public DateTimeOffset? CancelRequestedAt { get; set; }
+
+    /// <summary>Why the cancellation was requested (<c>canceled-by-user &lt;user&gt;</c> or
+    /// <c>timeout</c>, F-009). Becomes the run's <see cref="FailureReason"/> when the worker
+    /// reports the kill - the server, not the worker, owns the wording.</summary>
+    public string? CancelReason { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
