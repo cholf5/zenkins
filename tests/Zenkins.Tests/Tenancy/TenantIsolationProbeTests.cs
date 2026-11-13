@@ -49,6 +49,32 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
         TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BuildLog>(_fixture, CancellationToken);
 
     [Fact]
+    public Task Secrets_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<Secret>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Cross_tenant_secret_write_is_rejected_and_persists_nothing() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<Secret>(
+            _fixture,
+            () => new Secret
+            {
+                // The fixture seeds one secret per organization, so this insert is refused by the
+                // tenant guard - never persisted, never a unique-index accident.
+                Name = "SMUGGLED_TOKEN",
+                Ciphertext = "CfDJ8-smuggled-ciphertext",
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_secrets() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<Secret>(
+            _fixture,
+            TwoOrgsFixture.SecretAId,
+            TwoOrgsFixture.SecretBId,
+            CancellationToken);
+
+    [Fact]
     public Task Cross_tenant_membership_write_is_rejected_and_persists_nothing() =>
         TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<OrganizationMember>(
             _fixture,

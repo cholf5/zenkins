@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Secrets;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Tenancy;
 
@@ -91,6 +92,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Incrementally persisted output lines of build runs (F-008). Never queried without
     /// a run id: the composite (RunId, Seq) primary key orders every read.</summary>
     public DbSet<BuildLog> BuildLogs => Set<BuildLog>();
+
+    /// <summary>Encrypted organization secrets (F-012). Write-only above this layer: nothing outside
+    /// <c>SecretService.TryGetValueAsync</c> ever decrypts a row, and no endpoint returns a value.</summary>
+    public DbSet<Secret> Secrets => Set<Secret>();
 
     /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
     public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
@@ -623,6 +628,29 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 $"\"Stream\" IN ('{LogStream.StdOut}', '{LogStream.StdErr}')"));
 
             entity.HasQueryFilter(log => log.OrganizationId == CurrentOrganizationId);
+        });
+
+        // F-012: secrets are tenant-owned and write-only above the storage layer. The name is the
+        // identity: unique per organization (case-sensitive - both providers compare text
+        // case-sensitively by default), env-var shaped, and immutable (a rename is delete + create).
+        modelBuilder.Entity<Secret>(entity =>
+        {
+            entity.HasKey(secret => secret.Id);
+            entity.Property(secret => secret.Name).IsRequired().HasMaxLength(SecretValidation.MaxNameLength);
+
+            // No max length on purpose: the ciphertext's length follows the plaintext (Data
+            // Protection output), and the form limit - not the column - bounds the value.
+            entity.Property(secret => secret.Ciphertext).IsRequired();
+
+            entity.Property(secret => secret.CreatedByUserId).IsRequired().HasMaxLength(450);
+
+            // The guard, not a pre-flight query: two concurrent creates cannot both pass an
+            // "is the name free" check. SecretService translates the violation into a field error.
+            entity.HasIndex(secret => new { secret.OrganizationId, secret.Name }).IsUnique();
+            entity.HasOne<Organization>().WithMany().HasForeignKey(secret => secret.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasQueryFilter(secret => secret.OrganizationId == CurrentOrganizationId);
         });
     }
 

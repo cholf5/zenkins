@@ -1,0 +1,114 @@
+using Microsoft.Extensions.Configuration;
+using Xunit;
+using Zenkins.Server.Data;
+using Zenkins.Server.Secrets;
+
+namespace Zenkins.Tests.Secrets;
+
+/// <summary>
+/// M2 (F-012 review patch): pins the three reachable branches of
+/// <see cref="SecretDataProtection.ResolveKeysDirectory"/>. The end-to-end key-ring tests only exercise
+/// the explicit-configuration branch, so without this the documented default (<c>App_Data/keys</c> for
+/// the default deployment) would be an untested claim.
+/// <para>
+/// Every branch is data-driven and must actually be produced by the resolver; an unknown branch name
+/// fails instead of skipping, so a branch that stops being reachable turns this red.
+/// </para>
+/// </summary>
+[Trait("Category", "Secrets")]
+public sealed class SecretDataProtectionTests
+{
+    [Theory]
+    [InlineData("explicit-relative-directory")]
+    [InlineData("explicit-absolute-directory")]
+    [InlineData("sqlite-keeps-the-ring-next-to-the-database")]
+    [InlineData("postgres-falls-back-to-the-content-root")]
+    public void Each_resolution_branch_lands_where_the_documentation_says(string branch)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"zenkins-f012-resolve-{Guid.NewGuid():N}");
+        var contentRoot = Path.Combine(root, "content");
+        var dataDirectory = Path.Combine(root, "data");
+        Directory.CreateDirectory(contentRoot);
+        Directory.CreateDirectory(dataDirectory);
+
+        try
+        {
+            ZenkinsDataOptions? dataOptions = null;
+            var configuration = new ConfigurationBuilder();
+            var expected = string.Empty;
+
+            switch (branch)
+            {
+                case "explicit-relative-directory":
+                    // The configured value wins over the database location and is relative to the
+                    // content root.
+                    dataOptions = new ZenkinsDataOptions(
+                        DatabaseProvider.Sqlite,
+                        $"Data Source={Path.Combine(dataDirectory, "zenkins.db")}");
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        [SecretDataProtection.KeysDirectoryConfigurationKey] = "custom/keys",
+                    });
+                    expected = Path.Combine(contentRoot, "custom", "keys");
+                    break;
+
+                case "explicit-absolute-directory":
+                    // An absolute configured value is used as-is, not re-rooted under the content root.
+                    dataOptions = new ZenkinsDataOptions(
+                        DatabaseProvider.Sqlite,
+                        $"Data Source={Path.Combine(dataDirectory, "zenkins.db")}");
+                    var absoluteKeys = Path.Combine(root, "mounted-keys");
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        [SecretDataProtection.KeysDirectoryConfigurationKey] = absoluteKeys,
+                    });
+                    expected = absoluteKeys;
+                    break;
+
+                case "sqlite-keeps-the-ring-next-to-the-database":
+                    // No configuration: the ring lives beside the SQLite file, which is App_Data/keys
+                    // for the default deployment and a temporary ring for a test/dev database elsewhere.
+                    var databasePath = Path.Combine(dataDirectory, "zenkins.db");
+                    dataOptions = new ZenkinsDataOptions(DatabaseProvider.Sqlite, $"Data Source={databasePath}");
+                    expected = Path.Combine(dataDirectory, "keys");
+                    break;
+
+                case "postgres-falls-back-to-the-content-root":
+                    // A server database has no local file to sit next to, so the documented default is
+                    // App_Data/keys under the content root.
+                    dataOptions = new ZenkinsDataOptions(
+                        DatabaseProvider.Postgres,
+                        "Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins");
+                    expected = Path.Combine(contentRoot, "App_Data", "keys");
+                    break;
+
+                default:
+                    Assert.Fail($"Unknown branch '{branch}': every branch must be exercised, not skipped.");
+                    return;
+            }
+
+            var resolved = SecretDataProtection.ResolveKeysDirectory(
+                configuration.Build(),
+                contentRoot,
+                dataOptions);
+
+            Assert.Equal(Path.GetFullPath(expected), resolved);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+}

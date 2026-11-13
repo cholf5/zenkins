@@ -186,6 +186,99 @@ public sealed class TenantIsolationTests : IDisposable
     }
 
     [Fact]
+    public void Duplicate_secret_name_is_rejected_by_the_unique_index_sqlite()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // ALPHA_TOKEN is seeded for organization A, so a second row with the same name must be
+            // refused by the database - the index is the duplicate guard, not a pre-flight query.
+            context.Secrets.Add(new Secret
+            {
+                Name = TwoOrgsFixture.SecretAName,
+                Ciphertext = "CfDJ8-duplicate-ciphertext",
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            });
+
+            var exception = Assert.Throws<DbUpdateException>(() => context.SaveChanges());
+
+            // Assert the specific constraint, not just "some DbUpdateException": the tenant guard is
+            // a different failure and passing for the wrong reason would hide a missing index.
+            var sqlite = Assert.IsType<SqliteException>(exception.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains(
+                "UNIQUE constraint failed: Secrets.OrganizationId, Secrets.Name",
+                sqlite.Message,
+                StringComparison.Ordinal);
+        }
+
+        using var verification = _fixture.CreateContext();
+        var secret = Assert.Single(verification.Secrets.ToList());
+        Assert.Equal(TwoOrgsFixture.SecretAName, secret.Name);
+        Assert.Equal(TwoOrgsFixture.OrgAId, secret.OrganizationId);
+    }
+
+    [Fact]
+    public void The_secret_name_index_is_per_organization_not_global()
+    {
+        // The fixture seeds ALPHA_TOKEN for A and BETA_TOKEN for B - different names, so the existing
+        // duplicate test would stay green even if the index were global. This test closes that hole:
+        // B must be able to own the same name, and only a second row *inside* B may be refused.
+        _fixture.UseOrganizationB();
+
+        using (var context = _fixture.CreateContext())
+        {
+            context.Secrets.Add(new Secret
+            {
+                Name = TwoOrgsFixture.SecretAName,
+                Ciphertext = "CfDJ8-cross-organization-ciphertext",
+                CreatedByUserId = TwoOrgsFixture.OrgBOwnerUserId,
+            });
+
+            // (OrganizationId, Name), not (Name): the same name in another tenant is not a duplicate.
+            context.SaveChanges();
+        }
+
+        using (var verification = _fixture.CreateContext())
+        {
+            var secretsOfB = verification.Secrets.ToList();
+
+            // BETA_TOKEN (seeded) + ALPHA_TOKEN (just inserted), both of B.
+            Assert.Equal(2, secretsOfB.Count);
+            Assert.All(secretsOfB, secret => Assert.Equal(TwoOrgsFixture.OrgBId, secret.OrganizationId));
+            Assert.Contains(secretsOfB, secret => secret.Name == TwoOrgsFixture.SecretAName);
+
+            // And the index still guards the inside of a tenant: a second ALPHA_TOKEN for B is refused
+            // by the database, with the composite constraint named.
+            verification.Secrets.Add(new Secret
+            {
+                Name = TwoOrgsFixture.SecretAName,
+                Ciphertext = "CfDJ8-duplicate-inside-b-ciphertext",
+                CreatedByUserId = TwoOrgsFixture.OrgBOwnerUserId,
+            });
+
+            var exception = Assert.Throws<DbUpdateException>(() => verification.SaveChanges());
+            var sqlite = Assert.IsType<SqliteException>(exception.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains(
+                "UNIQUE constraint failed: Secrets.OrganizationId, Secrets.Name",
+                sqlite.Message,
+                StringComparison.Ordinal);
+        }
+
+        // A's row is untouched by B's write: still exactly one ALPHA_TOKEN, owned by A.
+        _fixture.UseOrganizationA();
+        using (var verification = _fixture.CreateContext())
+        {
+            var secretsOfA = verification.Secrets.ToList();
+            var secretOfA = Assert.Single(secretsOfA);
+            Assert.Equal(TwoOrgsFixture.SecretAName, secretOfA.Name);
+            Assert.Equal(TwoOrgsFixture.OrgAId, secretOfA.OrganizationId);
+        }
+    }
+
+    [Fact]
     public void Insert_stamps_the_active_organization_and_the_timestamps()
     {
         _fixture.UseOrganizationA();

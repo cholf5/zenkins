@@ -56,7 +56,7 @@ Expected results, as observed:
 |---|---|
 | `dotnet restore` | restores 4 projects (`Zenkins.Shared`, `Zenkins.Worker`, `Zenkins.Server`, `Zenkins.Tests`) |
 | `dotnet build -c Release` | `Build succeeded.` / `0 Warning(s)` / `0 Error(s)` — warnings are errors (`Directory.Build.props`) |
-| `dotnet test` | `Passed!` / `failed: 0` / `skipped: 0` — 152 tests at commit `6674587`, 153 at the current HEAD (the project-CRUD card added tests). Treat the number as a snapshot of the revision you have, not a target; no test may fail and none may be skipped |
+| `dotnet test` | `Passed!` / `failed: 0` / `skipped: 0` — the total grows with every card; treat it as a snapshot of the revision you have, not a target. No test may fail and none may be skipped |
 
 `dotnet test` builds the Debug configuration unless you pass `-c Release`; that is why its log says
 `bin/Debug/net10.0/Zenkins.Tests.dll` even after a Release build. Tests use the Microsoft Testing
@@ -204,6 +204,10 @@ variables or user secrets, never in a committed file.
 | `Database:Provider` | `Sqlite`, `Postgres` | `Sqlite` |
 | `ConnectionStrings:Default` | provider-specific connection string | `Data Source=<content root>/App_Data/zenkins.db` |
 | `Database:ApplyMigrationsOnStartup` | `true`, `false` | `true` in Development, `false` otherwise |
+| `DataProtection:KeysDirectory` | directory path, absolute or relative to the content root | `keys/` next to the SQLite database file (`App_Data/keys` for the default deployment); `App_Data/keys` under the content root for PostgreSQL |
+
+The Data Protection key ring encrypts stored secrets and must be backed up with the database; see
+[Secrets key ring](#secrets-key-ring).
 
 A missing or blank connection string is only allowed for SQLite (it falls back to the file above);
 `Postgres` without `ConnectionStrings:Default` fails at startup with an explicit error.
@@ -302,6 +306,7 @@ src/Server/                  ASP.NET Core host, Blazor Server UI, Identity, EF C
   Data/                      DbContext, entities, tenancy, migrations
   Organizations/             membership management + POST endpoints
   Projects/                  project service, validation and CRUD endpoints (POST forms)
+  Secrets/                   encrypted secrets: protector, Owner-only service/endpoints, key-ring constants
   Properties/                launchSettings.json — local port and Development environment
   wwwroot/                   project CSS and the two small JS files (theme, antiforgery bridge)
 src/Shared/                  code shared by Server and Worker (must not reference ASP.NET Core)
@@ -463,7 +468,7 @@ dotnet ef database update --project src/Server
 
 Run that from the repository root, before starting the published app. Alternatively let the published
 process migrate its own content root with `Database__ApplyMigrationsOnStartup=true` (both were
-verified: all four migrations apply, `/account/register` then answers 200).
+verified: every migration applies, `/account/register` then answers 200).
 
 ### Sign-in bounces back to the sign-in page
 
@@ -491,9 +496,10 @@ change.
 
 ### Forms do nothing, or return 400, when JavaScript is blocked
 
-The organization switcher, the Owner-only organization management forms and the project forms
+The organization switcher, the Owner-only organization management forms, the project forms
 (create, edit and delete — `Components/Shared/ProjectFormCard.razor`,
-`Components/Pages/Projects/DeleteProject.razor`) are plain HTML POSTs. They carry
+`Components/Pages/Projects/DeleteProject.razor`) and the secret forms
+(`Components/Pages/Secrets.razor`) are plain HTML POSTs. They carry
 `data-zenkins-antiforgery`, and `wwwroot/js/antiforgery.js` copies the request token rendered into
 `<meta name="request-verification-token">` into a hidden `__RequestVerificationToken` field on submit.
 Without that script the POST has no token and antiforgery rejects it with **400** (verified). If you
@@ -560,18 +566,28 @@ A run killed by the OS is reported `Failed` with the worker's report; it is neve
 
 ### Secrets key ring
 
-When secrets exist (F-012), the server's Data Protection key ring is what makes stored ciphertexts
-readable — and the same ring mints the F-008 log-subscription tickets
-(`src/Server/LogStreaming/RunLogAccess.cs`), so losing it also invalidates live log streams.
+The server's Data Protection key ring is what makes stored secret ciphertexts readable (F-012) — and
+the same ring mints the F-008 log-subscription tickets (`src/Server/LogStreaming/RunLogAccess.cs`), so
+losing it also invalidates live log streams.
 
-**Today** the ring lives wherever the framework default puts it: `~/.aspnet/DataProtection-Keys` on
-Linux and macOS, `%LOCALAPPDATA%\ASP.NET\DataProtection-Keys` on Windows. Nothing in `src/` calls
-`PersistKeysToFileSystem` yet, so `App_Data/keys` does not exist, and a machine move silently
-invalidates every stored ciphertext.
+**Where it lives.** The ring is persisted next to the data it protects: `App_Data/keys/` for the
+default SQLite deployment (the database is `App_Data/zenkins.db`), and `App_Data/keys/` under the
+content root when `Database:Provider` is `Postgres` (a server database has no local file to sit next
+to). `DataProtection:KeysDirectory` pins another directory (absolute, or relative to the content
+root). `Program.cs` registers the ring with the application name `Zenkins`, resolves this path when
+the Data Protection options are materialised — after every configuration source, including container
+and test overrides — and asserts at startup that the directory is writable: a path that is not a
+writable directory fails startup with the resolved path in the message, instead of failing later at
+the first decryption (verified).
 
-**After F-012** the ring is pinned to `App_Data/keys` and must be backed up with the database:
-losing it means every stored secret has to be re-entered, not restored. Restrict its permissions to
-the service account.
+**Back it up with the database.** Losing the ring does not lose the rows, but it makes every stored
+secret unreadable: the ciphertexts cannot be decrypted, so each secret has to be **re-entered, not
+restored**. A backup of the database without this directory is not a backup of the secrets. The same
+is true of changing the application name (`Zenkins`) or the protector purpose
+(`Zenkins.Secrets.v1`) — both derive different keys and orphan existing ciphertexts.
+
+Restrict the directory's permissions to the service account (`chmod 700` on Unix, an ACL on Windows):
+the key files are unencrypted key material by default, exactly like the database file.
 
 ## Current state (what you can actually do)
 
@@ -583,9 +599,12 @@ isolated per-run work directory, watched live through streamed logs, cancelled, 
 marked `Lost` when their worker disappears. The project surface is `/projects`, `/projects/new`,
 `/projects/{id}`, `/projects/{id}/edit` and `/projects/{id}/delete/confirm`: Members may create and
 edit, only an Owner may delete, the repository URL, default branch and pipeline path are validated,
-and a project name is unique per organization (`AddProjectUniqueName`).
+and a project name is unique per organization (`AddProjectUniqueName`). Organization secrets can be
+created, rotated and deleted by an Owner on `/secrets`: values are encrypted at rest with Data
+Protection, are never readable again through a page or an API (there is no value route at all), and a
+Member's request for the page or a write is a 403.
 
-Not implemented yet: pipelines (`pipeline.lua` execution), Git checkout, secrets, artifacts and
-webhooks; the Workers and Secrets pages are shell previews. Do not expect those to work in this
-revision. A run in this revision executes the argv command typed on the project page — the pipeline
-run contract arrives with F-014.
+Not implemented yet: pipelines (`pipeline.lua` execution), Git checkout, artifacts and webhooks, and
+secret *delivery* to runs (`secret()` is F-015, Git credentials F-013); the Workers page is still a
+shell preview. Do not expect those to work in this revision. A run in this revision executes the argv
+command typed on the project page — the pipeline run contract arrives with F-014.

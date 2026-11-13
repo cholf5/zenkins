@@ -83,6 +83,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only build run.</summary>
     public static readonly Guid BuildRunBId = new("b0000000-0000-4000-8000-000000000052");
 
+    /// <summary>A's only secret, the positive control for the F-012 probes.</summary>
+    public static readonly Guid SecretAId = new("a0000000-0000-4000-8000-000000000061");
+
+    /// <summary>B's only secret.</summary>
+    public static readonly Guid SecretBId = new("b0000000-0000-4000-8000-000000000062");
+
     public const string OrgAName = "Alpha";
     public const string OrgBName = "Beta";
 
@@ -106,6 +112,14 @@ public sealed class TwoOrgsFixture : IDisposable
 
     public const string WorkerAName = "alpha-agent";
     public const string WorkerBName = "beta-agent";
+
+    // F-012: one secret per organization. The ciphertext is a well-shaped placeholder, never a real
+    // Data Protection blob: the tenancy probes read rows and never decrypt them, so the fixture must
+    // not depend on this process's key ring.
+    public const string SecretAName = "ALPHA_TOKEN";
+    public const string SecretBName = "BETA_TOKEN";
+    public const string SecretACiphertext = "CfDJ8-fixture-alpha-ciphertext";
+    public const string SecretBCiphertext = "CfDJ8-fixture-beta-ciphertext";
 
     private readonly string _databasePath;
     private bool _migrated;
@@ -363,6 +377,26 @@ public sealed class TwoOrgsFixture : IDisposable
                 Stream = LogStream.StdErr,
                 Message = "beta-line",
                 Timestamp = DateTimeOffset.UtcNow,
+            });
+
+        // F-012: one secret per organization (the read/write/unique-index probes need a row on each
+        // side). CreatedByUserId is the seeded Owner, which is what the product records.
+        context.Secrets.AddRange(
+            new Secret
+            {
+                Id = SecretAId,
+                OrganizationId = OrgAId,
+                Name = SecretAName,
+                Ciphertext = SecretACiphertext,
+                CreatedByUserId = OrgAOwnerUserId,
+            },
+            new Secret
+            {
+                Id = SecretBId,
+                OrganizationId = OrgBId,
+                Name = SecretBName,
+                Ciphertext = SecretBCiphertext,
+                CreatedByUserId = OrgBOwnerUserId,
             });
 
         context.SaveChanges();

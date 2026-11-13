@@ -31,7 +31,10 @@ public static class TenantIsolationProbes
     /// probe bodies are generic and a new entity needs a reviewed line, not an invisible discovery.
     /// </summary>
     public static IReadOnlyList<Type> CoveredEntityTypes { get; } =
-        [typeof(OrganizationMember), typeof(Project), typeof(BuildRun), typeof(BuildLog), typeof(WorkerEntity), typeof(WorkerToken)];
+        [
+            typeof(OrganizationMember), typeof(Project), typeof(BuildRun), typeof(BuildLog),
+            typeof(WorkerEntity), typeof(WorkerToken), typeof(Secret),
+        ];
 
     /// <summary>
     /// The read probe: an unfiltered query returns exactly the active tenant's rows, for A and then

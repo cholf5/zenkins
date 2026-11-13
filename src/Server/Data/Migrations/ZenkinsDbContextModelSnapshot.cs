@@ -333,6 +333,46 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("Projects");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.Secret", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Ciphertext")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("RotatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("Secrets");
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.User", b =>
                 {
                     b.Property<string>("Id")
@@ -608,6 +648,15 @@ namespace Zenkins.Server.Data.Migrations
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Project", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.Secret", b =>
                 {
                     b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
                         .WithMany()

@@ -1,8 +1,12 @@
 using System.Net;
 using BlazorBlueprint.Components;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
@@ -10,6 +14,7 @@ using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Organizations;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
+using Zenkins.Server.Secrets;
 using Zenkins.Server.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,6 +27,35 @@ builder.Services.AddZenkinsProjects();
 builder.Services.AddZenkinsWorkers();
 builder.Services.AddZenkinsRuns();
 builder.Services.AddZenkinsLogs(builder.Configuration);
+builder.Services.AddZenkinsSecrets();
+
+// F-012: the Data Protection key ring is data, not a machine default. It encrypts every stored
+// secret and mints the F-008 log-subscription tickets, so it is persisted next to the database and
+// backed up with it (docs/development.md, "Secrets key ring"): losing the ring means every secret has
+// to be re-entered, not restored. DataProtection:KeysDirectory pins another directory.
+//
+// The path is resolved when the options are materialised, not here: deployment/test configuration
+// sources are applied later than this line, and a path read too early would silently fall back to
+// the default. The startup assertion below then fails fast when the directory is not writable.
+var contentRootPath = builder.Environment.ContentRootPath;
+builder.Services
+    .AddDataProtection()
+    // One application name keeps the keys stable across deployments; changing it orphans the ring.
+    .SetApplicationName(SecretDataProtection.ApplicationName);
+builder.Services.AddOptions<KeyManagementOptions>()
+    .Configure<IConfiguration, ILoggerFactory, ZenkinsDataOptions>((options, configuration, loggerFactory, dataOptions) =>
+    {
+        var keysDirectory = SecretDataProtection.ResolveKeysDirectory(
+            configuration,
+            contentRootPath,
+            dataOptions);
+
+        // PersistKeysToFileSystem's own effect, spelled out because the directory has to be resolved
+        // after every configuration source has been applied (see above).
+        options.XmlRepository = new FileSystemXmlRepository(
+            new DirectoryInfo(keysDirectory),
+            loggerFactory);
+    });
 
 // EF logs every SQL command at Information; keep that out of the production log so a parameter
 // value can never be one config change away from being written down. Identity/registration logs
@@ -73,6 +107,16 @@ builder.Services
     .AddInteractiveServerComponents();
 
 var app = builder.Build();
+
+// F-012: fail fast if the key ring cannot be persisted. Starting with an unwritable key directory
+// would only surface later, when the first secret cannot be decrypted - at that point the data is
+// already unrecoverable.
+var dataProtectionKeysDirectory = SecretDataProtection.ResolveKeysDirectory(
+    app.Configuration,
+    app.Environment.ContentRootPath,
+    app.Services.GetRequiredService<ZenkinsDataOptions>());
+EnsureWritableDirectory(dataProtectionKeysDirectory, "Data Protection key ring");
+app.Logger.LogInformation("Data Protection key ring: {KeysDirectory}", dataProtectionKeysDirectory);
 
 // Startup migration hook (I-002 deferred it to F-001). Off in production by default so a multi-node
 // deployment runs `dotnet ef database update` once; development gets a ready database on first run.
@@ -126,6 +170,10 @@ app.MapOrganizationEndpoints();
 // enforces membership (create/edit) and Owner-only deletion.
 app.MapProjectEndpoints();
 
+// Secret create/rotate/delete (F-012). Owner-only, form-bound; there is deliberately no
+// value-returning route at all - SecretRouteShapeTests pins the route table.
+app.MapSecretEndpoints();
+
 // Worker registration/heartbeat API (token-authenticated, exempt from cookie auth) and the
 // Owner-only registration-token form endpoints (F-004). See WorkerEndpoints for why the two
 // groups deliberately differ in authentication.
@@ -142,6 +190,28 @@ app.MapHub<WorkerLogHub>("/hubs/worker-logs");
 app.MapHub<RunLogHub>("/hubs/run-logs");
 
 app.Run();
+
+// F-012: a one-line startup assertion instead of a late decryption failure. Writing and deleting a
+// probe file is the only portable check (permissions, read-only mounts, a path that is a file).
+static void EnsureWritableDirectory(string path, string description)
+{
+    try
+    {
+        Directory.CreateDirectory(path);
+        var probePath = Path.Combine(path, $".write-probe-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        File.WriteAllText(probePath, "zenkins");
+        File.Delete(probePath);
+    }
+    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+        or NotSupportedException or ArgumentException or System.Security.SecurityException)
+    {
+        throw new InvalidOperationException(
+            $"The {description} directory '{path}' is not writable: {exception.Message} "
+            + "Point DataProtection:KeysDirectory at a writable directory and back it up with the "
+            + "database - without this key ring, stored secrets cannot be decrypted.",
+            exception);
+    }
+}
 
 // Only a navigation can be re-executed into a page: browsers ask for text/html, the path carries no
 // file extension and is not a package asset, and the method has no body worth replaying.
