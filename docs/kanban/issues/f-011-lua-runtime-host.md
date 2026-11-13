@@ -205,8 +205,10 @@ Expected:
   1. Host primitives exchange values with the script as visible text (`string[]` in,
      `DynValue.NewString` out). That is narrower than [`docs/lua-runtime.md`](../../lua-runtime.md)
      §5.2 and carries a silent trap: a boolean reply arrives as the string `"false"`, which is truthy
-     in Lua, so `if is_windows()` would never be false. Resolve before F-014, either by widening the
-     reply to carry numbers and booleans or by stating the text-only rule in §5.2 and at the seam.
+     in Lua, so `if is_windows()` would never be false. **Decided 2026-11-13: widen the channel** —
+     a host reply will be able to carry a number or a boolean, with the change confined to
+     `LuaRuntime` (no new engine type at the seam). Queued behind F-012 so the worker keeps one card
+     at a time; it lands before F-014 starts.
   2. `LuaRuntimeOptions.AdditionalModules` is public and typed `CoreModules`, added only so the
      registry test can compose `Dynamic`; production always passes the default. Make it `internal`
      with `InternalsVisibleTo` (this repository already does that for the tests) before a pipeline
