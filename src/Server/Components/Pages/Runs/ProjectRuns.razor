@@ -22,10 +22,13 @@
                 <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
-                <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">Project</BbButton>
+                @* D-003: the "Project" button became the Overview tab in the strip below; the Start
+                   run affordance stays (the form lives on the Overview tab). *@
                 <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Default">Start run</BbButton>
             </div>
         </div>
+
+        <ProjectTabs ProjectId="@_project.Id" Active="runs" />
 
         <BbCard>
             <BbCardHeader>

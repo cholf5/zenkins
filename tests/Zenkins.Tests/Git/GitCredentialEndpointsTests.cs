@@ -106,6 +106,40 @@ public sealed class GitCredentialEndpointsTests
     }
 
     [Fact]
+    public async Task A_token_only_create_or_rotate_is_a_field_error_not_a_500()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        using var owner = await host.Inner.SignInOwnerAsync();
+
+        // Only the antiforgery token travels, so the form model binds null (the D-003-B3 shape):
+        // the endpoint substitutes an empty input and validation - never a null reference - answers.
+        using var create = await OrganizationTestHost.PostFormAsync(
+            owner,
+            "/",
+            $"{GitCredentialEndpoints.ManagementPath}/create",
+            new Dictionary<string, string>());
+        Assert.Equal(HttpStatusCode.BadRequest, create.StatusCode);
+        using (var document = JsonDocument.Parse(await create.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)))
+        {
+            Assert.Equal(GitCredentialFields.Name, document.RootElement.GetProperty("field").GetString());
+            Assert.Equal(GitCredentialErrorCodes.NameRequired, document.RootElement.GetProperty("code").GetString());
+        }
+
+        var credentialId = await CreateCredentialAsync(host, owner, "NEEDS_ROTATION", TokenValue);
+        using var rotate = await OrganizationTestHost.PostFormAsync(
+            owner,
+            "/",
+            $"{GitCredentialEndpoints.ManagementPath}/{credentialId}/rotate",
+            new Dictionary<string, string>());
+        Assert.Equal(HttpStatusCode.BadRequest, rotate.StatusCode);
+
+        // The refused rotation replaced nothing: the stored row keeps its first material.
+        var stored = await ReadCredentialAsync(host, credentialId);
+        Assert.Null(stored.RotatedAt);
+        Assert.Equal("x-access-token", stored.UserName);
+    }
+
+    [Fact]
     public async Task Invalid_input_is_rejected_with_a_stable_field_code()
     {
         using var host = await RunTestHost.CreateAsync();

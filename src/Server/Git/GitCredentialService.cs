@@ -49,6 +49,39 @@ public sealed record GitCredentialMutationResult(
         new(GitCredentialMutationStatus.InvalidInput, FieldErrors: errors);
 }
 
+/// <summary>
+/// One Git credential as the project settings page lists it (card D-003): the identity (id, name),
+/// the kind and the timestamps - <b>never</b> the value, the ciphertext or the user name. The record
+/// has no member a material could travel in, so a component cannot accidentally render one.
+/// </summary>
+public sealed record GitCredentialListItem(
+    Guid Id,
+    string Name,
+    string Kind,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? RotatedAt);
+
+/// <summary>
+/// The answer of listing a project's credentials: the rows for an Owner, or the reason there are
+/// none. A record (not a nullable list) because "not allowed to read" and "no credentials yet" must
+/// not be confusable - the same shape <see cref="Zenkins.Server.Secrets.SecretListResult"/> uses.
+/// </summary>
+public sealed record GitCredentialListResult(
+    GitCredentialMutationStatus Status,
+    IReadOnlyList<GitCredentialListItem> Items,
+    string? Message = null)
+{
+    public static GitCredentialListResult Success(IReadOnlyList<GitCredentialListItem> items) =>
+        new(GitCredentialMutationStatus.Success, items);
+
+    public static GitCredentialListResult NotFound() =>
+        new(GitCredentialMutationStatus.NotFound, []);
+
+    public static GitCredentialListResult Forbidden(string message) =>
+        new(GitCredentialMutationStatus.Forbidden, [], message);
+}
+
 /// <summary>Outcome of a worker's credential fetch.</summary>
 public enum GitCredentialFetchStatus
 {
@@ -272,6 +305,58 @@ public sealed class GitCredentialService(
     }
 
     /// <summary>
+    /// The credentials a project's settings page manages (card D-003): the active organization's
+    /// credentials - the set the project's <c>GitCredentialId</c> resolves inside - ordered by name
+    /// (case-sensitive, matching the identity and the unique index), with metadata only.
+    /// <para>
+    /// <b>Owner-only, like every other credential read.</b> Git credentials are managed like secrets
+    /// (card D-003's rule): a Member must not learn which credential names exist, so the list answer
+    /// for a non-Owner is <see cref="GitCredentialListResult.Forbidden"/> - the same stance the
+    /// secrets page takes. The project itself is resolved through the tenant-filtered context first,
+    /// so a foreign project id is <see cref="GitCredentialListResult.NotFound"/> (404) for everyone -
+    /// never a 403 existence oracle.
+    /// </para>
+    /// </summary>
+    public async Task<GitCredentialListResult> ListForProjectAsync(
+        string actingUserId,
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return GitCredentialListResult.Forbidden(
+                "You are not a member of an organization, so there are no Git credentials to list.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
+        {
+            return GitCredentialListResult.Forbidden("Only an organization Owner can manage Git credentials.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            // Foreign or unknown id: the same 404, no existence oracle.
+            return GitCredentialListResult.NotFound();
+        }
+
+        var credentials = await context.GitCredentials
+            .Where(credential => credential.OrganizationId == activeOrganizationId.Value)
+            .ToListAsync(cancellationToken);
+
+        return GitCredentialListResult.Success(
+            [.. credentials
+                .OrderBy(credential => credential.Name, StringComparer.Ordinal)
+                .Select(ToListItem)]);
+    }
+
+    /// <summary>
     /// The run-scoped, worker-authenticated fetch (card F-013): decrypts the credential of the run's
     /// project, for a run the calling worker currently holds.
     /// <para>
@@ -424,6 +509,15 @@ public sealed class GitCredentialService(
     private static GitCredentialMutationResult DuplicateName() =>
         GitCredentialMutationResult.Invalid(
             new GitCredentialFieldError(GitCredentialFields.Name, GitCredentialErrorCodes.NameDuplicate));
+
+    /// <summary>The metadata-only projection: no ciphertext, no value, no user name.</summary>
+    private static GitCredentialListItem ToListItem(GitCredential credential) => new(
+        credential.Id,
+        credential.Name,
+        credential.Kind,
+        credential.CreatedAt,
+        credential.UpdatedAt,
+        credential.RotatedAt);
 
     /// <summary>Owner check against the active tenant's membership, never another organization's.</summary>
     private static Task<bool> IsOwnerAsync(

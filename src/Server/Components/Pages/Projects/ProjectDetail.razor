@@ -1,11 +1,18 @@
 @page "/projects/{ProjectId:guid}"
 @attribute [Authorize]
+@using System.Globalization
+@using Zenkins.Server.Git
 @using Zenkins.Server.Webhooks
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
 @inject WebhookService WebhookManagement
-@inject NavigationManager Navigation
+@inject RunService RunsService
+@inject GitCredentialService CredentialService
 
+@* D-003: the Overview tab of the four routed project tabs. It keeps what the single project page
+   held (repository facts, the start-run form, the member-delete note) and adds what the card asks
+   for: the newest run with its status and link, and the webhook/credential counts. The webhook
+   management markup moved to the Settings tab; its endpoints and behaviour are F-017's, unchanged. *@
 <PageTitle>@(_project?.Name ?? "Project") · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
@@ -27,7 +34,6 @@
                 <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
-                <BbButton Href="@($"/projects/{_project.Id}/runs")" Variant="ButtonVariant.Outline">Runs</BbButton>
                 <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit</BbButton>
                 @if (_canDelete)
                 {
@@ -35,6 +41,8 @@
                 }
             </div>
         </div>
+
+        <ProjectTabs ProjectId="@_project.Id" Active="overview" />
 
         @if (Notice is { } notice)
         {
@@ -47,7 +55,8 @@
             <BbCardHeader>
                 <BbCardTitle As="h2">Repository</BbCardTitle>
                 <BbCardDescription>
-                    Git repository metadata. Cloning, credentials and build runs arrive in later phases.
+                    Git repository metadata and what this project runs. Credentials are managed on the
+                    settings tab by organization Owners.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -65,17 +74,31 @@
                         <dd>@_project.PipelinePath</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credentials</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credential</dt>
                         <dd>
                             @if (_project.GitCredentialId is null)
                             {
                                 <span class="bb:text-muted-foreground">Not configured</span>
                             }
+                            else if (_assignedCredentialName is { } assignedName)
+                            {
+                                <span>@assignedName</span>
+                            }
                             else
                             {
-                                <span>@_project.GitCredentialId</span>
+                                <span>Configured</span>
                             }
                         </dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
+                        <dd>@_webhooks.Count</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credentials (organization)</dt>
+                        @* D-003: the credential metadata is Owner-visible only (the asymmetry stance the
+                           settings tab keeps), so a Member sees that the store exists, not its size. *@
+                        <dd>@(CredentialCountText)</dd>
                     </div>
                     <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
@@ -86,6 +109,50 @@
                         <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                     </div>
                 </dl>
+            </BbCardContent>
+        </BbCard>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Latest run</BbCardTitle>
+                <BbCardDescription>
+                    The most recent execution of this project's pipeline. The Runs tab lists every run.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_newestRun is not { } run)
+                {
+                    <p class="bb:text-sm bb:text-muted-foreground" id="overview-no-runs">
+                        No runs yet. Start one below; it waits in the queue until an eligible worker claims it.
+                    </p>
+                }
+                else
+                {
+                    <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:text-sm">
+                        <div class="bb:min-w-0">
+                            <p class="bb:font-medium">
+                                <a href="/runs/@run.Id" class="bb:underline bb:underline-offset-4">Run @run.Id.ToString("N")[..8]</a>
+                                <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
+                                    @run.GitBranch · @run.PipelinePath
+                                </span>
+                            </p>
+                            <p class="bb:text-xs bb:text-muted-foreground">
+                                @(run.TriggerUserEmail ?? run.TriggerType)
+                                @if (run.WorkerName is { } workerName)
+                                {
+                                    <span> · @workerName</span>
+                                }
+                            </p>
+                        </div>
+                        @* D-002: the shared display bits - the same badge and duration the dashboard
+                           and the runs list render for the same run. *@
+                        <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                            <RunStatusBadge Status="@run.Status" />
+                            <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, _now)</span>
+                            <span>@run.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                        </div>
+                    </div>
+                }
             </BbCardContent>
         </BbCard>
 
@@ -150,132 +217,6 @@
                 </form>
             </BbCardContent>
         </BbCard>
-
-        @* F-017: the webhook configuration. Create and rotate answer with a standalone show-once document
-           (the plaintext has to be copied into the git host), so no plaintext is ever rendered here. *@
-        <BbCard>
-            <BbCardHeader>
-                <BbCardTitle As="h2">Webhooks</BbCardTitle>
-                <BbCardDescription>
-                    A signed <code>git push</code> to a matching branch starts a run for the pushed commit.
-                    The secret is shown once, when the webhook is created or rotated: copy it into the git
-                    host then, because it cannot be read again.
-                </BbCardDescription>
-            </BbCardHeader>
-            <BbCardContent>
-                @if (WebhookMessage is { } webhookMessage)
-                {
-                    <p role="alert" class="bb:mb-4 bb:text-sm bb:text-destructive">@webhookMessage</p>
-                }
-
-                @if (_webhooks.Count == 0)
-                {
-                    <p class="bb:mb-4 bb:text-sm bb:text-muted-foreground">No webhooks yet.</p>
-                }
-                else
-                {
-                    <ul class="bb:mb-6 bb:space-y-3">
-                        @foreach (var webhook in _webhooks)
-                        {
-                            <li class="bb:rounded-md bb:border bb:border-input bb:p-3" data-webhook-id="@webhook.Id">
-                                <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-2">
-                                    <div>
-                                        <p class="bb:font-medium">@webhook.Name</p>
-                                        <p class="bb:text-xs bb:text-muted-foreground">
-                                            @(webhook.Enabled ? "Enabled" : "Disabled")
-                                        </p>
-                                    </div>
-                                    <div class="bb:flex bb:flex-wrap bb:gap-2">
-                                        <form method="post" action="@($"/projects/{_project.Id}/webhooks/{webhook.Id}/rotate")" data-zenkins-antiforgery>
-                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Rotate secret</BbButton>
-                                        </form>
-                                        <form method="post" action="@($"/projects/{_project.Id}/webhooks/{webhook.Id}/{(webhook.Enabled ? "disable" : "enable")}")" data-zenkins-antiforgery>
-                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">
-                                                @(webhook.Enabled ? "Disable" : "Enable")
-                                            </BbButton>
-                                        </form>
-                                        <form method="post" action="@($"/projects/{_project.Id}/webhooks/{webhook.Id}/delete")" data-zenkins-antiforgery>
-                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete</BbButton>
-                                        </form>
-                                    </div>
-                                </div>
-                                <dl class="bb:mt-3 bb:grid bb:grid-cols-1 bb:gap-2 bb:text-sm bb:sm:grid-cols-2">
-                                    <div class="bb:sm:col-span-2">
-                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Endpoint URL</dt>
-                                        <dd class="bb:break-all"><code>@EndpointUrl(webhook)</code></dd>
-                                    </div>
-                                    <div>
-                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branches</dt>
-                                        <dd>@BranchLabel(webhook)</dd>
-                                    </div>
-                                    <div>
-                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Required tags</dt>
-                                        <dd>@(string.IsNullOrWhiteSpace(webhook.RequiredTags) ? "Any worker" : webhook.RequiredTags)</dd>
-                                    </div>
-                                    <div>
-                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Secret</dt>
-                                        <dd>
-                                            Configured
-                                            @if (webhook.SecretRotatedAt is { } rotatedAt)
-                                            {
-                                                <span>(rotated @rotatedAt.ToString("yyyy-MM-dd HH:mm") UTC)</span>
-                                            }
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Last delivery</dt>
-                                        <dd>
-                                            @if (webhook.LastDeliveryAt is { } deliveredAt)
-                                            {
-                                                <span>@deliveredAt.ToString("yyyy-MM-dd HH:mm") UTC · @(webhook.LastDeliveryOutcome ?? "-")</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="bb:text-muted-foreground">None yet</span>
-                                            }
-                                        </dd>
-                                    </div>
-                                </dl>
-                            </li>
-                        }
-                    </ul>
-                }
-
-                <form method="post" action="@($"/projects/{_project.Id}/webhooks/create")" data-zenkins-antiforgery>
-                    <div class="bb:space-y-4">
-                        <div>
-                            <label for="webhook-name" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Name</label>
-                            <input id="webhook-name"
-                                   name="Name"
-                                   required
-                                   maxlength="100"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
-                                   placeholder="github-main" />
-                        </div>
-                        <div>
-                            <label for="webhook-branch-filter" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branches (optional)</label>
-                            <input id="webhook-branch-filter"
-                                   name="BranchFilter"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
-                                   placeholder="@_project.DefaultBranch" />
-                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                Comma-separated names; a trailing <code>*</code> is the only wildcard
-                                (<code>main, release/*</code>). Leave it blank to follow the project's default
-                                branch. Other branches are accepted and ignored.
-                            </p>
-                        </div>
-                        <div>
-                            <label for="webhook-required-tags" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Required tags (optional)</label>
-                            <input id="webhook-required-tags"
-                                   name="RequiredTags"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
-                                   placeholder="linux, dotnet" />
-                        </div>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create webhook</BbButton>
-                    </div>
-                </form>
-            </BbCardContent>
-        </BbCard>
     }
 </div>
 
@@ -290,6 +231,12 @@
     private ProjectView? _project;
     private bool _canDelete;
     private IReadOnlyList<WebhookView> _webhooks = [];
+    private RunView? _newestRun;
+    private int _credentialCount;
+    private string? _assignedCredentialName;
+
+    /// <summary>One clock instant per render (the D-002 discipline the dashboard and runs list keep).</summary>
+    private DateTimeOffset _now;
 
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
@@ -297,36 +244,18 @@
     [SupplyParameterFromQuery(Name = "runError")]
     private string? RunErrorCode { get; set; }
 
-    [SupplyParameterFromQuery(Name = "webhookError")]
-    private string? WebhookErrorCode { get; set; }
-
     private string? Notice => NoticeCode switch
     {
         "created" => "The project was created.",
         "updated" => "The project was updated.",
-        "webhook-enabled" => "The webhook is enabled.",
-        "webhook-disabled" => "The webhook is disabled; its URL now answers like an unknown one.",
-        "webhook-deleted" => "The webhook was deleted.",
         _ => null,
     };
 
-    /// <summary>The field-level error the create form redirected back with (F-017).</summary>
-    private string? WebhookMessage => WebhookErrorCodes.MessageFor(WebhookErrorCode);
+    private string CredentialCountText => _canManageCredentials
+        ? _credentialCount.ToString(CultureInfo.InvariantCulture)
+        : "Owner-managed";
 
-    /// <summary>
-    /// The delivery URL as the operator has to paste it. Absolute when the request carried a base URI, so
-    /// a copy from the page is usable; a relative path if the host could not resolve one.
-    /// </summary>
-    private string EndpointUrl(WebhookView webhook) =>
-        Navigation.BaseUri is { Length: > 0 } baseUri
-            ? baseUri.TrimEnd('/') + webhook.EndpointPath
-            : webhook.EndpointPath;
-
-    /// <summary>The branch patterns, spelling out the default when the filter is empty.</summary>
-    private string BranchLabel(WebhookView webhook) =>
-        webhook.BranchPatterns.Count == 0
-            ? $"project default ({_project?.DefaultBranch ?? "-"})"
-            : string.Join(", ", webhook.BranchPatterns);
+    private bool _canManageCredentials;
 
     private string? BranchError => RunErrorCode switch
     {
@@ -352,6 +281,8 @@
         // Establish the circuit tenant before the tenant-filtered lookup.
         _session = await UserSession.GetAsync();
         _canDelete = _session?.CanManageActiveOrganization == true;
+        _canManageCredentials = _canDelete;
+        _now = DateTimeOffset.UtcNow;
 
         if (_session?.HasOrganization != true)
         {
@@ -374,12 +305,32 @@
             return;
         }
 
-        // F-017: the project's webhooks (any member of the organization may manage them). The service
-        // re-checks membership; a failure here just leaves the list empty.
-        if (_project is not null && _session is { HasOrganization: true } session)
+        if (_project is null || _session is not { HasOrganization: true } session)
         {
-            var webhooks = await WebhookManagement.GetWebhooksAsync(session.UserId, ProjectId);
-            _webhooks = webhooks.Webhooks;
+            return;
+        }
+
+        // The project's webhooks (any member may manage them, F-017): the count here, the cards on
+        // the settings tab. The service re-checks membership; a failure just leaves the list empty.
+        var webhooks = await WebhookManagement.GetWebhooksAsync(session.UserId, ProjectId);
+        _webhooks = webhooks.Webhooks;
+
+        // The newest run, through the same read the Runs tab uses (newest first), so overview and
+        // tab can never disagree about which run is newest.
+        var runs = await RunsService.GetProjectRunsAsync(ProjectId);
+        _newestRun = runs.Count > 0 ? runs[0] : null;
+
+        // Credential metadata is Owner-visible only (the settings tab's asymmetry stance): an Owner
+        // gets the count and the assigned credential's name, a Member neither.
+        if (_canManageCredentials)
+        {
+            var credentials = await CredentialService.ListForProjectAsync(session.UserId, ProjectId);
+            if (credentials.Status == GitCredentialMutationStatus.Success)
+            {
+                _credentialCount = credentials.Items.Count;
+                _assignedCredentialName = credentials.Items
+                    .FirstOrDefault(credential => credential.Id == _project.GitCredentialId)?.Name;
+            }
         }
     }
 }

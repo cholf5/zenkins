@@ -1,0 +1,48 @@
+@using System.Globalization
+@* D-003: the one tab strip for a project's four routed tabs. The tabs are links, never client
+   state: every tab is a real route, so a deep link, a reload and back/forward all work, and the
+   same strip renders on every tab page (the active entry is derived from the route). *@
+<nav aria-label="Project sections" class="bb:border-b">
+    <ul class="bb:-mb-px bb:flex bb:flex-wrap bb:gap-4 bb:text-sm">
+        @foreach (var tab in Tabs)
+        {
+            <li>
+                @* Exact match on purpose: the Overview href is a prefix of every other tab's path, so
+                   a Prefix match would light up Overview on all four routes. *@
+                <NavLink href="@Href(tab)"
+                         ActiveClass="bb:border-primary bb:text-foreground"
+                         class="bb:block bb:border-b-2 bb:border-transparent bb:pb-2 bb:font-medium bb:text-muted-foreground bb:hover:text-foreground"
+                         Match="NavLinkMatch.All"
+                         aria-current="@AriaCurrent(tab.Name)">
+                    @tab.Label
+                </NavLink>
+            </li>
+        }
+    </ul>
+</nav>
+
+@code {
+    /// <summary>The project the strip navigates within.</summary>
+    [Parameter, EditorRequired]
+    public Guid ProjectId { get; set; }
+
+    /// <summary>The tab the current route renders ("overview", "pipelines", "runs" or "settings").</summary>
+    [Parameter, EditorRequired]
+    public string Active { get; set; } = "overview";
+
+    private sealed record ProjectTab(string Name, string Label, string PathFormat);
+
+    private IReadOnlyList<ProjectTab> Tabs { get; } =
+    [
+        new("overview", "Overview", "/projects/{0}"),
+        new("pipelines", "Pipelines", "/projects/{0}/pipelines"),
+        new("runs", "Runs", "/projects/{0}/runs"),
+        new("settings", "Settings", "/projects/{0}/settings"),
+    ];
+
+    private string? AriaCurrent(string name) =>
+        string.Equals(name, Active, StringComparison.Ordinal) ? "page" : null;
+
+    private string Href(ProjectTab tab) =>
+        string.Format(CultureInfo.InvariantCulture, tab.PathFormat, ProjectId.ToString("D"));
+}

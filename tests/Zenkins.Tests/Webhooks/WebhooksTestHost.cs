@@ -199,8 +199,9 @@ internal sealed class WebhooksTestHost : IDisposable
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Creates a webhook through the real settings form and returns the one-time plaintext from the
-    /// show-once document, plus the id the document names.
+    /// Creates a webhook through the real settings form (card D-003 moved the webhook cards to the
+    /// project's settings tab; the endpoints are F-017's, unchanged) and returns the one-time
+    /// plaintext from the show-once document, plus the id the document names.
     /// </summary>
     public async Task<(Guid WebhookId, string Secret, string Html, HttpResponseMessage Response)> CreateWebhookAsync(
         HttpClient client,
@@ -210,7 +211,7 @@ internal sealed class WebhooksTestHost : IDisposable
     {
         var response = await OrganizationTestHost.PostFormAsync(
             client,
-            $"/projects/{ProjectId}",
+            $"/projects/{ProjectId}/settings",
             $"/projects/{ProjectId}/webhooks/create",
             new Dictionary<string, string>
             {

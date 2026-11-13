@@ -46,8 +46,9 @@ public sealed class WebhookSecretLifecycleTests
             Task.FromResult(services.GetRequiredService<WebhookSecretProtector>().Unprotect(webhook.SecretCiphertext)));
         Assert.Equal(secret, decrypted);
 
-        // The settings page shows the configuration - name, endpoint, branch filter - and never the value.
-        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{host.ProjectId}");
+        // The settings tab (card D-003 moved the webhook cards there) shows the configuration - name,
+        // endpoint, branch filter - and never the value.
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{host.ProjectId}/settings");
         Assert.Contains("github-main", page, StringComparison.Ordinal);
         Assert.Contains($"/webhooks/{webhookId:D}", page, StringComparison.Ordinal);
         Assert.Contains("release/*", page, StringComparison.Ordinal);
@@ -73,7 +74,7 @@ public sealed class WebhookSecretLifecycleTests
 
         var rotated = await Zenkins.Tests.Organizations.OrganizationTestHost.PostFormAsync(
             owner,
-            $"/projects/{host.ProjectId}",
+            $"/projects/{host.ProjectId}/settings",
             $"/projects/{host.ProjectId}/webhooks/{webhookId}/rotate",
             new Dictionary<string, string>());
         Assert.Equal(HttpStatusCode.OK, rotated.StatusCode);
@@ -134,7 +135,7 @@ public sealed class WebhookSecretLifecycleTests
 
         var disable = await Zenkins.Tests.Organizations.OrganizationTestHost.PostFormAsync(
             owner,
-            $"/projects/{host.ProjectId}",
+            $"/projects/{host.ProjectId}/settings",
             $"/projects/{host.ProjectId}/webhooks/{webhookId}/disable",
             new Dictionary<string, string>());
         Assert.True((int)disable.StatusCode is 302 or 303);
@@ -146,7 +147,7 @@ public sealed class WebhookSecretLifecycleTests
 
         var enable = await Zenkins.Tests.Organizations.OrganizationTestHost.PostFormAsync(
             owner,
-            $"/projects/{host.ProjectId}",
+            $"/projects/{host.ProjectId}/settings",
             $"/projects/{host.ProjectId}/webhooks/{webhookId}/enable",
             new Dictionary<string, string>());
         Assert.True((int)enable.StatusCode is 302 or 303);
@@ -179,7 +180,7 @@ public sealed class WebhookSecretLifecycleTests
 
         var deleted = await Zenkins.Tests.Organizations.OrganizationTestHost.PostFormAsync(
             owner,
-            $"/projects/{host.ProjectId}",
+            $"/projects/{host.ProjectId}/settings",
             $"/projects/{host.ProjectId}/webhooks/{webhookId}/delete",
             new Dictionary<string, string>());
         Assert.True((int)deleted.StatusCode is 302 or 303);

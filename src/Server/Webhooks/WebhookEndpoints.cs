@@ -299,8 +299,11 @@ public static class WebhookEndpoints
 
         return result.Status switch
         {
+            // D-003: the webhook forms live on the settings tab, so the PRG returns there (the notice
+            // renders next to the form). The F-017-pinned behaviour - the 302, the notice code, the
+            // service's rules - is unchanged.
             WebhookManagementStatus.Success =>
-                Results.Redirect($"/projects/{projectId}?notice={(enabled ? "webhook-enabled" : "webhook-disabled")}"),
+                Results.Redirect($"/projects/{projectId}/settings?notice={(enabled ? "webhook-enabled" : "webhook-disabled")}"),
             WebhookManagementStatus.Forbidden => Forbidden(result),
             _ => Results.NotFound(),
         };
@@ -322,8 +325,9 @@ public static class WebhookEndpoints
         var result = await webhooks.DeleteAsync(userId, projectId, webhookId, httpContext.RequestAborted);
         return result.Status switch
         {
+            // D-003: PRG back to the settings tab, where the webhook list lives.
             WebhookManagementStatus.Success =>
-                Results.Redirect($"/projects/{projectId}?notice=webhook-deleted"),
+                Results.Redirect($"/projects/{projectId}/settings?notice=webhook-deleted"),
             WebhookManagementStatus.Forbidden => Forbidden(result),
             _ => Results.NotFound(),
         };
@@ -336,8 +340,10 @@ public static class WebhookEndpoints
             statusCode: StatusCodes.Status403Forbidden);
 
     /// <summary>
-    /// PRG back to the project page with the first field error. Only the submitted name and filter travel
-    /// in the query - the form has no secret field at all, so there is nothing secret to leak.
+    /// PRG back to the settings tab's webhook form with the first field error (D-003 moved the form
+    /// there; the F-017-pinned <c>webhookError</c> code is unchanged). Only the submitted name and
+    /// filter travel in the query - the form has no secret field at all, so there is nothing secret
+    /// to leak.
     /// </summary>
     private static IResult ValidationRedirect(Guid projectId, WebhookManagementResult result)
     {
@@ -347,7 +353,7 @@ public static class WebhookEndpoints
             ["webhookError"] = code,
         });
 
-        return Results.Redirect($"/projects/{projectId}{query}");
+        return Results.Redirect($"/projects/{projectId}/settings{query}");
     }
 
     /// <summary>
@@ -374,7 +380,7 @@ public static class WebhookEndpoints
               <p>Delivery URL: <code id="webhook-endpoint-path">{{System.Net.WebUtility.HtmlEncode(deliveryPath)}}</code></p>
               <p>Configure the git host with that URL, the JSON content type and this secret
                  (GitHub: "Secret"; GitLab: "Secret token").</p>
-              <p><a href="/projects/{{projectId:D}}">Back to the project</a></p>
+              <p><a href="/projects/{{projectId:D}}/settings">Back to the project settings</a></p>
             </body>
             </html>
             """;

@@ -1,0 +1,176 @@
+@page "/projects/{ProjectId:guid}/pipelines"
+@attribute [Authorize]
+@using Zenkins.Shared.Pipelines
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+@inject RunService RunsService
+
+@* D-003: the Pipelines tab, read-only by decision. It answers "what does this project actually run":
+   the pipeline file from settings, and - when any run exists - the frozen spec of the newest run
+   (F-014) with its step names in order. Editing pipeline content belongs to the repository; a
+   pipeline editor is not in v0.9. *@
+<PageTitle>Pipelines · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
+    @if (_project is null)
+    {
+        @* Foreign tenant id == missing id: the service reads through the tenant filter and the
+           response is a real 404 (same pattern as the other project tabs). *@
+        <NotFoundPage />
+    }
+    else
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">Pipelines · @_project.Name</BbCardTitle>
+                <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+            </div>
+        </div>
+
+        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" />
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Pipeline file</BbCardTitle>
+                <BbCardDescription>
+                    Every run executes this file from the repository. The file's content is the
+                    repository's to own; the worker validates it before the first step starts.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                        <dd id="pipelines-path" class="bb:break-all">@_project.PipelinePath</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
+                        <dd>@_project.DefaultBranch</dd>
+                    </div>
+                </dl>
+            </BbCardContent>
+        </BbCard>
+
+        @if (_newestRun is not { } run)
+        {
+            <BbEmpty Title="No runs yet"
+                     Description="The frozen spec appears here when the first run has reported its pipeline definition.">
+                <Icon>
+                    <LucideIcon Name="file-code" Class="bb:h-12 bb:w-12" />
+                </Icon>
+            </BbEmpty>
+        }
+        else
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Frozen spec of the newest run</BbCardTitle>
+                    <BbCardDescription>
+                        The validated pipeline definition the newest run froze before its first step
+                        started. A later commit never changes what a run shows.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Run</dt>
+                            <dd>
+                                <a href="/runs/@run.Id" class="bb:underline bb:underline-offset-4">Run @run.Id.ToString("N")[..8]</a>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branch</dt>
+                            <dd id="pipelines-branch" class="bb:break-all">@run.GitBranch</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Commit</dt>
+                            <dd id="pipelines-commit" class="bb:break-all">@(run.GitCommit ?? "-")</dd>
+                        </div>
+                    </dl>
+
+                    @if (run.Pipeline is { } pipeline)
+                    {
+                        @* The spec's validated shape: schema version, pipeline name and the step
+                           names in declaration order (the order the executor runs them in). *@
+                        <p class="bb:mt-4 bb:text-sm">
+                            <span class="bb:font-medium">Pipeline:</span>
+                            <span id="pipelines-name">@pipeline.Name</span>
+                            @* The explicit expression matters: "v@..." after a letter is an
+                               email-style literal in Razor, never code. *@
+                            <span class="bb:text-muted-foreground">
+                                (schema v@(pipeline.Version), @pipeline.Steps.Length step(s))
+                            </span>
+                        </p>
+                        <ol id="pipelines-steps" class="bb:mt-2 bb:space-y-2 bb:text-sm">
+                            @for (var stepIndex = 0; stepIndex < pipeline.Steps.Length; stepIndex++)
+                            {
+                                var step = pipeline.Steps[stepIndex];
+                                <li id="@($"pipelines-step-{step.Name}")" class="bb:break-all">
+                                    <span class="bb:text-xs bb:text-muted-foreground">@(stepIndex + 1).</span>
+                                    <span class="bb:font-medium">@step.Name</span>
+                                    <code class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@string.Join(' ', step.Argv)</code>
+                                </li>
+                            }
+                        </ol>
+                    }
+                    else
+                    {
+                        <p id="pipelines-spec-pending" class="bb:mt-4 bb:text-sm bb:text-muted-foreground">
+                            No pipeline definition was reported for this run.
+                        </p>
+                    }
+                </BbCardContent>
+            </BbCard>
+        }
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid ProjectId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private ProjectView? _project;
+    private RunView? _newestRun;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read. Never rely on the layout having done it first.
+        var session = await UserSession.GetAsync();
+        if (session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is null)
+        {
+            SetNotFound();
+            return;
+        }
+
+        // The same read the Runs tab uses (newest first), so "newest" means the same run everywhere.
+        var runs = await RunsService.GetProjectRunsAsync(ProjectId);
+        _newestRun = runs.Count > 0 ? runs[0] : null;
+    }
+
+    private void SetNotFound()
+    {
+        if (HttpContext is null)
+        {
+            return;
+        }
+
+        // A real 404 for a foreign or missing id. The status-code-pages middleware must not
+        // re-execute /not-found in this same request: the component renderer already owns the
+        // NavigationManager, and re-execution fails with "already initialized" (F-003 bug B1).
+        HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+        if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+        {
+            statusCodePages.Enabled = false;
+        }
+    }
+}

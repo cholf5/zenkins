@@ -1,0 +1,544 @@
+@page "/projects/{ProjectId:guid}/settings"
+@attribute [Authorize]
+@using Zenkins.Server.Git
+@using Zenkins.Server.Secrets
+@using Zenkins.Server.Webhooks
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+@inject WebhookService WebhookManagement
+@inject GitCredentialService CredentialService
+@inject NavigationManager Navigation
+
+@* D-003: the Settings tab - everything that configures the project. The webhook cards moved here
+   from the overview unchanged (F-017's endpoints and behaviour are the same), and git credentials
+   get their first UI: managed like secrets (Owner-only writes, write-only values), through F-013's
+   existing form endpoints. *@
+<PageTitle>Settings · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
+    @if (_project is null)
+    {
+        @* Foreign tenant id == missing id: the service reads through the tenant filter and the
+           response is a real 404 (same pattern as the other project tabs). *@
+        <NotFoundPage />
+    }
+    else
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">Settings · @_project.Name</BbCardTitle>
+                @if (_session?.Organization is { } organization)
+                {
+                    <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+                    <BbBadge Variant="BadgeVariant.Outline">Your role: @organization.Role</BbBadge>
+                }
+            </div>
+        </div>
+
+        <ProjectTabs ProjectId="@_project.Id" Active="settings" />
+
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        @if (WebhookMessage is { } webhookMessage)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@webhookMessage</p>
+            </div>
+        }
+
+        @if (CredentialMessage is { } credentialMessage)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@credentialMessage</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Project basics</BbCardTitle>
+                <BbCardDescription>
+                    The repository, its default branch and the pipeline file. Members and Owners may
+                    edit a project.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                    <div class="bb:sm:col-span-3">
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository URL</dt>
+                        <dd class="bb:break-all">@_project.RepositoryUrl</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Name</dt>
+                        <dd>@_project.Name</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
+                        <dd>@_project.DefaultBranch</dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                        <dd class="bb:break-all">@_project.PipelinePath</dd>
+                    </div>
+                </dl>
+                <div class="bb:mt-4">
+                    @* The edit form keeps its own route, so basics editing works exactly as before. *@
+                    <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit project basics</BbButton>
+                </div>
+            </BbCardContent>
+        </BbCard>
+
+        @* F-017: the webhook configuration, moved verbatim from the overview. Create and rotate
+           answer with a standalone show-once document (the plaintext has to be copied into the git
+           host), so no plaintext is ever rendered here. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Webhooks</BbCardTitle>
+                <BbCardDescription>
+                    A signed <code>git push</code> to a matching branch starts a run for the pushed commit.
+                    The secret is shown once, when the webhook is created or rotated: copy it into the git
+                    host then, because it cannot be read again.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_webhooks.Count == 0)
+                {
+                    <p class="bb:mb-4 bb:text-sm bb:text-muted-foreground">No webhooks yet.</p>
+                }
+                else
+                {
+                    <ul class="bb:mb-6 bb:space-y-3">
+                        @foreach (var webhook in _webhooks)
+                        {
+                            <li class="bb:rounded-md bb:border bb:border-input bb:p-3" data-webhook-id="@webhook.Id">
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-2">
+                                    <div>
+                                        <p class="bb:font-medium">@webhook.Name</p>
+                                        <p class="bb:text-xs bb:text-muted-foreground">
+                                            @(webhook.Enabled ? "Enabled" : "Disabled")
+                                        </p>
+                                    </div>
+                                    <div class="bb:flex bb:flex-wrap bb:gap-2">
+                                        <form method="post" action="@($"/projects/{_project.Id}/webhooks/{webhook.Id}/rotate")" data-zenkins-antiforgery>
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Rotate secret</BbButton>
+                                        </form>
+                                        <form method="post" action="@($"/projects/{_project.Id}/webhooks/{webhook.Id}/{(webhook.Enabled ? "disable" : "enable")}")" data-zenkins-antiforgery>
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">
+                                                @(webhook.Enabled ? "Disable" : "Enable")
+                                            </BbButton>
+                                        </form>
+                                        <form method="post" action="@($"/projects/{_project.Id}/webhooks/{webhook.Id}/delete")" data-zenkins-antiforgery>
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete</BbButton>
+                                        </form>
+                                    </div>
+                                </div>
+                                <dl class="bb:mt-3 bb:grid bb:grid-cols-1 bb:gap-2 bb:text-sm bb:sm:grid-cols-2">
+                                    <div class="bb:sm:col-span-2">
+                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Endpoint URL</dt>
+                                        <dd class="bb:break-all"><code>@EndpointUrl(webhook)</code></dd>
+                                    </div>
+                                    <div>
+                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branches</dt>
+                                        <dd>@BranchLabel(webhook)</dd>
+                                    </div>
+                                    <div>
+                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Required tags</dt>
+                                        <dd>@(string.IsNullOrWhiteSpace(webhook.RequiredTags) ? "Any worker" : webhook.RequiredTags)</dd>
+                                    </div>
+                                    <div>
+                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Secret</dt>
+                                        <dd>
+                                            Configured
+                                            @if (webhook.SecretRotatedAt is { } rotatedAt)
+                                            {
+                                                <span>(rotated @rotatedAt.ToString("yyyy-MM-dd HH:mm") UTC)</span>
+                                            }
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Last delivery</dt>
+                                        <dd>
+                                            @if (webhook.LastDeliveryAt is { } deliveredAt)
+                                            {
+                                                <span>@deliveredAt.ToString("yyyy-MM-dd HH:mm") UTC · @(webhook.LastDeliveryOutcome ?? "-")</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="bb:text-muted-foreground">None yet</span>
+                                            }
+                                        </dd>
+                                    </div>
+                                </dl>
+                            </li>
+                        }
+                    </ul>
+                }
+
+                <form method="post" action="@($"/projects/{_project.Id}/webhooks/create")" data-zenkins-antiforgery>
+                    <div class="bb:space-y-4">
+                        <div>
+                            <label for="webhook-name" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Name</label>
+                            <input id="webhook-name"
+                                   name="Name"
+                                   required
+                                   maxlength="100"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="github-main" />
+                        </div>
+                        <div>
+                            <label for="webhook-branch-filter" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branches (optional)</label>
+                            <input id="webhook-branch-filter"
+                                   name="BranchFilter"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
+                                   placeholder="@_project.DefaultBranch" />
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                Comma-separated names; a trailing <code>*</code> is the only wildcard
+                                (<code>main, release/*</code>). Leave it blank to follow the project's default
+                                branch. Other branches are accepted and ignored.
+                            </p>
+                        </div>
+                        <div>
+                            <label for="webhook-required-tags" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Required tags (optional)</label>
+                            <input id="webhook-required-tags"
+                                   name="RequiredTags"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="linux, dotnet" />
+                        </div>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create webhook</BbButton>
+                    </div>
+                </form>
+            </BbCardContent>
+        </BbCard>
+
+        @if (!_canManageCredentials)
+        {
+            @* Git credentials are managed like secrets (card D-003): Owner-only writes, and a Member
+               does not learn which credential names exist. The write endpoints are the enforcement;
+               this is the page half of it. *@
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Git credentials</BbCardTitle>
+                    <BbCardDescription>
+                        Credentials are managed by organization Owners; Members cannot list or change
+                        them. Ask an Owner of this organization if this project's repository needs one.
+                    </BbCardDescription>
+                </BbCardHeader>
+            </BbCard>
+        }
+        else
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Git credentials</BbCardTitle>
+                    <BbCardDescription>
+                        The material a worker uses to clone this project's repository. The value is
+                        encrypted before it is stored and is never shown again - the list below is
+                        names, kinds and timestamps only, and no route returns a value. To change a
+                        credential, rotate it; the worker fetches it only while it executes a run of
+                        a project that references it.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <form method="post" action="/git-credentials/create" data-zenkins-antiforgery>
+                        <div class="bb:space-y-4">
+                            <input type="hidden" name="ProjectId" value="@_project.Id" />
+                            <div class="bb:grid bb:grid-cols-1 bb:gap-4 bb:sm:grid-cols-2">
+                                <div>
+                                    <label for="credential-name" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Name</label>
+                                    <input id="credential-name"
+                                           name="Name"
+                                           type="text"
+                                           required
+                                           maxlength="@SecretValidation.MaxNameLength"
+                                           pattern="[A-Za-z_][A-Za-z0-9_]*"
+                                           value="@SubmittedCredentialName"
+                                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                           autocomplete="off"
+                                           spellcheck="false"
+                                           placeholder="DEPLOY_TOKEN" />
+                                </div>
+                                <div>
+                                    <label for="credential-kind" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Kind</label>
+                                    <select id="credential-kind"
+                                            name="Kind"
+                                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                                        @* On a validation redirect the submitted kind is echoed back, so
+                                           the fix happens in the kind the operator actually chose. *@
+                                        <option value="@GitCredentialKindTexts.HttpsToken"
+                                                selected="@(SubmittedCredentialKind == GitCredentialKindTexts.HttpsToken)">HTTPS token</option>
+                                        <option value="@GitCredentialKindTexts.SshKey"
+                                                selected="@(SubmittedCredentialKind == GitCredentialKindTexts.SshKey)">SSH key</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="credential-value" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Value</label>
+                                    <input id="credential-value"
+                                           name="Value"
+                                           type="password"
+                                           required
+                                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                           autocomplete="new-password"
+                                           spellcheck="false" />
+                                </div>
+                                <div>
+                                    <label for="credential-user-name" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">User name (HTTPS tokens, optional)</label>
+                                    <input id="credential-user-name"
+                                           name="UserName"
+                                           type="text"
+                                           class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                           autocomplete="off"
+                                           spellcheck="false"
+                                           placeholder="x-access-token" />
+                                </div>
+                            </div>
+                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create credential</BbButton>
+                        </div>
+                    </form>
+
+                    @if (_credentials.Count == 0)
+                    {
+                        <BbEmpty Title="No credentials configured"
+                                 Description="Create a credential above, then reference it from the projects that need it for cloning.">
+                            <Icon>
+                                <LucideIcon Name="key-square" Class="bb:h-12 bb:w-12" />
+                            </Icon>
+                        </BbEmpty>
+                    }
+                    else
+                    {
+                        <div class="bb:mt-6 bb:overflow-x-auto">
+                            <table class="bb:w-full bb:text-sm">
+                                <thead>
+                                    <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Name</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Kind</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Created</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Rotated</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Updated</th>
+                                        <th class="bb:py-2 bb:font-medium">Manage</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var credential in _credentials)
+                                    {
+                                        <tr class="bb:border-b bb:align-middle" data-credential-id="@credential.Id">
+                                            <td class="bb:py-3 bb:pr-4 bb:font-medium">@credential.Name</td>
+                                            <td class="bb:py-3 bb:pr-4">@credential.Kind</td>
+                                            <td class="bb:py-3 bb:pr-4">@credential.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                            <td class="bb:py-3 bb:pr-4">
+                                                @(credential.RotatedAt is { } rotatedAt
+                                                    ? rotatedAt.ToString("yyyy-MM-dd HH:mm") + " UTC"
+                                                    : "Never")
+                                            </td>
+                                            <td class="bb:py-3 bb:pr-4">@credential.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                            <td class="bb:py-3">
+                                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                                    <form method="post" action="/git-credentials/@credential.Id/rotate" data-zenkins-antiforgery class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                                        <input type="hidden" name="ProjectId" value="@_project.Id" />
+                                                        <label for="rotate-kind-@credential.Id" class="bb:sr-only">New kind for @credential.Name</label>
+                                                        <select id="rotate-kind-@credential.Id"
+                                                                name="Kind"
+                                                                class="bb:h-8 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:text-xs">
+                                                            <option value="@GitCredentialKindTexts.HttpsToken" selected="@(credential.Kind == GitCredentialKindTexts.HttpsToken)">HTTPS token</option>
+                                                            <option value="@GitCredentialKindTexts.SshKey" selected="@(credential.Kind == GitCredentialKindTexts.SshKey)">SSH key</option>
+                                                        </select>
+                                                        <label for="rotate-value-@credential.Id" class="bb:sr-only">New value for @credential.Name</label>
+                                                        <input id="rotate-value-@credential.Id"
+                                                               name="Value"
+                                                               type="password"
+                                                               required
+                                                               class="bb:h-8 bb:w-40 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-xs"
+                                                               autocomplete="new-password"
+                                                               spellcheck="false"
+                                                               placeholder="New value" />
+                                                        <label for="rotate-user-@credential.Id" class="bb:sr-only">New user name for @credential.Name</label>
+                                                        <input id="rotate-user-@credential.Id"
+                                                               name="UserName"
+                                                               type="text"
+                                                               class="bb:h-8 bb:w-28 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-xs"
+                                                               autocomplete="off"
+                                                               spellcheck="false"
+                                                               placeholder="User name" />
+                                                        <button type="submit"
+                                                                class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs bb:hover:bg-accent">
+                                                            Rotate
+                                                        </button>
+                                                    </form>
+
+                                                    <details class="bb:inline-block">
+                                                        <summary class="bb:cursor-pointer bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive">
+                                                            Delete…
+                                                        </summary>
+                                                        <form method="post" action="/git-credentials/@credential.Id/delete" data-zenkins-antiforgery class="bb:mt-2 bb:flex bb:items-center bb:gap-2">
+                                                            <input type="hidden" name="ProjectId" value="@_project.Id" />
+                                                            <span class="bb:text-xs bb:text-muted-foreground">
+                                                                Delete @credential.Name permanently?
+                                                            </span>
+                                                            <button type="submit"
+                                                                    class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive bb:hover:bg-destructive/10">
+                                                                Confirm delete
+                                                            </button>
+                                                        </form>
+                                                    </details>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </BbCardContent>
+            </BbCard>
+        }
+
+        @if (_canDelete)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Danger zone</BbCardTitle>
+                    <BbCardDescription>
+                        Deleting removes the project and its runs and webhooks. It requires the
+                        confirmation step and cannot be undone.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <BbButton Href="@($"/projects/{_project.Id}/delete/confirm")" Variant="ButtonVariant.Destructive">Delete project…</BbButton>
+                </BbCardContent>
+            </BbCard>
+        }
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid ProjectId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private UserSessionInfo? _session;
+    private ProjectView? _project;
+    private bool _canDelete;
+    private bool _canManageCredentials;
+    private IReadOnlyList<WebhookView> _webhooks = [];
+    private IReadOnlyList<GitCredentialListItem> _credentials = [];
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "webhookError")]
+    private string? WebhookErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "credentialError")]
+    private string? CredentialErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "credentialName")]
+    private string? SubmittedCredentialName { get; set; }
+
+    [SupplyParameterFromQuery(Name = "credentialKind")]
+    private string? SubmittedCredentialKind { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        // F-017's webhook outcomes (the endpoints PRG here since the form moved to this tab).
+        "webhook-enabled" => "The webhook is enabled.",
+        "webhook-disabled" => "The webhook is disabled; its URL now answers like an unknown one.",
+        "webhook-deleted" => "The webhook was deleted.",
+        // D-003's credential outcomes.
+        GitCredentialEndpoints.NoticeCreated => "The Git credential was created.",
+        GitCredentialEndpoints.NoticeRotated => "The Git credential was rotated; the previous value is no longer stored.",
+        GitCredentialEndpoints.NoticeDeleted => "The Git credential was deleted.",
+        _ => null,
+    };
+
+    /// <summary>The field-level error the webhook create form redirected back with (F-017).</summary>
+    private string? WebhookMessage => WebhookErrorCodes.MessageFor(WebhookErrorCode);
+
+    /// <summary>
+    /// The field-level error a credential form redirected back with. The value never travels in a
+    /// query, so the only echo this page can render is the name and the kind.
+    /// </summary>
+    private string? CredentialMessage =>
+        GitCredentialErrorCodes.MessageFor(CredentialErrorCode)
+        ?? (CredentialErrorCode is null ? null : "The credential was not accepted.");
+
+    /// <summary>
+    /// The delivery URL as the operator has to paste it. Absolute when the request carried a base URI, so
+    /// a copy from the page is usable; a relative path if the host could not resolve one.
+    /// </summary>
+    private string EndpointUrl(WebhookView webhook) =>
+        Navigation.BaseUri is { Length: > 0 } baseUri
+            ? baseUri.TrimEnd('/') + webhook.EndpointPath
+            : webhook.EndpointPath;
+
+    /// <summary>The branch patterns, spelling out the default when the filter is empty.</summary>
+    private string BranchLabel(WebhookView webhook) =>
+        webhook.BranchPatterns.Count == 0
+            ? $"project default ({_project?.DefaultBranch ?? "-"})"
+            : string.Join(", ", webhook.BranchPatterns);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Establish the circuit tenant before the tenant-filtered lookup.
+        _session = await UserSession.GetAsync();
+        _canDelete = _session?.CanManageActiveOrganization == true;
+        _canManageCredentials = _canDelete;
+
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is null)
+        {
+            SetNotFound();
+            return;
+        }
+
+        // F-017: the project's webhooks (any member of the organization may manage them). The
+        // service re-checks membership; a failure here just leaves the list empty.
+        if (_session is { HasOrganization: true } session)
+        {
+            var webhooks = await WebhookManagement.GetWebhooksAsync(session.UserId, ProjectId);
+            _webhooks = webhooks.Webhooks;
+        }
+
+        // D-003: credentials are listed only for an Owner. The page gate above is the first half,
+        // the service's Owner check the second; a Member's list answer is the Forbidden result and
+        // the page renders no names (the same asymmetry stance the secrets page keeps).
+        if (_canManageCredentials && _session is { HasOrganization: true } owner)
+        {
+            var credentials = await CredentialService.ListForProjectAsync(owner.UserId, ProjectId);
+            if (credentials.Status == GitCredentialMutationStatus.Success)
+            {
+                _credentials = credentials.Items;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A real 404 for a foreign or missing id. The status-code-pages middleware must not re-execute
+    /// /not-found in this same request: the component renderer already owns the NavigationManager,
+    /// and re-execution fails with "already initialized" (F-003 bug B1). The HTTP response is
+    /// therefore a bodyless 404; NotFoundPage above covers circuit navigation.
+    /// </summary>
+    private void SetNotFound()
+    {
+        if (HttpContext is null)
+        {
+            return;
+        }
+
+        HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+        if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+        {
+            statusCodePages.Enabled = false;
+        }
+    }
+}

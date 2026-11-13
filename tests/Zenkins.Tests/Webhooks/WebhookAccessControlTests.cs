@@ -44,20 +44,21 @@ public sealed class WebhookAccessControlTests
         Assert.Equal(HttpStatusCode.OK, created.StatusCode);
         Assert.NotEqual(Guid.Empty, webhookId);
 
-        var page = await AuthTestHost.GetStringAsync(member, $"/projects/{host.ProjectId}");
+        // D-003: the webhook list lives on the project's settings tab now.
+        var page = await AuthTestHost.GetStringAsync(member, $"/projects/{host.ProjectId}/settings");
         Assert.Contains("member-managed", page, StringComparison.Ordinal);
         Assert.DoesNotContain(secret, page, StringComparison.Ordinal);
 
         using var rotated = await OrganizationTestHost.PostFormAsync(
             member,
-            $"/projects/{host.ProjectId}",
+            $"/projects/{host.ProjectId}/settings",
             $"/projects/{host.ProjectId}/webhooks/{webhookId}/rotate",
             new Dictionary<string, string>());
         Assert.Equal(HttpStatusCode.OK, rotated.StatusCode);
 
         using var deleted = await OrganizationTestHost.PostFormAsync(
             member,
-            $"/projects/{host.ProjectId}",
+            $"/projects/{host.ProjectId}/settings",
             $"/projects/{host.ProjectId}/webhooks/{webhookId}/delete",
             new Dictionary<string, string>());
         Assert.True((int)deleted.StatusCode is 302 or 303);
@@ -104,7 +105,13 @@ public sealed class WebhookAccessControlTests
             Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
         }
 
-        // List: the project page itself is a 404 for her.
+        // List: the settings tab (where the webhook list lives, card D-003) and the project page
+        // itself are both a 404 for her.
+        using (var page = await foreign.GetAsync($"/projects/{host.ProjectId}/settings", CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, page.StatusCode);
+        }
+
         using (var page = await foreign.GetAsync($"/projects/{host.ProjectId}", CancellationToken))
         {
             Assert.Equal(HttpStatusCode.NotFound, page.StatusCode);
@@ -181,7 +188,7 @@ public sealed class WebhookAccessControlTests
             branchFilter: "main,release/*",
             requiredTags: "ci");
 
-        var beforeDelivery = await AuthTestHost.GetStringAsync(owner, $"/projects/{host.ProjectId}");
+        var beforeDelivery = await AuthTestHost.GetStringAsync(owner, $"/projects/{host.ProjectId}/settings");
         Assert.Contains($"/webhooks/{webhookId:D}", beforeDelivery, StringComparison.Ordinal);
 
         using (var response = await host.DeliverSignedAsync(
@@ -193,7 +200,7 @@ public sealed class WebhookAccessControlTests
             Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         }
 
-        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{host.ProjectId}");
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{host.ProjectId}/settings");
         Assert.Contains("page-facts", page, StringComparison.Ordinal);
         Assert.Contains("release/*", page, StringComparison.Ordinal);
         Assert.Contains("ignored:branch", page, StringComparison.Ordinal);
