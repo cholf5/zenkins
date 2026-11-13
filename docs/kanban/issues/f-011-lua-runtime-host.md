@@ -30,12 +30,17 @@ Decisions:
   (the file already carries this style of note for EF Core). Referenced by `Zenkins.Worker` only:
   the Server never runs a script, and `Zenkins.Shared` stays engine-free.
 - **Explicit module composition, never a preset** (§3): `Basic | ErrorHandling | Metatables |
-  Coroutine | String | Table | TableIterators | Math | Bit32 | OS_Time`. The resulting globals are
-  asserted by test, not assumed.
+  Coroutine | String | Table | TableIterators | Math | Bit32 | OS_Time | GlobalConsts`. Presets are
+  measured and rejected: `Preset_HardSandbox` drops `pcall`/`xpcall`/`setmetatable`/`getmetatable`/
+  `coroutine` and all of `os`, while `Preset_SoftSandbox` keeps the CLR bridge (`dynamic`, `json`).
+  `GlobalConsts` is composed in because without it `_G` and `_VERSION` are `nil`. The resulting
+  globals are asserted by test, not assumed.
 - **Post-construction hardening** (§3.1): `dynamic`, `json`, `package`, `_MOONSHARP` are nilled and
-  `print` is re-bound to the run-log sink. The `package` global is removed because `package.loaded`
-  otherwise keeps `dynamic` alive — the probe demonstrated `package.loaded.dynamic.eval('1+1')`
-  still working after `dynamic = nil`.
+  `print` is re-bound to the run-log sink. `dynamic`/`json` cannot even exist under this composition,
+  but the assignments stay as the second line of defence — if anyone ever composes `Dynamic` or `Json`
+  back in, nil-ing the globals is provably *not* enough on its own, because `package.loaded` keeps
+  the table alive (`package.loaded.dynamic.eval('1+1')` → `2`). Hence `package` is nilled too, and
+  the regression test composes `Dynamic` on purpose to prove the hazard is handled.
 - **The seam is ours**: `ILuaRuntime` exposing
   `Execute(source, name, LuaExecutionBudget, CancellationToken)` → either a result or a
   `LuaScriptException` carrying `(Message, Source, Line, Column)`. No MoonSharp type appears outside
@@ -52,16 +57,20 @@ Decisions:
 - [ ] `Directory.Packages.props` pins MoonSharp 2.0.0 with a rationale comment; only
       `Zenkins.Worker` references it; `dotnet build -c Release` stays at 0 warnings with
       `TreatWarningsAsErrors` and the repository's analyzer set.
-- [ ] `THIRD-PARTY-NOTICES.md` exists at the repository root, carries the MoonSharp BSD-3-Clause
-      text (including the MIT-licensed `vscode-mono-debug` portions), and the README license section
-      links it.
-- [ ] A sandbox self-check runs as a test over the full deny list: `io`, `load`, `loadfile`,
-      `loadstring`, `dofile`, `require`, `debug`, `dynamic`, `json`, `package`, `_MOONSHARP`,
-      `os.execute`, `os.exit`, `os.getenv`, `os.remove`, `os.rename`, `os.tmpname` are all `nil`;
-      `os.clock/date/difftime/time` are functions; `pcall`, `xpcall`, `setmetatable`, `coroutine`
-      are present.
-- [ ] The `package.loaded` escape is closed and pinned by a test that would fail on
-      `dynamic = nil` alone.
+- [ ] `THIRD-PARTY-NOTICES.md` exists at the repository root and copies the MoonSharp `LICENSE`
+      **verbatim** (the 2.0.0 package ships no such file; the text is in the upstream repository and
+      the 3.0.0 package, and carries the KopiLua string-library notice, the MIT-licensed
+      `vscode-mono-debug` portions, the Eclipse debugger-icon attribution and the MoonSharp icon
+      attribution); the README license section links it.
+- [ ] A sandbox self-check runs as a test over the full deny list, asserting each name through
+      `DoString("return type(<name>)")` (not through the C# `Globals` enumeration, which still lists
+      nil-valued keys): `io`, `load`, `loadfile`, `loadstring`, `dofile`, `require`, `debug`,
+      `dynamic`, `json`, `package`, `_MOONSHARP`, `os.execute`, `os.exit`, `os.getenv`, `os.remove`,
+      `os.rename`, `os.tmpname` are all `nil`; `os.clock/date/difftime/time` are functions;
+      `pcall`, `xpcall`, `setmetatable`, `getmetatable`, `coroutine` and `_G` are present.
+- [ ] The registry hazard is pinned by a test that composes `Dynamic` deliberately and proves
+      `package.loaded.dynamic.eval` is unreachable afterwards — the test fails if the `package`
+      hardening is removed.
 - [ ] A runaway script (`while true do end`, and a tight allocation loop) is abandoned at its
       budget: the call returns within the budget plus a small margin, the coroutine is never
       resumed again, and the discarded `Script` is not reused.
@@ -70,8 +79,10 @@ Decisions:
 - [ ] Syntax and runtime errors surface `source:(line,col-col)` in one line — no CLR stack trace in
       the message — and a script that raises after N log lines keeps those lines.
 - [ ] The host-call suspension protocol works end to end: a test registers a primitive that yields,
-      the driver resumes it with a value, and the Lua call site receives that value (fixture 12 in
-      `docs/lua-runtime.md` §9).
+      the driver resumes it with a value, and the Lua call site receives that value — including
+      through a Lua wrapper, `pcall` and an `__index` metatable (fixtures 15–16 in
+      `docs/lua-runtime.md` §9). The driver branches on `CoroutineState`, so a budget yield is
+      resumed with no arguments and an SDK call is resumed with its answer.
 - [ ] `print` from Lua reaches the runtime's log sink, not the worker's console.
 - [ ] Existing behavior is unchanged: the whole suite still passes and argv runs (F-006/F-007) still
       execute exactly as before; the Worker stays ASP.NET-free (`WorkerRuntimeConfigTests`).
@@ -104,14 +115,19 @@ Expected:
 - Every forbidden name is `nil`; `os.time`/`os.date`/`pcall`/`xpcall`/`setmetatable`/`coroutine`
   are present; no `UserData` type is registered.
 
-### TC-002: The `package.loaded` escape is closed
+### TC-002: The registry hazard is handled where it can occur
 
 Steps:
-1. From a script, attempt `dynamic = nil; local d = package.loaded.dynamic; return d and d.eval or 'gone'`.
+1. Build a runtime whose composition deliberately includes `CoreModules.Dynamic` (to exercise the
+   hazard), harden it as production does, then evaluate
+   `dynamic = nil; local d = package.loaded.dynamic; return d and d.eval('1+1') or 'gone'`.
+2. Build the production composition and assert `type(package)` is `nil` and that `package.loaded`
+   is unreachable.
 
 Expected:
-- `package` is `nil`, so the expression cannot reach `eval`; the test fails if `package` is
-  reachable (this is the regression guard for "nil the global and move on").
+- (1) `gone` — the `package` hardening closes the registry door even when the module is composed in;
+  removing that hardening makes it return `2`, which is what the test is for.
+- (2) `nil` both, and `type(dynamic)`/`type(json)` are `nil`.
 
 ### TC-003: Runaway script is abandoned, not hung
 

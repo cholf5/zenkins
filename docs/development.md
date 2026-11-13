@@ -527,14 +527,57 @@ dotnet run --project src/Server 2>&1 | Tee-Object run.log
 `logs/` and `*.log` are git-ignored. Startup failures (bad configuration, migration errors) are
 printed before `Now listening on:` appears — that is the first place to look.
 
+## 7. Production hardening
+
+The worker executes repository content, so the process it runs in is part of the security boundary.
+The Lua sandbox limits what a `pipeline.lua` can reach from *inside* the interpreter; it says nothing
+about what the worker process itself can reach. Treat the two as separate layers
+([`lua-runtime.md`](lua-runtime.md) §3.3).
+
+### Dedicated account and work root
+
+- Run the worker as a dedicated, unprivileged account — not a developer's login and not an
+  administrator. Everything a build can write lives under `ZENKINS_WORK_ROOT`
+  (default `work/` relative to the worker), and the worker must be able to write there and nowhere
+  else it does not need.
+- Keep the work root out of the repository checkout and out of the server's data directory:
+  `work/{run-id}/repository|artifacts|temp` is disposable, `App_Data/` is not.
+- On a shared machine, give the worker its own account rather than reusing one that can read other
+  users' files; a build script runs with exactly that account's permissions.
+
+### Memory caps
+
+MoonSharp cannot bound memory from inside the interpreter (`collectgarbage('count')` returns `nil`),
+so the limit is the operating system's:
+
+| Platform | Mechanism | Status |
+|---|---|---|
+| Linux | `ulimit -v` for the worker, or a cgroup v2 `memory.max` on the service | Recommended; size it above the largest real build |
+| Windows | A Job Object memory limit on the worker process | Recommended |
+| macOS | None that we have verified — `ulimit -v` fails with `setrlimit failed: invalid argument` on macOS 26.5 and the process keeps allocating | Accepted gap; do not run the worker next to something you need |
+
+A run killed by the OS is reported `Failed` with the worker's report; it is never silently retried.
+
+### Secrets key ring
+
+When secrets exist (F-012), the server's Data Protection key ring is what makes stored ciphertexts
+readable. It is persisted under `App_Data/keys` and must be backed up with the database: losing it
+means every stored secret has to be re-entered, not restored. Restrict its permissions to the
+service account.
+
 ## Current state (what you can actually do)
 
 Working today: first-run Owner bootstrap, cookie sign-in/out, organizations and members (invite,
 role change, remove), server-side organization switching, and projects scoped to the active
-organization. The project surface is `/projects`, `/projects/new`, `/projects/{id}`,
-`/projects/{id}/edit` and `/projects/{id}/delete/confirm`: Members may create and edit, only an
-Owner may delete, the repository URL, default branch and pipeline path are validated, and a project
-name is unique per organization (`AddProjectUniqueName`).
+organization; workers register with an Owner-minted token and keep heartbeats; runs can be triggered
+from a project page, queued, claimed by a matching idle worker, executed as a native process in an
+isolated per-run work directory, watched live through streamed logs, cancelled, timed out, and
+marked `Lost` when their worker disappears. The project surface is `/projects`, `/projects/new`,
+`/projects/{id}`, `/projects/{id}/edit` and `/projects/{id}/delete/confirm`: Members may create and
+edit, only an Owner may delete, the repository URL, default branch and pipeline path are validated,
+and a project name is unique per organization (`AddProjectUniqueName`).
 
-Not implemented yet: pipelines (Lua execution), workers, build runs, live logs, secrets and webhooks;
-the Workers and Secrets pages are shell previews. Do not expect those to work in this revision.
+Not implemented yet: pipelines (`pipeline.lua` execution), Git checkout, secrets, artifacts and
+webhooks; the Workers and Secrets pages are shell previews. Do not expect those to work in this
+revision. A run in this revision executes the argv command typed on the project page — the pipeline
+run contract arrives with F-014.
