@@ -4,7 +4,7 @@ title: Secrets: encrypted storage and Owner-only management
 type: feature
 priority: P1
 size: M
-status: todo
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
@@ -47,35 +47,35 @@ Decisions:
 
 ## Acceptance Criteria
 
-- [ ] `Secret` entity (`OrganizationId`, `Name`, `Ciphertext`, `CreatedAt`, `UpdatedAt`, `RotatedAt`,
+- [x] `Secret` entity (`OrganizationId`, `Name`, `Ciphertext`, `CreatedAt`, `UpdatedAt`, `RotatedAt`,
       `CreatedByUserId`) + migration; unique index `(OrganizationId, Name)`; PostgreSQL contract
       gate reports no pending changes.
-- [ ] Create/rotate/delete endpoints exist and are Owner-only; a Member's write is 403, a foreign
+- [x] Create/rotate/delete endpoints exist and are Owner-only; a Member's write is 403, a foreign
       organization's secret id is 404, and no response ever contains plaintext.
-- [ ] No endpoint or page can return a stored value: verified by enumerating the endpoint table in a
+- [x] No endpoint or page can return a stored value: verified by enumerating the endpoint table in a
       test (a route-shape assertion), not by remembering.
-- [ ] Encryption round-trips through the purpose-bound protector; a ciphertext written under a
+- [x] Encryption round-trips through the purpose-bound protector; a ciphertext written under a
       different purpose fails to decrypt; the key ring path is configured and asserted at startup.
-- [ ] The name validator rejects empty, over-long, whitespace, and `=`/`$`/`-` names — a secret name
+- [x] The name validator rejects empty, over-long, whitespace, and `=`/`$`/`-` names — a secret name
       is usable directly as an environment variable name by F-015.
-- [ ] A minimal Owner-only page lists names with created/rotated timestamps, creates, rotates and
+- [x] A minimal Owner-only page lists names with created/rotated timestamps, creates, rotates and
       deletes (with confirmation); it renders no value and has no reveal control. Full secrets
       management UI stays in v0.9.
-- [ ] Tenant isolation: Q-001 harness gains read, write and unique-index probes for `Secret`; the
+- [x] Tenant isolation: Q-001 harness gains read, write and unique-index probes for `Secret`; the
       two-org fixture seeds one secret per organization.
-- [ ] Rotation invalidates the old ciphertext (a second decrypt with the pre-rotation ciphertext is
+- [x] Rotation invalidates the old ciphertext (a second decrypt with the pre-rotation ciphertext is
       impossible by construction — the column is replaced), and a rotate of a missing name is 404.
 
 ## Subtasks
 
-- [ ] Entity + migration + `ZenkinsDbContext` configuration and unique index.
-- [ ] `Secrets/SecretProtector` (purpose-bound encrypt/decrypt) and `Secrets/SecretService`
+- [x] Entity + migration + `ZenkinsDbContext` configuration and unique index.
+- [x] `Secrets/SecretProtector` (purpose-bound encrypt/decrypt) and `Secrets/SecretService`
       (Owner-only CRUD, name validation, internal `TryGetValueAsync` for later cards).
-- [ ] `Secrets/SecretEndpoints` + a minimal Owner-only Razor page; nav entry.
-- [ ] Data Protection key-ring persistence in `Program.cs` (`App_Data/keys`) and a startup
+- [x] `Secrets/SecretEndpoints` + a minimal Owner-only Razor page; nav entry.
+- [x] Data Protection key-ring persistence in `Program.cs` (`App_Data/keys`) and a startup
       assertion that the directory is writable, with the backup requirement in
       `docs/development.md`.
-- [ ] Tests (`Category=Secrets`): round-trip, wrong-purpose rejection, Owner/Member/foreign-org
+- [x] Tests (`Category=Secrets`): round-trip, wrong-purpose rejection, Owner/Member/foreign-org
       matrix, name validation, route-shape "no plaintext route", rotation semantics; tenancy probes.
 
 ## Dependencies
@@ -133,6 +133,35 @@ Expected:
   redaction) is deliberately left to F-015, and git credentials to F-013, so this card has no
   dependency on the pipeline work.
 
+### 2026-11-13 — implemented, independently reviewed, accepted
+
+- The value is unreachable, and that is pinned by enumerating the live `EndpointDataSource`: an
+  exact allow-list (the page plus the three POST mutations), a count assertion, an authorization
+  metadata assertion per route, and mutants that prove the guard goes red if a `/value` or `/reveal`
+  route appears, if a mutation is widened to GET, or if authorization is dropped. Matching is by
+  "template mentions secret, case-insensitively", so a value route mounted at `/api/secrets/...`
+  cannot slip past a prefix check.
+- The per-organization unique index is now asserted both ways: another organization may reuse a name
+  (two rows coexist, each with its own organization) and the same organization may not (constraint
+  name plus SQLite error 19). Before that assertion existed, a global unique index would have passed
+  every test, because the two fixture secrets had different names.
+- The key ring resolves through `KeyManagementOptions.XmlRepository` rather than a startup call, so
+  the directory is chosen after every configuration source has applied - an early read silently falls
+  back to the default. All four resolution branches are pinned by test: explicit relative, explicit
+  absolute, SQLite beside the database, and PostgreSQL falling back to the content root.
+- Rotation is verified by bytes, not by a timestamp: the new ciphertext differs from the old one, the
+  old blob exists in no row, and the new value decrypts. The test does not scan the SQLite file for
+  the old blob - SQLite does not zero freed pages - and says so.
+- Gate: `dotnet build -c Release` 0 warnings 0 errors; `Category=Secrets` 64/0/0; full suite 502/0/0;
+  `Category=Lua` still 85; `has-pending-model-changes` under the PostgreSQL provider exits 0 without a
+  running database, and the migration carries Npgsql type shapes with no SQLite type names.
+- Deviation, accepted: the placeholder `Components/Pages/Secrets.razor` was replaced in place rather
+  than under a `Pages/Secrets/` directory, because one `/secrets` route cannot be served by two
+  components. The verification list is an index, not an allow-list.
+- Two nits left, neither blocking: a stale comment in `IsPageRoute` still says "under /secrets"
+  although matching is now wider, and the relative-`Data Source` branch of the key-ring resolution
+  has no test row (the product default is an absolute path).
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -146,4 +175,8 @@ Expected:
   `tests/Zenkins.Tests/Tenancy/*`
 - How to run/verify: `dotnet build -c Release`; `dotnet test -c Release --filter "Category=Secrets"`;
   full suite; PostgreSQL contract gate.
-- Results: not run (card not started).
+- Results: accepted 2026-11-13. `dotnet build -c Release` 0 warnings 0 errors; `Category=Secrets`
+  64/0/0; full suite 502/0/0; `Category=Lua` 85/0/0 (no regression). PostgreSQL contract gate:
+  `has-pending-model-changes` exits 0 with no running database; the migration, its designer and the
+  snapshot all carry `uuid`, `character varying(...)` and `timestamp with time zone`, with zero SQLite
+  type names. Independent review found no major and no minor in the delta round.
