@@ -18,6 +18,9 @@ public static class WorkerErrorCodes
     public const string FieldInvalid = "field-invalid";
     public const string TokenAlreadyConsumed = "token-already-consumed";
     public const string TokenAlreadyRevoked = "token-already-revoked";
+
+    /// <summary>Card D-005: a worker with run history cannot be deleted - its runs keep the reference.</summary>
+    public const string WorkerHasRuns = "worker-has-runs";
 }
 
 /// <summary>Outcome of a worker-API or worker-management operation.</summary>
@@ -60,7 +63,7 @@ public sealed record WorkerHeartbeatInput(
     int? CpuCount,
     int? MaxConcurrency);
 
-/// <summary>A worker as the /workers page shows it.</summary>
+/// <summary>A worker as the /workers pages show it (roster and detail, card D-005).</summary>
 public sealed record WorkerView(
     Guid Id,
     string Name,
@@ -72,7 +75,8 @@ public sealed record WorkerView(
     int CpuCount,
     int MaxConcurrency,
     DateTimeOffset? LastHeartbeatAt,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    bool IsDisabled = false);
 
 /// <summary>A registration token as the Owner's token list shows it. No secrets.</summary>
 public sealed record WorkerRegistrationTokenView(
@@ -149,6 +153,27 @@ public sealed record WorkerTokenIssuedResult(
 
     public static WorkerTokenIssuedResult Forbidden(string message) =>
         new(WorkerOperationStatus.Forbidden, Message: message);
+}
+
+/// <summary>
+/// Outcome of deleting a worker (card D-005). <see cref="RunCount"/> carries the number of runs the
+/// worker executed when deletion was refused - the count the refusal message names, so the page can
+/// say exactly why the worker stayed.
+/// </summary>
+public sealed record WorkerDeleteResult(
+    WorkerOperationStatus Status,
+    int? RunCount = null,
+    string? Message = null)
+{
+    public static WorkerDeleteResult Success() => new(WorkerOperationStatus.Success);
+
+    public static WorkerDeleteResult Refused(int runCount) =>
+        new(WorkerOperationStatus.InvalidInput, RunCount: runCount);
+
+    public static WorkerDeleteResult Forbidden(string message) =>
+        new(WorkerOperationStatus.Forbidden, Message: message);
+
+    public static WorkerDeleteResult NotFound() => new(WorkerOperationStatus.NotFound);
 }
 
 /// <summary>
@@ -249,19 +274,154 @@ public sealed class WorkerService(
         return workers
             .OrderBy(worker => worker.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(worker => worker.Id)
-            .Select(worker => new WorkerView(
-                worker.Id,
-                worker.Name,
-                worker.Os,
-                worker.Architecture,
-                worker.Version,
-                worker.Tags,
-                worker.Status,
-                worker.CpuCount,
-                worker.MaxConcurrency,
-                worker.LastHeartbeatAt,
-                worker.CreatedAt))
+            .Select(ToView)
             .ToArray();
+    }
+
+    /// <summary>
+    /// One worker of the active organization, or <see langword="null"/> when the id belongs to
+    /// another organization or does not exist (card D-005's detail page renders both as a 404 -
+    /// deliberately indistinguishable, like every other tenant-owned read).
+    /// </summary>
+    public async Task<WorkerView?> GetWorkerAsync(Guid workerId, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var worker = await context.Workers.AsNoTracking().SingleOrDefaultAsync(
+            candidate => candidate.Id == workerId,
+            cancellationToken);
+        return worker is null ? null : ToView(worker);
+    }
+
+    private static WorkerView ToView(Worker worker) => new(
+        worker.Id,
+        worker.Name,
+        worker.Os,
+        worker.Architecture,
+        worker.Version,
+        worker.Tags,
+        worker.Status,
+        worker.CpuCount,
+        worker.MaxConcurrency,
+        worker.LastHeartbeatAt,
+        worker.CreatedAt,
+        worker.IsDisabled);
+
+    /// <summary>
+    /// Disables or re-enables a worker (card D-005, Owner-only). Disable is the reversible
+    /// "stop trusting this machine": the claim query (RunService) refuses the worker's next claim
+    /// with the ordinary not-assigned answer, runs already in flight continue, and the state is a
+    /// plain row update - no tokens are touched, so heartbeats keep arriving and liveness stays the
+    /// offline sweeper's judgement. The worker id resolves through the tenant filter, so a foreign
+    /// id is the same 404 as an unknown one.
+    /// </summary>
+    public async Task<WorkerManagementResult> SetDisabledAsync(
+        string actingUserId,
+        Guid workerId,
+        bool disabled,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        if (tenantContext.OrganizationId is null)
+        {
+            return WorkerManagementResult.Forbidden(
+                "You are not a member of an organization, so there is no worker to change.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
+        {
+            return WorkerManagementResult.Forbidden(
+                disabled
+                    ? "Only an organization Owner can disable a worker."
+                    : "Only an organization Owner can enable a worker.");
+        }
+
+        var worker = await context.Workers.SingleOrDefaultAsync(
+            candidate => candidate.Id == workerId,
+            cancellationToken);
+        if (worker is null)
+        {
+            // Foreign or unknown id: the same 404, no existence oracle.
+            return WorkerManagementResult.NotFound();
+        }
+
+        worker.IsDisabled = disabled;
+        worker.UpdatedAt = DateTimeOffset.UtcNow;
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Worker {WorkerId} {State}. OrganizationId={OrganizationId}",
+            worker.Id,
+            disabled ? "disabled" : "enabled",
+            tenantContext.OrganizationId);
+        return WorkerManagementResult.Success();
+    }
+
+    /// <summary>
+    /// Deletes a worker (card D-005, Owner-only) - but only one with <b>no run history</b>: a worker
+    /// that executed runs keeps its rows because every run keeps its worker reference (the FK is
+    /// SET NULL for schema robustness, and this path refuses any worker the count sees runs for).
+    /// The count and the delete share one transaction, so the window between the check and the
+    /// commit is sub-millisecond. That makes the guarantee practical, not absolute: a claim that
+    /// committed a <c>WorkerId</c> inside exactly that window would still meet the FK's SetNull -
+    /// no product path reaches it today (a worker the count shows empty has nothing running, and
+    /// the roster's delete targets an idle worker), and the schema's SetNull stays the last line of
+    /// defence if one ever does. The worker's tokens cascade with it. A worker with runs is refused
+    /// with the count the page names.
+    /// </summary>
+    public async Task<WorkerDeleteResult> DeleteWorkerAsync(
+        string actingUserId,
+        Guid workerId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        if (tenantContext.OrganizationId is null)
+        {
+            return WorkerDeleteResult.Forbidden(
+                "You are not a member of an organization, so there is no worker to delete.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
+        {
+            return WorkerDeleteResult.Forbidden("Only an organization Owner can delete a worker.");
+        }
+
+        var worker = await context.Workers.SingleOrDefaultAsync(
+            candidate => candidate.Id == workerId,
+            cancellationToken);
+        if (worker is null)
+        {
+            // Foreign or unknown id: the same 404, no existence oracle.
+            return WorkerDeleteResult.NotFound();
+        }
+
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var runCount = await context.BuildRuns.CountAsync(
+            run => run.WorkerId == workerId,
+            cancellationToken);
+        if (runCount > 0)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            logger.LogInformation(
+                "Worker {WorkerId} deletion refused: {RunCount} run(s) keep their worker reference. OrganizationId={OrganizationId}",
+                workerId,
+                runCount,
+                tenantContext.OrganizationId);
+            return WorkerDeleteResult.Refused(runCount);
+        }
+
+        context.Workers.Remove(worker);
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Worker {WorkerId} deleted. OrganizationId={OrganizationId}",
+            workerId,
+            tenantContext.OrganizationId);
+        return WorkerDeleteResult.Success();
     }
 
     /// <summary>Revokes a pending registration token (Owner-only). Revocation is immediate.</summary>

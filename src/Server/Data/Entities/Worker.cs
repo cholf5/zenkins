@@ -53,6 +53,14 @@ public sealed class Worker : ITenantOwned
     /// <summary>Online while heartbeats keep arriving; staleness marking is F-010's concern.</summary>
     public string Status { get; set; } = WorkerStatus.Online;
 
+    /// <summary>
+    /// Card D-005: an Owner's "stop trusting this machine" switch. A disabled worker's next claim
+    /// gets the ordinary not-assigned answer (the claim query refuses it, so ignoring the page does
+    /// not bypass it), runs already in flight continue to completion, and an Owner can reverse the
+    /// state. Orthogonal to <see cref="Status"/>: liveness stays the offline sweeper's judgement.
+    /// </summary>
+    public bool IsDisabled { get; set; }
+
     /// <summary>Registration counts as the first heartbeat; every heartbeat refreshes this.</summary>
     public DateTimeOffset? LastHeartbeatAt { get; set; }
 

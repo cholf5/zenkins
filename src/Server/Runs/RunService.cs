@@ -175,6 +175,15 @@ public sealed record RunCancelResult(RunOperationStatus Status, RunCancelOutcome
     public static RunCancelResult NotFound() => new(RunOperationStatus.NotFound, RunCancelOutcome.AlreadyFinished);
 }
 
+/// <summary>
+/// A worker's runs as the worker detail page shows them (card D-005). <see cref="Current"/> is the
+/// worker's <c>Running</c> runs - the same predicate the roster's per-worker count aggregates;
+/// <see cref="Recent"/> is everything else the worker has queued or finished, newest first, bounded.
+/// </summary>
+public sealed record WorkerRunsView(
+    IReadOnlyList<RunView> Current,
+    IReadOnlyList<RunView> Recent);
+
 /// <summary>A queued run handed to a worker by the claim endpoint.</summary>
 public sealed record RunClaimResult(
     RunOperationStatus Status,
@@ -293,6 +302,13 @@ public sealed class RunService(
     /// statement; with every lease contended, a worker re-polls instead of spinning here.
     /// </summary>
     private const int MaxClaimCandidates = 64;
+
+    /// <summary>The most current runs the worker detail page lists (card D-005). The roster's count
+    /// is uncapped - it counts, it does not render.</summary>
+    private const int MaxCurrentRunsShown = 20;
+
+    /// <summary>The most recent runs the worker detail page lists (card D-005).</summary>
+    private const int MaxRecentRunsShown = 10;
 
     // ---------------------------------------------------------------------
     // Trigger and reads (cookie-authenticated pages and forms)
@@ -558,6 +574,69 @@ public sealed class RunService(
         return await context.BuildRuns.AnyAsync(run => run.Id == runId, cancellationToken);
     }
 
+    // ---------------------------------------------------------------------
+    // Worker page reads (card D-005)
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// How many <see cref="WorkerRunsView.Current"/>-style runs each worker of the active
+    /// organization holds, in one read. Card D-005's decision: the roster's per-worker count comes
+    /// from the same query shape as the detail page's current-runs list - the worker's
+    /// <c>Running</c> runs - never from a denormalised column that could drift from it.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<Guid, int>> GetCurrentRunCountsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var rows = await context.BuildRuns
+            .AsNoTracking()
+            .Where(run => run.WorkerId != null && run.Status == BuildRunStatus.Running)
+            .Select(run => new { WorkerId = run.WorkerId!.Value })
+            .ToListAsync(cancellationToken);
+        return rows
+            .GroupBy(row => row.WorkerId)
+            .ToDictionary(group => group.Key, group => group.Count());
+    }
+
+    /// <summary>
+    /// The runs the worker detail page lists (card D-005): the worker's current runs (<c>Running</c>,
+    /// the same predicate <see cref="GetCurrentRunCountsAsync"/> aggregates for the roster) and its
+    /// recent runs (everything else - queued, finished, canceled, lost - newest first), both capped.
+    /// The worker id resolves through the tenant filter, so a foreign worker's runs are simply empty.
+    /// </summary>
+    public async Task<WorkerRunsView> GetWorkerRunsAsync(
+        Guid workerId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        // In-memory ordering on purpose (SQLite cannot ORDER BY DateTimeOffset columns) - the same
+        // shape GetProjectRunsAsync uses. A worker's Running runs are bounded by MaxConcurrency, so
+        // the current read is small by construction.
+        var currentRows = await context.BuildRuns
+            .AsNoTracking()
+            .Where(run => run.WorkerId == workerId && run.Status == BuildRunStatus.Running)
+            .ToListAsync(cancellationToken);
+        var recentRows = await context.BuildRuns
+            .AsNoTracking()
+            .Where(run => run.WorkerId == workerId && run.Status != BuildRunStatus.Running)
+            .ToListAsync(cancellationToken);
+
+        var runs = currentRows
+            .OrderByDescending(run => run.CreatedAt)
+            .ThenBy(run => run.Id)
+            .Take(MaxCurrentRunsShown)
+            .Concat(recentRows
+                .OrderByDescending(run => run.CreatedAt)
+                .ThenBy(run => run.Id)
+                .Take(MaxRecentRunsShown))
+            .ToList();
+        var views = await ToViewsAsync(context, runs, cancellationToken);
+        return new WorkerRunsView(
+            views.Where(run => run.Status == BuildRunStatus.Running).ToArray(),
+            views.Where(run => run.Status != BuildRunStatus.Running).ToArray());
+    }
+
     /// <summary>
     /// Streams one run's persisted log ordered by <see cref="Entities.BuildLog.Seq"/> (F-008's
     /// download). The database read is streamed - the caller writes each line as it arrives, so
@@ -608,11 +687,15 @@ public sealed class RunService(
 
         var now = DateTimeOffset.UtcNow;
 
-        // 2. Eligibility of the worker itself: Online and a free concurrency slot.
+        // 2. Eligibility of the worker itself: Online, not disabled (card D-005: the disabled flag is
+        //    a server fact enforced here, so a worker cannot bypass it by ignoring the page - a
+        //    disabled worker's claim gets the same not-assigned answer as any other rejection), and a
+        //    free concurrency slot. Runs already in flight are untouched: nothing below blocks the
+        //    accepted/completed reports of a running run.
         var worker = await context.Workers.AsNoTracking().SingleOrDefaultAsync(
             candidate => candidate.Id == workerToken.WorkerId,
             cancellationToken);
-        if (worker is null || worker.Status != WorkerStatus.Online)
+        if (worker is null || worker.Status != WorkerStatus.Online || worker.IsDisabled)
         {
             return RunClaimResult.NoRun();
         }

@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @inject UserSession UserSession
 @inject WorkerService WorkerService
+@inject RunService RunsService
 
 <PageTitle>Workers · Zenkins</PageTitle>
 
@@ -39,7 +40,8 @@
                 <BbCardTitle As="h2">Registered workers</BbCardTitle>
                 <BbCardDescription>
                     Workers of the active organization. Every worker authenticates with its own token;
-                    heartbeats keep it Online (PRD §3.4.3).
+                    heartbeats keep it Online (PRD §3.4.3). Each row links to the worker's detail page
+                    with its current and recent runs (card D-005).
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -59,7 +61,16 @@
                         {
                             <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                 <div class="bb:min-w-0">
-                                    <p class="bb:font-medium">@worker.Name</p>
+                                    @* D-005: the row is the doorway - the name links to the worker's
+                                       detail page, where its runs and the Owner controls live. *@
+                                    <p class="bb:font-medium">
+                                        <a href="/workers/@worker.Id"
+                                           class="bb:underline bb:underline-offset-4">@worker.Name</a>
+                                        @if (worker.IsDisabled)
+                                        {
+                                            <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                                        }
+                                    </p>
                                     <p class="bb:truncate bb:text-xs bb:text-muted-foreground">
                                         @worker.Os · @worker.Architecture · v@(worker.Version) · @worker.CpuCount CPUs · max @worker.MaxConcurrency
                                     </p>
@@ -69,6 +80,11 @@
                                     }
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    @* D-005: the count next to the roster comes from the same current-runs
+                                       query the detail page lists - never from a denormalised column. *@
+                                    <span>
+                                        @(_runCounts.GetValueOrDefault(worker.Id)) running
+                                    </span>
                                     <BbBadge Variant="BadgeVariant.Outline">@worker.Status</BbBadge>
                                     <span>
                                         @(worker.LastHeartbeatAt?.ToString("yyyy-MM-dd HH:mm") ?? "-") UTC
@@ -135,6 +151,10 @@
     private IReadOnlyList<WorkerView> _workers = [];
     private IReadOnlyList<WorkerRegistrationTokenView> _tokens = [];
 
+    /// <summary>D-005: current (Running) runs per worker, from the same query the detail page lists.</summary>
+    private IReadOnlyDictionary<Guid, int> _runCounts =
+        new Dictionary<Guid, int>();
+
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
 
@@ -144,6 +164,7 @@
     private string? Notice => NoticeCode switch
     {
         "token-revoked" => "The registration token was revoked.",
+        "worker-deleted" => "The worker was deleted.",
         _ => null,
     };
 
@@ -165,6 +186,7 @@
         }
 
         _workers = await WorkerService.GetWorkersAsync();
+        _runCounts = await RunsService.GetCurrentRunCountsAsync();
         if (_session.CanManageActiveOrganization)
         {
             _tokens = await WorkerService.GetRegistrationTokensAsync();

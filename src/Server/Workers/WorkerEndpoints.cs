@@ -42,10 +42,15 @@ public static class WorkerEndpoints
         api.MapPost("/register", RegisterAsync);
         api.MapPost("/heartbeat", HeartbeatAsync);
 
-        // Owner-only management (cookie + antiforgery, like the other form endpoints).
+        // Owner-only management (cookie + antiforgery, like the other form endpoints). Card D-005
+        // adds the per-worker controls: disable/enable (reversible claim gate) and delete (refused
+        // while the worker has run history).
         var management = endpoints.MapGroup("/workers").RequireAuthorization();
         management.MapPost("/registration-tokens", MintRegistrationTokenAsync);
         management.MapPost("/registration-tokens/{tokenId:guid}/revoke", RevokeRegistrationTokenAsync);
+        management.MapPost("/{workerId:guid}/disable", DisableWorkerAsync);
+        management.MapPost("/{workerId:guid}/enable", EnableWorkerAsync);
+        management.MapPost("/{workerId:guid}/delete", DeleteWorkerAsync);
 
         return endpoints;
     }
@@ -162,6 +167,86 @@ public static class WorkerEndpoints
         };
     }
 
+    private static async Task<IResult> DisableWorkerAsync(
+        Guid workerId,
+        [FromForm] DisableWorkerForm form,
+        HttpContext httpContext,
+        WorkerService workers)
+    {
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await workers.SetDisabledAsync(userId, workerId, disabled: true, httpContext.RequestAborted);
+        return result.Status switch
+        {
+            WorkerOperationStatus.Success => Results.Redirect($"{PagePath}/{workerId}?notice=worker-disabled"),
+            WorkerOperationStatus.NotFound => Results.NotFound(),
+            WorkerOperationStatus.Forbidden => Results.Text(
+                result.Message ?? "You are not allowed to disable workers.",
+                "text/plain",
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.Redirect($"{PagePath}?error={result.ErrorCode}"),
+        };
+    }
+
+    private static async Task<IResult> EnableWorkerAsync(
+        Guid workerId,
+        [FromForm] EnableWorkerForm form,
+        HttpContext httpContext,
+        WorkerService workers)
+    {
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await workers.SetDisabledAsync(userId, workerId, disabled: false, httpContext.RequestAborted);
+        return result.Status switch
+        {
+            WorkerOperationStatus.Success => Results.Redirect($"{PagePath}/{workerId}?notice=worker-enabled"),
+            WorkerOperationStatus.NotFound => Results.NotFound(),
+            WorkerOperationStatus.Forbidden => Results.Text(
+                result.Message ?? "You are not allowed to enable workers.",
+                "text/plain",
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.Redirect($"{PagePath}?error={result.ErrorCode}"),
+        };
+    }
+
+    private static async Task<IResult> DeleteWorkerAsync(
+        Guid workerId,
+        [FromForm] DeleteWorkerForm form,
+        HttpContext httpContext,
+        WorkerService workers)
+    {
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await workers.DeleteWorkerAsync(userId, workerId, httpContext.RequestAborted);
+        return result.Status switch
+        {
+            WorkerOperationStatus.Success => Results.Redirect($"{PagePath}?notice=worker-deleted"),
+
+            // Card D-005: the refusal is a friendly PRG answer that names the runs - the count
+            // rides the query so the detail page can say exactly why the worker stayed.
+            WorkerOperationStatus.InvalidInput => Results.Redirect(
+                $"{PagePath}/{workerId}?error={WorkerErrorCodes.WorkerHasRuns}&runs={result.RunCount}"),
+            WorkerOperationStatus.NotFound => Results.NotFound(),
+            WorkerOperationStatus.Forbidden => Results.Text(
+                result.Message ?? "You are not allowed to delete workers.",
+                "text/plain",
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.Redirect(PagePath),
+        };
+    }
+
     /// <summary>
     /// A bare 401: no body, no challenge header, no tenant detail. Every worker-auth failure looks
     /// exactly like this, whether the token was missing, unknown, burned or revoked.
@@ -190,6 +275,18 @@ public static class WorkerEndpoints
     }
 
     public sealed class RevokeRegistrationTokenForm
+    {
+    }
+
+    public sealed class DisableWorkerForm
+    {
+    }
+
+    public sealed class EnableWorkerForm
+    {
+    }
+
+    public sealed class DeleteWorkerForm
     {
     }
 
