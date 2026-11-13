@@ -4,7 +4,7 @@ title: Webhook trigger: signature, branch filter, replay protection
 type: feature
 priority: P1
 size: M
-status: todo
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
@@ -59,40 +59,40 @@ Decisions:
 
 ## Acceptance Criteria
 
-- [ ] `Webhook` entity (`OrganizationId`, `ProjectId`, `Name`, `SecretCiphertext`, `BranchFilter`,
+- [x] `Webhook` entity (`OrganizationId`, `ProjectId`, `Name`, `SecretCiphertext`, `BranchFilter`,
       `RequiredTags`, `Enabled`, `CreatedAt/UpdatedAt`, `CreatedByUserId`) + migration, unique
       `(ProjectId, Name)`; secret encrypted with the F-012 protector (purpose
       `Zenkins.Webhooks.v1`); PostgreSQL contract gate clean.
-- [ ] `POST /webhooks/{webhookId}` accepts a GitHub-shaped push, a Gitea-shaped push and a
+- [x] `POST /webhooks/{webhookId}` accepts a GitHub-shaped push, a Gitea-shaped push and a
       GitLab-shaped push for the same commit, creating one run each with the right branch and commit.
-- [ ] Invalid signature, missing signature, malformed body, oversized body and a payload with no
+- [x] Invalid signature, missing signature, malformed body, oversized body and a payload with no
       `ref`/`after` are each rejected with the specified status and no run; no response leaks whether
       the id exists, which signature scheme was tried, or any tenant detail.
-- [ ] Replay: the same delivery replayed ten times creates exactly one run; a body without a delivery
+- [x] Replay: the same delivery replayed ten times creates exactly one run; a body without a delivery
       id replayed within the window creates one run, and after the window a new run is allowed.
-- [ ] Branch filter: matching branch creates a run; non-matching is 202 `ignored: branch` with no
+- [x] Branch filter: matching branch creates a run; non-matching is 202 `ignored: branch` with no
       run and no error; `release/*` matches `release/1.2` and not `main`.
-- [ ] Delete events (`after` all zeros) create nothing and are 202.
-- [ ] The created run reports `TriggerType = Webhook`, the exact commit, the branch and no trigger
+- [x] Delete events (`after` all zeros) create nothing and are 202.
+- [x] The created run reports `TriggerType = Webhook`, the exact commit, the branch and no trigger
       user; it flows through claim/execute/log/artifacts with no webhook-specific path.
-- [ ] A webhook whose project has no eligible worker leaves the run `Queued` (normal behavior) and
+- [x] A webhook whose project has no eligible worker leaves the run `Queued` (normal behavior) and
       the delivery is still de-duplicated.
-- [ ] Secret lifecycle: create/rotate returns the plaintext once; a later read returns only
+- [x] Secret lifecycle: create/rotate returns the plaintext once; a later read returns only
       "configured / rotated at"; the plaintext never appears in logs or the run page.
-- [ ] Rate limit returns 429 with `Retry-After` and creates no run.
-- [ ] Project settings page: create, rotate, enable/disable, delete a webhook, showing the endpoint
+- [x] Rate limit returns 429 with `Retry-After` and creates no run.
+- [x] Project settings page: create, rotate, enable/disable, delete a webhook, showing the endpoint
       URL and the branch filter; the plaintext appears exactly once (creation/rotation response).
-- [ ] Tenant isolation: a member of another organization cannot create, list, rotate or delete
+- [x] Tenant isolation: a member of another organization cannot create, list, rotate or delete
       webhooks for a project; the Q-001 harness gains webhook probes.
 
 ## Subtasks
 
-- [ ] `Webhook` entity + migration + Owner/Member permission rules (project edit rights).
-- [ ] Endpoint + raw-body signature verification + normaliser + dedupe store + rate limiter +
+- [x] `Webhook` entity + migration + Owner/Member permission rules (project edit rights).
+- [x] Endpoint + raw-body signature verification + normaliser + dedupe store + rate limiter +
       run creation through the existing `RunService` path.
-- [ ] Webhook secret lifecycle endpoints/UI (show-once) and per-webhook delivery log (last delivery,
+- [x] Webhook secret lifecycle endpoints/UI (show-once) and per-webhook delivery log (last delivery,
       last outcome) for the settings page.
-- [ ] Tests (`Category=Webhooks`): three payload shapes, signature matrix, replay (id and hash),
+- [x] Tests (`Category=Webhooks`): three payload shapes, signature matrix, replay (id and hash),
       branch filter (exact and wildcard), delete event, run creation facts, rate limit, secret
       lifecycle, access control, tenancy probes.
 
@@ -152,6 +152,47 @@ Expected:
   absent (parking lot) — v1 supports overlapping runs per branch, which is what the PRD's branch
   filter describes and what the queue already handles.
 
+### 2026-11-13 — implemented, reviewed, reworked, accepted
+
+- **The card's own dependency exposed a real defect, and the claim contract grew to fix it.** The
+  review found that a webhook run recorded the pushed commit while the worker checked out the branch
+  tip: two pushes seconds apart (which this card explicitly allows to overlap) could leave run A
+  building commit B's tree and reporting A. `BuildRun.GitCommit` already said it is produced by the
+  worker's `rev-parse` and never inferred by the server, and that sentence had quietly stopped being
+  true for webhook runs. The claim now carries the commit, the worker checks that commit out and
+  re-reads HEAD, and a report that disagrees is refused with `git-commit-mismatch` before any write.
+  A test against a real repository moves the branch tip forward and proves the run still builds the
+  pinned commit with the later file absent.
+- **Verification is over raw bytes, by construction.** The endpoint reads the body in chunks and hands
+  a byte array to the signature check; there is no model to re-serialize. Two tests pin the
+  consequence: a compact signature over a re-formatted body is refused, and the same body signed
+  verbatim is accepted.
+- **Replay is a unique index, not a check.** Ten concurrent deliveries create one run; the losers read
+  the winner's row and answer 202. The first implementation sampled its freshness clock before
+  inserting, so a loser could judge the winner's row stale, delete it and queue a second run - a
+  failure that appeared once in a full run. Sampling moved after the insert and the freshness check
+  lost its negative-age short circuit, and there is now a clock-injection test that does not depend
+  on a race.
+- **The rate limiter's key is the id in the URL, not the delivery id.** Keying by delivery would make
+  a new id a fresh budget, and limiting only known ids would turn 404-versus-429 into an existence
+  oracle. A bucket exists per raw id with a bound and an expiry; the consequence - a known webhook out
+  of budget answers 429 to duplicates too - is the intended trade.
+- **Both sides of the money path are tested rather than asserted.** A chunked body without a length
+  is refused without being buffered (with production counters, not a test hook, and a mutation that
+  makes it red), and the rate limiter now runs before the body is read, so an oversized flood cannot
+  buy the work of reading it. A delivery whose run cannot be queued leaves no row, and the same
+  delivery id still builds afterwards - the failure mode that would otherwise silence a push forever.
+- Documented: the shallow-clone trade. A pinned commit must exist in the clone's history, so
+  `ZENKINS_GIT_DEPTH > 0` can make a checkout fail honestly when a pushed commit falls outside the
+  shallow window; it fails rather than silently building the branch tip.
+- Gate: `dotnet build -c Release` 0 warnings 0 errors; `Category=Webhooks` 69/0/0; full suite
+  883/0/0, zero skipped; `Category=Git` 48 unchanged; PostgreSQL contract gate exits 0 without a
+  running database.
+- Registered, not changed: the rate limiter has properties documented but no unit tests of its own
+  (bound, eviction, clock rollback failing open, and the fixed window's double burst at a boundary);
+  and the artifact temp-snapshot test is sensitive to a second `dotnet test` process on the same
+  machine, because the snapshot deliberately scans the whole temp tree instead of a private prefix.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -165,4 +206,6 @@ Expected:
   `src/Server/appsettings.json`, `tests/Zenkins.Tests/Webhooks/*`, `tests/Zenkins.Tests/Tenancy/*`
 - How to run/verify: `dotnet build -c Release`; `dotnet test -c Release --filter "Category=Webhooks"`;
   full suite; PostgreSQL contract gate.
-- Results: not run (card not started).
+- Results: accepted 2026-11-13 after two review rounds and one rework round. `dotnet build -c Release`
+  0 warnings 0 errors; `Category=Webhooks` 69/0/0; full suite 883/0/0, zero skipped; `Category=Git` 48
+  and `Category=Artifacts` 89 unchanged; PostgreSQL contract gate exits 0 without a running database.
