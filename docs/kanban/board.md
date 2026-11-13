@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [Q-002](issues/q-002-milestone-acceptance.md) | Milestone acceptance harness for v0.3 (real repo, real worker, real webhook) | P1 | M | none | F-011…F-017 |
 
 ## Done
 
@@ -40,3 +39,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-015](issues/f-015-step-records-env-secrets.md) | Step records, per-step logs, env, continue_on_error, secrets and redaction | P1 | 2026-11-13 |
 | [F-016](issues/f-016-artifacts.md) | Artifacts: safe local store, per-run download | P1 | 2026-11-13 |
 | [F-017](issues/f-017-webhook-trigger.md) | Webhook trigger: signature, branch filter, replay protection | P1 | 2026-11-13 |
+| [Q-002](issues/q-002-milestone-acceptance.md) | Milestone acceptance harness for v0.3 (real repo, real worker, real webhook) | P1 | 2026-11-13 |
