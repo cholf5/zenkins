@@ -64,6 +64,45 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
+### Two suites: the fast one, and the milestone acceptance harness
+
+The test project has a second, deliberately slow category. **`Category=Milestone`** is the milestone
+acceptance harness: it starts a real Server process, a real Worker process, a real Git repository (with
+a real `pipeline.lua`), a real webhook delivery and a real artifact download, so it proves the product
+end to end instead of proving its parts. It is not part of the fast loop:
+
+```bash
+dotnet build -c Release                                  # the harness runs the built binaries
+dotnet test -c Release --filter "Category!=Milestone"    # the fast suite
+dotnet test -c Release --filter "Category=Milestone"     # the milestone acceptance harness
+```
+
+| Suite | Filter | Needs | Typical duration |
+|---|---|---|---|
+| Fast | `Category!=Milestone` | `dotnet build -c Release` | the normal seconds-scale run |
+| Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s on the reference machine (6 tests) |
+
+`dotnet test` with no filter runs **both**. That is why the harness carries its own category, so the
+fast loop is one flag away and a machine without the Release build never pays for it: the milestone
+tests only ever launch the Release-build output of `Zenkins.Server.dll` and `Zenkins.Worker.dll` from
+the `src` project trees, and fail fast with a message naming `dotnet build -c Release` if those
+binaries are absent (the same rule the F-005/F-007 process E2Es follow).
+
+What the harness needs, and what it does not:
+
+- **A Release build first.** It runs the real binaries; it never compiles on the fly.
+- **`git`** on `PATH` (the fixture builds a real bare repository) and the **dotnet host** next to the
+  running runtime. **No network**: the fixture repository is a local `file://` bare clone, the Server
+  listens on a port the OS picks (`http://127.0.0.1:0`), and the webhook is delivered to that loopback
+  address by the test itself.
+- **Nothing in the repository.** Each test gets its own temporary root - SQLite database, Data
+  Protection key ring, artifact store, worker data directory and work root - and the harness deletes it
+  on dispose, after killing the Server and Worker process trees.
+- **One worker per host.** The no-worker case starts with none and starts it later on purpose.
+
+The harness asserts only observable state (database rows, HTTP responses, files on disk, process exit
+codes); it does not read worker-internal objects, so it cannot pass because of a mocked seam.
+
 ## 3. First run
 
 ```bash
