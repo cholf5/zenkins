@@ -4,7 +4,7 @@ title: Git: clone, fetch, checkout with HTTPS/SSH credentials
 type: feature
 priority: P1
 size: L
-status: todo
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
@@ -66,45 +66,45 @@ Decisions:
 
 ## Acceptance Criteria
 
-- [ ] `GitWorkspace` clones a repository into `work/{run-id}/repository` at a branch, resolves the
+- [x] `GitWorkspace` clones a repository into `work/{run-id}/repository` at a branch, resolves the
       SHA, and fails with a clear, credential-free message for: unknown branch, unreachable host,
       auth rejected, non-empty target directory, and a path that escapes the work root.
-- [ ] HTTPS-token authentication works end to end against a local HTTP git server fixture, with the
+- [x] HTTPS-token authentication works end to end against a local HTTP git server fixture, with the
       token supplied only through `GIT_ASKPASS`: a test asserts the token appears in neither the
       child's argv, nor `GIT_ASKPASS`'s path/content after cleanup, nor any captured log line.
-- [ ] SSH-key authentication is constructed correctly (unit-pinned command line and file
+- [x] SSH-key authentication is constructed correctly (unit-pinned command line and file
       permissions), and the key file is deleted after the operation.
-- [ ] `GitCredential` entity + migration + Owner-only create/rotate/delete; the worker fetch endpoint
+- [x] `GitCredential` entity + migration + Owner-only create/rotate/delete; the worker fetch endpoint
       returns material only for a run assigned to the calling worker; cross-tenant and foreign-run
       attempts are indistinguishable 404s.
-- [ ] `BuildRun.GitCommit` exists, is set from the accepted report, and is immutable afterwards (a
+- [x] `BuildRun.GitCommit` exists, is set from the accepted report, and is immutable afterwards (a
       second accepted report for the same run cannot rewrite it).
-- [ ] `checkout()` is available to the runtime as a host primitive (registered through F-011's
+- [x] `checkout()` is available to the runtime as a host primitive (registered through F-011's
       `RegisterHostFunction`, yielding while it works): it is idempotent — already at the run's
       commit is a no-op, otherwise it fetches and re-checks-out the pinned commit.
-- [ ] LFS behaviour is honest: with `git-lfs` present the fixture's pointer is materialised; without
+- [x] LFS behaviour is honest: with `git-lfs` present the fixture's pointer is materialised; without
       it the run logs one warning naming `git-lfs` and continues (no silent pointer files).
-- [ ] Submodule fixture checks out recursively with the credential environment applied.
-- [ ] A clone that exceeds the run's remaining budget is killed with the process tree and reported as
+- [x] Submodule fixture checks out recursively with the credential environment applied.
+- [x] A clone that exceeds the run's remaining budget is killed with the process tree and reported as
       `timeout` (F-009 semantics), leaving no partial git process behind.
-- [ ] Config knobs (`ZENKINS_GIT_DEPTH`, `ZENKINS_GIT_KNOWN_HOSTS`, per-operation timeout) are
+- [x] Config knobs (`ZENKINS_GIT_DEPTH`, `ZENKINS_GIT_KNOWN_HOSTS`, per-operation timeout) are
       parsed, validated, defaulted and pinned in `WorkerConfigurationTests`.
 
 ## Subtasks
 
-- [ ] `src/Worker/Git/{GitWorkspace,GitCredentialMaterial,GitCommand,AskPassScript}.cs` (new):
+- [x] `src/Worker/Git/{GitWorkspace,GitCredentialMaterial,GitCommand,AskPassScript}.cs` (new):
       argv-only invocation, environment construction, askpass/key materialisation and cleanup,
       commit resolution, LFS/submodule handling, timeout and kill.
-- [ ] `src/Worker/Git/GitLogFilter.cs`: registers credential values with the run's redaction filter
+- [x] `src/Worker/Git/GitLogFilter.cs`: registers credential values with the run's redaction filter
       before any git command runs (shares the filter F-015 extends; a minimal filter lands here).
-- [ ] Server: `GitCredential` entity + migration; `Secrets`-style protector purpose; Owner-only CRUD;
+- [x] Server: `GitCredential` entity + migration; `Secrets`-style protector purpose; Owner-only CRUD;
       worker credential-fetch endpoint with run/worker validation.
-- [ ] `BuildRun.GitCommit` + accepted-report extension (Server writes it once; conflict on rewrite).
-- [ ] Runtime primitive `checkout()` + registration seam (F-011 contract §6).
-- [ ] Fixtures: local bare repository builder, an HTTP git server (e.g. `git http-backend` behind the
+- [x] `BuildRun.GitCommit` + accepted-report extension (Server writes it once; conflict on rewrite).
+- [x] Runtime primitive `checkout()` + registration seam (F-011 contract §6).
+- [x] Fixtures: local bare repository builder, an HTTP git server (e.g. `git http-backend` behind the
       test host, or a Kestrel static handler with dumb HTTP) for the token path, an SSH-key case as
       a construction pin, an LFS repo and a submodule repo.
-- [ ] Tests (`Category=Git`): clone/branch/SHA, credential secrecy, SSH construction, idempotent
+- [x] Tests (`Category=Git`): clone/branch/SHA, credential secrecy, SSH construction, idempotent
       `checkout()`, LFS with/without the binary, submodules, failure messages, budget kill,
       config pins.
 
@@ -163,6 +163,46 @@ Expected:
   commit, then hand control to the pipeline definition) is F-014's first acceptance criterion —
   deliberately separated so this card can be reviewed as a self-contained, testable git layer.
 
+### 2026-11-13 — implemented, independently reviewed twice, accepted
+
+- The first review passed every acceptance criterion and found nine minors; six were closed before
+  the commit and three are recorded below. The delta review then checked the six against the source.
+- **The accepted-report window is closed, but a neighbouring one is not.** The state transition and
+  the commit stamp now share one transaction, so an interruption leaves neither and a redelivery
+  still completes. The test proves it with a trigger that aborts between the two writes; removing
+  the transaction makes it report `Expected Queued / Actual Running`. What remains is older than this
+  card: the transition to `Running` is still check-then-act (its `UPDATE` carries no status
+  predicate), so two accepted reports racing can both pass. The commit column stays correct because
+  the compare-and-set guards it, but the transition itself is not serialised. Worth closing when
+  F-014 drives the run loop.
+- Gates that exist because the obvious version would have been green and wrong: git silently ignores
+  `--depth` for a bare local path, so the shallow fixture goes through `file://` and asserts
+  `--is-shallow-repository`; the `git-lfs` stub asserts its own call log, because being on the PATH is
+  not the same as being invoked; the submodule fixture requires the same token for both repositories,
+  because the recording shim cannot see a child that execs its own binary - and the comment claiming
+  otherwise was removed.
+- Token leakage is asserted in seven forms (raw, URL-encoded, base64 with and without padding,
+  base64url, and the Basic header payload in both forms) across four places: the child's argv as
+  recorded at the process boundary, the shim log, every run-log line, and every file under the work
+  tree. The known blind spot: the shim records four credential variables, not the whole child
+  environment, so a token encoded into some other variable would go uncaught. No such path exists
+  today.
+- Gate: `dotnet build -c Release` 0 warnings 0 errors; `Category=Git` 48/0/0; full suite 570/0/0;
+  `Category=Lua` 94 and `Category=Secrets` 64 unchanged; `has-pending-model-changes` under the
+  PostgreSQL provider exits 0 without a running database; the migration, its designer and the
+  snapshot carry Npgsql type shapes with no SQLite type names; no new NuGet package.
+- Recorded, not changed: the non-empty-target and path-escape messages include the worker's absolute
+  path (the card only requires credential-free, and run logs expose worker paths anyway); `GitCredential`
+  has form-POST endpoints but no page, so a user cannot create one until the project-settings page
+  lands; and `GitCredentialClient`, `GitWorkspace` and `GitCheckoutHostPrimitive` have no production
+  caller yet, which is this card's stated scope.
+- A single `Category=Secrets` failure was seen once during development and never reproduced: five
+  sequential runs, two more inside the full suite, and a parallel stress probe all came back 64/0/0.
+  Structural causes were ruled out - every host gets its own temporary database, no shared fixtures,
+  no static or environment state, no fixed ports, no clock bounds in those tests. If it recurs, the
+  first suspect is the duplicate-name path in `SecretEndpointsTests`, which is the only place that
+  catches a `DbUpdateException` and reuses the context.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -176,4 +216,7 @@ Expected:
   expected), `tests/Zenkins.Tests/Git/*`, `tests/Zenkins.Tests/WorkerRuntime/*`
 - How to run/verify: `dotnet build -c Release`; `dotnet test -c Release --filter "Category=Git"`;
   full suite; PostgreSQL contract gate.
-- Results: not run (card not started).
+- Results: accepted 2026-11-13. `dotnet build -c Release` 0 warnings 0 errors; `Category=Git` 48/0/0;
+  full suite 570/0/0; `Category=Lua` 94/0/0 and `Category=Secrets` 64/0/0 unchanged. PostgreSQL
+  contract gate exits 0 with no running database; migration/designer/snapshot are Npgsql-shaped with
+  zero SQLite type names; zero new packages. Two review rounds, no major finding.
