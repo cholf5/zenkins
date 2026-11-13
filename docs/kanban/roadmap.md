@@ -49,14 +49,23 @@ Candidate tasks:
 Goal:
 - A real build runs from `pipeline.lua` in a Git repository, and a `git push` triggers it.
 
+Engine decision (was a spike in the original plan): **not a spike any more** — measured and pinned in
+[`docs/lua-runtime.md`](../lua-runtime.md) (MoonSharp 2.0.0; 3.0.0-beta.1 is behaviourally identical
+for our surface, so the stable tag wins; switch triggers are recorded there). The card that consumes
+it is `F-011`.
+
 Candidate tasks:
-- Git CLI integration: clone / fetch / checkout, HTTPS + SSH credentials, LFS/submodule compatibility.
-- Engine choice spike: MoonSharp 2.0.0 (.NET Standard 2.0, stable but unmaintained since 2016) vs 3.0.0-beta vs hand-rolled. Decide sandbox surface *before* writing the SDK.
-- Lua SDK: `pipeline`, `step`, `run`, `shell`, `checkout`, `artifact`, `env`, `secret`, `log`, `fail`, `is_windows/is_linux/is_macos`.
-- Linear step execution, `continue_on_error`, per-step timing and exit codes, pipeline/step env vars.
-- Secrets: encryption at rest, Owner-only management, `secret()` accessor, log redaction as defence-in-depth only.
-- Artifacts: local filesystem store, path-traversal-safe, downloadable per run.
-- Webhook endpoint: signature/secret verification, branch filter, replay protection, commit tracking.
+- Lua runtime host + sandbox, host-driven coroutine budgets, one `Script` per run. → `F-011`
+- Secrets: encrypted at rest, Owner-only management, never re-readable. → `F-012`
+- Git CLI integration: clone / fetch / checkout, HTTPS + SSH credentials, LFS/submodule compatibility. → `F-013`
+- Pipeline runs: `pipeline.lua` definition phase, strict validation, frozen spec, linear step execution. → `F-014`
+- Step records, per-step logs, `continue_on_error`, conditions, pipeline/step env, `secret()` and redaction. → `F-015`
+- Artifacts: local filesystem store, path-traversal-safe, downloadable per run. → `F-016`
+- Webhook endpoint: signature/secret verification, branch filter, replay protection, commit tracking. → `F-017`
+- Milestone acceptance harness (real repo, real worker, real webhook, real artifact). → `Q-002`
+
+Not in this milestone, deliberately: per-step log viewer controls (pause/search) stay v0.9; artifact
+retention and git object caching are parking-lot items.
 
 ### v0.9 — Management UI (Phase 5)
 
