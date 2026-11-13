@@ -4,7 +4,7 @@ title: Artifacts: safe local store, per-run download
 type: feature
 priority: P1
 size: M
-status: todo
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
@@ -59,38 +59,38 @@ Decisions:
 
 ## Acceptance Criteria
 
-- [ ] `Artifact` entity (`OrganizationId`, `RunId`, `Name`, `Kind` = `File|Directory`, `Status` =
+- [x] `Artifact` entity (`OrganizationId`, `RunId`, `Name`, `Kind` = `File|Directory`, `Status` =
       `Pending|Ready|Incomplete`, `FileCount`, `TotalBytes`, `ManifestJson`, `CreatedAt`) +
       migration, unique `(RunId, Name)`, cascade from the run; PostgreSQL contract gate clean.
-- [ ] `artifact(path)` works for a single file and a directory from a step; the file/directory lands
+- [x] `artifact(path)` works for a single file and a directory from a step; the file/directory lands
       in the store byte-identical (per-file SHA-256 verified after upload), and the run page lists it.
-- [ ] Path safety: `../../etc/passwd`, an absolute path, a symlink escaping the repository, and a
+- [x] Path safety: `../../etc/passwd`, an absolute path, a symlink escaping the repository, and a
       drive-qualified Windows path are each rejected with a message naming the path, on the worker and
       (independently) on the server when a hand-crafted upload claims such a path.
-- [ ] Every cap is enforced with the limit named in the error; no partial artifact is downloadable
+- [x] Every cap is enforced with the limit named in the error; no partial artifact is downloadable
       after a cap failure (status is not `Ready`).
-- [ ] Single-file download returns the original bytes and file name; directory download is a zip
+- [x] Single-file download returns the original bytes and file name; directory download is a zip
       whose entries restore the original relative tree; both are streamed (memory stays bounded —
       asserted by a large fixture, as F-008's log tests do).
-- [ ] Access control: a member of another organization gets 404 for both artifact kinds; an
+- [x] Access control: a member of another organization gets 404 for both artifact kinds; an
       unauthenticated request is 401/not-found per the app's existing convention; a `Pending` artifact
       is 404.
-- [ ] A worker that disconnects mid-upload leaves no downloadable artifact and no permanently
+- [x] A worker that disconnects mid-upload leaves no downloadable artifact and no permanently
       `Pending` row (sweeper path covered by a test).
-- [ ] Cancellation/deadline during `artifact()` kills the upload, fails the step with the F-009
+- [x] Cancellation/deadline during `artifact()` kills the upload, fails the step with the F-009
       reason, and leaves no `Ready` row.
-- [ ] `artifact()` called from the definition phase is refused with the same "available inside steps
+- [x] `artifact()` called from the definition phase is refused with the same "available inside steps
       only" error as F-014's other I/O primitives.
 
 ## Subtasks
 
-- [ ] `Artifact` entity + migration + store layout + sweeper for abandoned uploads.
-- [ ] Server: create/upload/finalize endpoints (worker token, run-scoped), per-file SHA-256
+- [x] `Artifact` entity + migration + store layout + sweeper for abandoned uploads.
+- [x] Server: create/upload/finalize endpoints (worker token, run-scoped), per-file SHA-256
       verification, manifest; download endpoints (single file / on-the-fly zip) with tenant checks.
-- [ ] Worker: `artifact()` primitive (F-011 registration, yielding), path resolution and symlink
+- [x] Worker: `artifact()` primitive (F-011 registration, yielding), path resolution and symlink
       rules, streaming multipart/chunk upload, cap pre-checks.
-- [ ] Run page: artifact list with size and download links.
-- [ ] Tests (`Category=Artifacts`): file/directory round-trip, traversal vectors (worker + server),
+- [x] Run page: artifact list with size and download links.
+- [x] Tests (`Category=Artifacts`): file/directory round-trip, traversal vectors (worker + server),
       caps, streaming memory bound, download fidelity, access control, abandoned upload, cancel,
       definition-phase refusal, tenancy probes for `Artifact`.
 
@@ -149,6 +149,49 @@ Expected:
   lot), and the upload protocol is chunked rather than a single multipart request so a future S3
   backend can implement the same three verbs.
 
+### 2026-11-13 — implemented, reviewed, reworked, accepted
+
+- **`artifact()` as a Lua call inside a step is unreachable, and the card now says so.** The contract
+  already fixes v0.3 as "the pipeline never calls an I/O primitive itself; the C# executor does", and
+  step bodies are argv. The delivered surface is therefore a declared step field,
+  `artifacts = { "bin/Release" }`, published by the executor after the step succeeds; the Lua
+  primitive is refused in both phases with a message pointing at the declaration. This is recorded as
+  a deviation from the card's wording rather than papered over.
+- **The path check had a real hole and the first review caught it.** The worker resolved only the
+  last component, so `artifact("link/secret.txt")` published a file from outside the repository
+  whenever the *parent* directory was the link - `File.ResolveLinkTarget` returns null for that case.
+  Resolution is now per segment: each component is canonicalised, compared against the checkout root,
+  and becomes the parent for the next one, so an intermediate or chained link is caught, while a link
+  that stays inside the repository still publishes. The server applies the same rules independently
+  to the relative paths it receives.
+- **A metric that could not fail.** Memory boundedness was asserted with `PeakBufferBytes`, whose only
+  writer was the configured copy-buffer constant - a value compared against itself. Loading the whole
+  file into memory first passed every assertion. It is now a measured heap delta sampled per chunk,
+  with a paired test that runs a streamed copy and a buffered copy through the same production
+  telemetry: the streamed one stays under the bound and the buffered one exceeds it.
+- Gates that would have been green and wrong: "no temp zip" checks a recursive snapshot of the OS
+  temp tree before, during and after the download instead of looking for a file name that would never
+  match; "the upload was cancelled mid-flight" cancels after the server has received bytes rather
+  than before the call starts; "the sweeper only takes stale rows" has a negative case for a fresh
+  Pending row and for one created long ago but written recently, and is aged by last write.
+- Two more real defects were fixed on the way: a non-cancellation transport failure during upload
+  left the step Running forever (it now fails the step with `artifact-failed`), and the sweeper aged
+  rows by creation time, which would have swept a legitimate large upload out from under itself.
+- Repository hygiene: test hosts point the store at their own temp directories, because booting the
+  real program from `src/Server` otherwise created `src/Server/App_Data/artifacts` on every suite
+  run - hidden by the existing `**/App_Data/` ignore rule, so a plain `git status` reported clean.
+  A guard test asserts the resolved root is never inside the repository.
+- `.gitignore`'s unanchored `artifacts/` was also swallowing `src/Server/Artifacts`,
+  `src/Worker/Artifacts` and `tests/**/Artifacts`; anchoring it to `/artifacts/` keeps the publish
+  output ignored without silently dropping this feature's source.
+- Gate: `dotnet build -c Release` 0 warnings 0 errors; `Category=Artifacts` 87/0/0; full suite
+  801/0/0, zero skipped; `Category=Pipeline` 93, `Steps` 33, `Lua` 94, `Secrets` 64, `Git` 48,
+  `TenantIsolation` 68 unchanged; PostgreSQL contract gate exits 0 without a running database.
+- Recorded, not changed: `PeakChunkBytes` can only ever prove an upper bound (a read never returns
+  more than the buffer it was given), so it catches "the whole artifact as one read" and nothing
+  else - the heap delta is the real discriminator, and the telemetry comment says so now. Retention
+  and disposal remain out of scope, as the card said.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -162,4 +205,7 @@ Expected:
   `tests/Zenkins.Tests/Artifacts/*`, `tests/Zenkins.Tests/Tenancy/*`
 - How to run/verify: `dotnet build -c Release`; `dotnet test -c Release --filter "Category=Artifacts"`;
   full suite; PostgreSQL contract gate.
-- Results: not run (card not started).
+- Results: accepted 2026-11-13 after two review rounds and two rework rounds. `dotnet build -c Release`
+  0 warnings 0 errors; `Category=Artifacts` 87/0/0; full suite 801/0/0, zero skipped; six categories
+  unchanged; PostgreSQL contract gate exits 0 without a running database; a suite run leaves no
+  artifact directory inside the repository.
