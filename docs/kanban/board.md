@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [D-003](issues/d-003-project-tabs-git-credentials.md) | Project detail as tabs, with git credentials in settings | P1 | L | none | F-003, F-012, F-013, F-014, F-017 |
 | [D-004](issues/d-004-run-log-viewer.md) | Run detail: pause, search and per-step log filtering | P1 | M | none | F-008, F-009, F-015 |
 | [Q-004](issues/q-004-recovery-acceptance.md) | Recovery acceptance: server restart, worker crash, honest Lost | P1 | L | none | F-005, F-006, F-009, F-010, Q-002 |
 | [D-005](issues/d-005-workers-page.md) | Workers page: detail, current runs and safe controls | P2 | M | none | F-004, F-006, F-010, D-002 |
@@ -46,3 +45,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-017](issues/f-017-webhook-trigger.md) | Webhook trigger: signature, branch filter, replay protection | P1 | 2026-11-13 |
 | [Q-002](issues/q-002-milestone-acceptance.md) | Milestone acceptance harness for v0.3 (real repo, real worker, real webhook) | P1 | 2026-11-13 |
 | [D-002](issues/d-002-dashboard.md) | Dashboard: running, queued, workers and recent failures | P1 | 2026-11-14 |
+| [D-003](issues/d-003-project-tabs-git-credentials.md) | Project detail as tabs, with git credentials in settings | P1 | 2026-11-14 |
