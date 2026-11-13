@@ -201,7 +201,13 @@ Expected:
   live on `LuaRuntimeOptions` instead, pinned by `tests/Zenkins.Tests/Lua/LuaRuntimeKnobsTests`,
   because neither knob is an environment variable. The intent — defaults pinned with a reason — is
   met; the location is not the one the subtask named.
-- **Follow-ups handed to F-014** (found in review, none blocking this card):
+- **Follow-ups handed to F-014** (found in review, none blocking this card). Items 1-3 were closed in
+  57b9658 — the seam now carries a typed, engine-free `LuaHostValue` (string, number, boolean, nil,
+  and table), so a boolean answer stays a boolean and an exit code compares to zero; tables are built
+  inside the executing `Script`, which MoonSharp enforces (a table from another script raises
+  "resources owned by different scripts") and the sequence/map/nested cases read back from Lua;
+  `AdditionalModules` is `internal` behind `InternalsVisibleTo`; the cancellation bound is 250 ms.
+  Items 4-5 are the remaining F-014 prerequisites:
   1. Host primitives exchange values with the script as visible text (`string[]` in,
      `DynValue.NewString` out). That is narrower than [`docs/lua-runtime.md`](../../lua-runtime.md)
      §5.2 and carries a silent trap: a boolean reply arrives as the string `"false"`, which is truthy
@@ -214,7 +220,19 @@ Expected:
      with `InternalsVisibleTo` (this repository already does that for the tests) before a pipeline
      card references it.
   3. `LuaCancellationTests` accepts a 1000 ms upper bound on the pure-compute case; the constraint
-     that actually bites is the frozen call count. Optional tightening to about 250 ms.
+     that actually bites is the frozen call count. Optional tightening to about 250 ms. (Done: 250 ms.)
+  4. **The argument direction is scalars only, and a table argument arrives as `nil`.** That is a
+     deliberate reading of [`docs/lua-runtime.md`](../../lua-runtime.md) §5.2 — richer values are the
+     ones the host builds through the seam — but it fails silently: a script calling
+     `run({ env = ... })` gets `nil` instead of an error. Before F-014 accepts a table argument, either
+     extend the argument mapping (which needs rules for mixed, numeric and cyclic keys) or make the
+     prelude reject a table argument loudly. §5.2 should also say so in one sentence.
+  5. **Nothing structured comes back out.** `LuaExecutionResult.Value` is still a `string?`, rendered
+     with `ToPrintString`, while §6.1 describes `pipeline{}` as "the script builds a spec table, the
+     host validates and serialises it". The seam has no path for that today: arguments turn tables
+     into `nil` and results are text. F-014 must widen the seam first — either the result carries a
+     `LuaHostValue`, or `ToHostValue` learns tables plus a way to read them. This is the largest
+     planning item F-011 hands over.
 
 ## Bugs
 
