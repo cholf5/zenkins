@@ -75,3 +75,7 @@ src/                     # .NET projects (Server, Shared, Worker)
 ## License
 
 TBD — MIT or Apache-2.0 under consideration (see roadmap parking lot).
+
+Zenkins bundles third-party components; their licenses and attributions are recorded in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) — currently the Lua engine
+(MoonSharp 2.0.0, BSD-3-Clause, with the MIT-licensed parts it is built from).

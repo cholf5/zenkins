@@ -50,6 +50,15 @@
       WorkerRuntimeConfigTests).
     -->
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.15" />
+    <!--
+      F-011: the pipeline engine, per docs/lua-runtime.md §1/§8. Pinned to the exact stable release
+      (2.0.0, not 3.0.0-beta.1) because the beta is a single prerelease and reproduces the same
+      pcall-with-__call defect the stable build has, so the prerelease buys no behaviour we depend on
+      (measured in docs/lua-runtime.md §2). 2.0.0 has 0 transitive dependencies and netstandard1.6 is
+      its best asset for net10.0, so the pin adds nothing for NuGet audit to flag. Referenced by
+      Zenkins.Worker only: the Server never runs a script and Zenkins.Shared stays engine-free.
+    -->
+    <PackageVersion Include="MoonSharp" Version="2.0.0" />
   </ItemGroup>
 
 </Project>

@@ -10,6 +10,9 @@
          only - it must not (and does not) reference the ASP.NET Core shared framework; pinned by
          WorkerRuntimeConfigTests. -->
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <!-- F-011: the Lua engine. Behind ILuaRuntime (src/Worker/Lua) so no MoonSharp type appears in
+         the pipeline contracts; the pin and its rationale live in Directory.Packages.props. -->
+    <PackageReference Include="MoonSharp" />
   </ItemGroup>
 
   <ItemGroup>
