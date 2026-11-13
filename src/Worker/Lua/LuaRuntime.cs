@@ -35,11 +35,12 @@ public sealed class LuaRuntimeOptions
 
     /// <summary>
     /// Extra engine modules composed on top of the contract composition
-    /// (<c>docs/lua-runtime.md</c> §3). Production always leaves this <see cref="CoreModules.None"/>:
-    /// it exists so the registry-hazard fixture can compose <see cref="CoreModules.Dynamic"/> and
-    /// prove the post-construction hardening closes <c>package.loaded</c> anyway (§3.1, fixture 12b).
+    /// (<c>docs/lua-runtime.md</c> §3). Internal on purpose: it exists only so the registry-hazard
+    /// fixture can compose <see cref="CoreModules.Dynamic"/> and prove the post-construction hardening
+    /// closes <c>package.loaded</c> anyway (§3.1, fixture 12b). Production code cannot opt into extra
+    /// modules by accident; the test assembly sees it through <c>InternalsVisibleTo</c>.
     /// </summary>
-    public CoreModules AdditionalModules { get; init; } = CoreModules.None;
+    internal CoreModules AdditionalModules { get; init; } = CoreModules.None;
 }
 
 /// <summary>
@@ -207,8 +208,9 @@ public sealed class LuaRuntime : ILuaRuntime
 
                         var answer = pending.Dequeue().ResolveAnswer();
                         // The I/O already completed; Resume happens on this (the owning) thread and
-                        // never inside an await/continuation (§5.1).
-                        result = coroutine.Resume(DynValue.NewString(answer ?? string.Empty));
+                        // never inside an await/continuation (§5.1). The value keeps its Lua type:
+                        // a boolean stays a boolean and a number stays a number (§5.2).
+                        result = coroutine.Resume(ToDynValue(answer, script));
                         break;
 
                     default:
@@ -284,7 +286,7 @@ public sealed class LuaRuntime : ILuaRuntime
         foreach (var (functionName, primitive) in primitives)
         {
             script.Globals[functionName] = new CallbackFunction(
-                (_, args) => InvokePrimitive(functionName, primitive, args, pending, sentinelValue),
+                (_, args) => InvokePrimitive(functionName, primitive, args, pending, sentinelValue, script),
                 functionName);
         }
 
@@ -296,24 +298,93 @@ public sealed class LuaRuntime : ILuaRuntime
         Func<LuaHostCall, LuaHostResult> primitive,
         CallbackArguments args,
         Queue<LuaHostResult> pending,
-        DynValue sentinel)
+        DynValue sentinel,
+        Script script)
     {
-        var arguments = new string[args.Count];
+        var arguments = new LuaHostValue[args.Count];
         for (var i = 0; i < args.Count; i++)
         {
-            arguments[i] = args[i].ToPrintString();
+            arguments[i] = ToHostValue(args[i]);
         }
 
         var result = primitive(new LuaHostCall(name, arguments));
         if (!result.IsSuspended)
         {
-            return result.ImmediateValue is null ? DynValue.Nil : DynValue.NewString(result.ImmediateValue);
+            return ToDynValue(result.ImmediateValue, script);
         }
 
         // Record the request before returning the yield: the driver answers the request it dequeues,
         // and the payload it shows the host is the sentinel, never the request itself (§5.2).
         pending.Enqueue(result);
         return DynValue.NewYieldReq([sentinel]);
+    }
+
+    /// <summary>
+    /// A script argument as a seam value. The scalar kinds keep their Lua type; anything else (table,
+    /// function, user-data) is not part of the argument surface and crosses as <c>nil</c> rather than
+    /// being coerced into a string a primitive could mistake for a scalar. Tables travel the other way
+    /// (host → script) where §5.2 defines them.
+    /// </summary>
+    private static LuaHostValue ToHostValue(DynValue value) => value.Type switch
+    {
+        DataType.Nil or DataType.Void => LuaHostValue.Nil,
+        DataType.String => LuaHostValue.FromString(value.String),
+        DataType.Number => LuaHostValue.FromNumber(value.Number),
+        DataType.Boolean => LuaHostValue.FromBoolean(value.Boolean),
+        _ => LuaHostValue.Nil,
+    };
+
+    /// <summary>
+    /// A seam value as the Lua value the coroutine is resumed with (or returns). This switch is the
+    /// reason a primitive's <c>false</c> reaches Lua as <c>false</c> instead of the truthy string
+    /// <c>"false"</c>, and a table arrives as a Lua table instead of a string or nil (§5.2).
+    /// </summary>
+    private static DynValue ToDynValue(LuaHostValue value, Script script) => value.Kind switch
+    {
+        LuaHostValueKind.Nil => DynValue.Nil,
+        LuaHostValueKind.String => DynValue.NewString(value.Text),
+        LuaHostValueKind.Number => DynValue.NewNumber(value.Number),
+        LuaHostValueKind.Boolean => DynValue.NewBoolean(value.Boolean),
+        LuaHostValueKind.Table => DynValue.NewTable(BuildTable(value.Table, script)),
+        _ => throw new InvalidOperationException(
+            $"Unknown {nameof(LuaHostValue)} kind '{value.Kind}'."),
+    };
+
+    /// <summary>
+    /// Materialises a seam table as a Lua table for the resume that carries it.
+    /// <para>
+    /// <b>Lifetime (§5.1).</b> The table is built here, inside the executing <c>Script</c>, and handed
+    /// to exactly one <c>Resume</c>. It is never cached on the request, never reused for a later
+    /// resume and never pooled across executions - one <c>Script</c> per execution means a table value
+    /// cannot outlive the script it belongs to.
+    /// </para>
+    /// <para>
+    /// <b>Shape.</b> A sequence gets integer keys <c>1..n</c> with no holes (so <c>#v</c> is the
+    /// description's length and <c>ipairs</c> walks it in order); a map gets its string keys verbatim.
+    /// Nested values recurse through <see cref="ToDynValue"/>, so a table inside a table is the same
+    /// code path.
+    /// </para>
+    /// </summary>
+    private static Table BuildTable(LuaHostTable table, Script script)
+    {
+        var luaTable = new Table(script);
+        if (table.IsSequence)
+        {
+            var items = table.Items;
+            for (var i = 0; i < items.Count; i++)
+            {
+                luaTable.Set(i + 1, ToDynValue(items[i], script));
+            }
+        }
+        else
+        {
+            foreach (var entry in table.Entries)
+            {
+                luaTable.Set(entry.Key, ToDynValue(entry.Value, script));
+            }
+        }
+
+        return luaTable;
     }
 
     /// <summary>

@@ -53,7 +53,7 @@ public sealed class LuaConcurrencyTests
                 _ => LuaHostResult.Suspend(() =>
                 {
                     barrier.SignalAndWait(TimeSpan.FromSeconds(10));
-                    return "ok";
+                    return LuaHostValue.FromString("ok");
                 }));
 
             var result = LuaSandboxProbe.Run(runtime, "local a = wait() return 'done:' .. a");

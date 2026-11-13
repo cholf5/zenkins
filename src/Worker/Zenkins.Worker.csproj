@@ -19,4 +19,11 @@
     <ProjectReference Include="../Shared/Zenkins.Shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- F-011 follow-up: the conformance fixture composes one extra engine module through
+         LuaRuntimeOptions.AdditionalModules, which stays internal so production cannot opt into
+         extra modules by accident. Same pattern as src/Server/Zenkins.Server.csproj. -->
+    <InternalsVisibleTo Include="Zenkins.Tests" />
+  </ItemGroup>
+
 </Project>

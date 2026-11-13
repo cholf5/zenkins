@@ -45,7 +45,7 @@ public sealed class LuaBudgetTests
             _ =>
             {
                 Interlocked.Increment(ref calls);
-                return LuaHostResult.Suspend(() => "ok");
+                return LuaHostResult.Suspend(() => LuaHostValue.FromString("ok"));
             });
 
         var result = LuaSandboxProbe.Run(runtime, "while true do tick() end", TimeSpan.FromMilliseconds(150));

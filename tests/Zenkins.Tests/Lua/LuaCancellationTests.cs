@@ -28,7 +28,12 @@ public sealed class LuaCancellationTests
         stopwatch.Stop();
 
         Assert.Equal(LuaExecutionOutcome.Canceled, result.Outcome);
-        Assert.InRange(stopwatch.ElapsedMilliseconds, 0, 1_000);
+
+        // Tightened from 1000 ms: cancellation is observed at the next yield point (every 10 000 VM
+        // instructions), so a compute-only loop must stop within a small multiple of the 50 ms token
+        // delay, not within a second. The frozen-call-count assertion below is the primary check; this
+        // bound catches a driver that only notices the token at a host call.
+        Assert.InRange(stopwatch.ElapsedMilliseconds, 0, 250);
         Assert.Equal("still-works", LuaSandboxProbe.Run(runtime, "return 'still-works'").Value);
     }
 
@@ -42,7 +47,7 @@ public sealed class LuaCancellationTests
             _ =>
             {
                 Interlocked.Increment(ref calls);
-                return LuaHostResult.Suspend(() => "exit=0");
+                return LuaHostResult.Suspend(() => LuaHostValue.FromString("exit=0"));
             });
 
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
