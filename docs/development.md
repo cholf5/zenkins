@@ -274,6 +274,24 @@ dotnet ef database update --project src/Server
 The same two variables (or `ConnectionStrings__Default` alone for SQLite) are what the deployed
 process needs; nothing else about the production run differs from §6's published-run example.
 
+### Artifact store
+
+Run artifacts (PRD §3.7, card F-016) live in a local directory, not the database. Six keys, all in
+[`src/Server/appsettings.json`](../src/Server/appsettings.json):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Artifacts:RootPath` | `App_Data/artifacts` | Where the bytes live, relative to the content root (an absolute path wins). Layout: `{root}/{organizationId}/{runId}/{artifactId}/{relativePath}` - the database row stores only the id. **Back this up with `App_Data/zenkins.db`**: the file names embed the ids a restore needs, and the store is created and written at startup, so an unwritable root fails the process immediately (like the Data Protection key ring). |
+| `Artifacts:MaxFileBytes` | `536870912` (512 MB) | Largest single file. An upload over it fails the step and names the key. |
+| `Artifacts:MaxArtifactBytes` | `2147483648` (2 GB) | Largest total of one artifact. |
+| `Artifacts:MaxFiles` | `20000` | Most files one artifact may hold. |
+| `Artifacts:SweepIntervalSeconds` | `60` | How often the sweeper closes abandoned uploads and removes the bytes of deleted runs. |
+| `Artifacts:PendingTimeoutMinutes` | `30` | How long an artifact may stay `Pending` with no write before the sweeper marks it `Incomplete`. Measured from the last write, so a legitimately slow large upload is not touched. |
+
+The caps are enforced by the server on every request (the worker also pre-checks with the same keys to
+fail early; a worker's console app reads them as `Artifacts__MaxFileBytes`). There is **no retention
+policy** in v1: an artifact lives until its run is deleted.
+
 ### Reverse proxy (TLS termination)
 
 `X-Forwarded-Proto` is what makes `Request.IsHttps` true behind a proxy, and therefore what makes the

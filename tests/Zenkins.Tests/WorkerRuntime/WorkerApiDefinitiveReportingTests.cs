@@ -238,7 +238,7 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
                     _accepted.AddOrUpdate(reportedRun, 1, (_, count) => count + 1);
                     var acceptStatus = AcceptStatus.GetValueOrDefault(reportedRun, HttpStatusCode.OK);
                     return acceptStatus is HttpStatusCode.OK
-                        ? Json(acceptStatus, """{"status":"Running","deadlineAt":"2026-11-13T13:00:00Z"}""")
+                        ? Json(acceptStatus, """{"status":"Running","deadlineAt":"2099-11-13T13:00:00Z"}""")
                         : new HttpResponseMessage(acceptStatus);
                 }
 

@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zenkins.Shared.Artifacts;
 using Zenkins.Shared.RunCancellation;
 using Zenkins.Worker.Git;
 
@@ -138,6 +140,13 @@ public sealed class WorkerApiClient(HttpClient httpClient)
 {
     /// <summary>Per-request ceiling: a hung server must not hold the loop forever.</summary>
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The ceiling of one artifact file upload (card F-016). Deliberately much larger than
+    /// <see cref="RequestTimeout"/>: moving a build product is not a control call, and the run's own
+    /// deadline plus its cancellation token are what bound it in practice.
+    /// </summary>
+    private static readonly TimeSpan ArtifactUploadTimeout = TimeSpan.FromMinutes(30);
 
     /// <summary>Single-use registration token → per-worker token (shown/stored once).</summary>
     public async Task<WorkerRegistrationResponse> RegisterAsync(
@@ -373,8 +382,7 @@ public sealed class WorkerApiClient(HttpClient httpClient)
                 (int)inFlight.Response.StatusCode);
     }
 
-    /// <summary>
-    /// Fetches one decrypted secret for the run this worker is executing (card F-015). A 404 means "no value
+    /// <summary>Fetches one decrypted secret for the run this worker is executing (card F-015). A 404 means "no value
     /// for this run" - an unknown name, another organization's name, or a run that is not this worker's are
     /// deliberately indistinguishable - and answers <see langword="null"/>; a dead token is definitive.
     /// </summary>
@@ -404,6 +412,145 @@ public sealed class WorkerApiClient(HttpClient httpClient)
             isRunReport: true);
         return await inFlight.Response.Content
             .ReadFromJsonAsync(WorkerJsonContext.Default.WorkerSecretResponse, inFlight.Timeout);
+    }
+
+    // ---------------------------------------------------------------------
+    // Artifacts (card F-016): create → per-file stream → finalize
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Reserves one artifact row for a run this worker executes (card F-016). The answer is the artifact id
+    /// every later verb addresses; the row is <c>Pending</c> until <see cref="FinalizeArtifactAsync"/>.
+    /// </summary>
+    public async Task<ArtifactCreateResponse> CreateArtifactAsync(
+        string workerToken,
+        Guid runId,
+        ArtifactCreateRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/runs/{runId}/artifacts",
+                workerToken,
+                request,
+                WorkerJsonContext.Default.ArtifactCreateRequest),
+            cancellationToken);
+        await EnsureArtifactSuccessAsync(inFlight.Response, "reserving an artifact", inFlight.Timeout);
+        return await inFlight.Response.Content
+            .ReadFromJsonAsync(WorkerJsonContext.Default.ArtifactCreateResponse, inFlight.Timeout)
+            ?? throw new ArtifactUploadRejectedException(
+                "the server returned an empty artifact response.",
+                (int)inFlight.Response.StatusCode);
+    }
+
+    /// <summary>
+    /// Streams one file of a pending artifact as the raw request body (card F-016). The declared relative path
+    /// and SHA-256 travel as query parameters; the body is the file's bytes, streamed from disk - never
+    /// buffered, never multipart. The server re-validates the path and recomputes the hash.
+    /// </summary>
+    public async Task<ArtifactFileEntry> UploadArtifactFileAsync(
+        string workerToken,
+        Guid runId,
+        Guid artifactId,
+        string relativePath,
+        string sha256,
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        await using var file = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        var path = $"api/workers/runs/{runId}/artifacts/{artifactId}/files"
+            + $"?path={Uri.EscapeDataString(relativePath)}&sha256={Uri.EscapeDataString(sha256)}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new StreamContent(file, 64 * 1024),
+        };
+        request.Content.Headers.ContentLength = file.Length;
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", workerToken);
+
+        // An upload is allowed a much longer ceiling than a JSON report: the per-request 10s limit is about
+        // a hung control call, not about moving a 512 MB build product. The run's own cancellation token
+        // still bounds it (a cancel or the deadline kills the upload mid-flight).
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ArtifactUploadTimeout);
+        using var response = await httpClient.SendAsync(request, timeout.Token);
+        await EnsureArtifactSuccessAsync(response, "uploading an artifact file", timeout.Token);
+        return await response.Content
+            .ReadFromJsonAsync(WorkerJsonContext.Default.ArtifactFileEntry, timeout.Token)
+            ?? throw new ArtifactUploadRejectedException(
+                "the server returned an empty artifact file response.",
+                (int)response.StatusCode);
+    }
+
+    /// <summary>
+    /// Publishes the artifact: the server verifies the announced set against what it stores, writes the
+    /// manifest and flips the row to <c>Ready</c> (card F-016). A refusal means the artifact is not
+    /// downloadable - the caller fails the step.
+    /// </summary>
+    public async Task<ArtifactFinalizeResponse> FinalizeArtifactAsync(
+        string workerToken,
+        Guid runId,
+        Guid artifactId,
+        ArtifactFileEntry[] files,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/runs/{runId}/artifacts/{artifactId}/finalize",
+                workerToken,
+                new ArtifactFinalizeRequest(files),
+                WorkerJsonContext.Default.ArtifactFinalizeRequest),
+            cancellationToken);
+        await EnsureArtifactSuccessAsync(inFlight.Response, "finalizing an artifact", inFlight.Timeout);
+        return await inFlight.Response.Content
+            .ReadFromJsonAsync(WorkerJsonContext.Default.ArtifactFinalizeResponse, inFlight.Timeout)
+            ?? throw new ArtifactUploadRejectedException(
+                "the server returned an empty artifact finalize response.",
+                (int)inFlight.Response.StatusCode);
+    }
+
+    /// <summary>
+    /// The artifact calls' status handling: every non-success answer carries the server's own message (which
+    /// names a path or a cap), so the step's log line is the server's explanation rather than a code.
+    /// </summary>
+    private static async Task EnsureArtifactSuccessAsync(
+        HttpResponseMessage response,
+        string what,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var message = $"the server answered {(int)response.StatusCode} while {what}.";
+        try
+        {
+            var body = await response.Content.ReadFromJsonAsync(
+                WorkerJsonContext.Default.WorkerArtifactErrorResponse,
+                cancellationToken);
+            if (!string.IsNullOrWhiteSpace(body?.Message))
+            {
+                message = body.Message;
+            }
+        }
+        catch (JsonException)
+        {
+            // A non-JSON body (a proxy error page) leaves the generic message in place.
+        }
+        catch (NotSupportedException)
+        {
+        }
+
+        throw new ArtifactUploadRejectedException(message, (int)response.StatusCode);
     }
 
     private static HttpRequestMessage CreateRequest(HttpMethod method, string path, string token)
@@ -542,6 +689,18 @@ public sealed class WorkerApiClient(HttpClient httpClient)
     private static bool IsDefinitiveRunReportStatus(int statusCode) => statusCode is 400 or 404 or 409 or 410;
 }
 
+/// <summary>A refused artifact call (card F-016): the server's own message, so the step's log line names the
+/// path or the cap the server refused. Definitive by definition - the replayed request would be refused
+/// again - so the publisher fails the step instead of retrying.</summary>
+public sealed class ArtifactUploadRejectedException(string message, int statusCode) : Exception(message)
+{
+    /// <summary>The HTTP status the server answered.</summary>
+    public int StatusCode { get; } = statusCode;
+}
+
+/// <summary>The artifact endpoint's refusal body (see the server's ArtifactEndpoints).</summary>
+public sealed record WorkerArtifactErrorResponse(string Error, string Message);
+
 /// <summary>Source-generated JSON (trim-safe; the Worker must stay small and AOT-friendly).</summary>
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(WorkerRegistrationRequest))]
@@ -559,6 +718,12 @@ public sealed class WorkerApiClient(HttpClient httpClient)
 [JsonSerializable(typeof(WorkerStepResponse))]
 [JsonSerializable(typeof(WorkerSecretRequest))]
 [JsonSerializable(typeof(WorkerSecretResponse))]
+[JsonSerializable(typeof(ArtifactCreateRequest))]
+[JsonSerializable(typeof(ArtifactCreateResponse))]
+[JsonSerializable(typeof(ArtifactFileEntry))]
+[JsonSerializable(typeof(ArtifactFinalizeRequest))]
+[JsonSerializable(typeof(ArtifactFinalizeResponse))]
+[JsonSerializable(typeof(WorkerArtifactErrorResponse))]
 [JsonSerializable(typeof(WorkerCancelRequest))]
 internal sealed partial class WorkerJsonContext : System.Text.Json.Serialization.JsonSerializerContext
 {

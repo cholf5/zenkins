@@ -239,8 +239,14 @@ public sealed class PipelineDefinitionRunner
     /// so the script (and whoever reads the run log) learns the rule instead of meeting a null reference.
     /// </summary>
     private static LuaHostResult RefuseIo(string name) => LuaHostResult.Fail(
-        $"{name}() is available inside steps only: a pipeline definition describes the steps, "
-        + "it does not execute anything.");
+        name == "artifact"
+            // Card F-016: steps are C# argv, so a Lua artifact() call is unreachable by construction - the
+            // declarative field on the step is the only way to publish. The message says exactly that instead
+            // of leaving a pipeline author guessing (and it keeps the shared "inside steps only" wording).
+            ? "artifact() is available inside steps only: declare the paths on the step "
+                + "(artifacts = { \"bin/Release\" }) and the executor publishes them after the step succeeds."
+            : $"{name}() is available inside steps only: a pipeline definition describes the steps, "
+                + "it does not execute anything.");
 
     /// <summary>
     /// Resolves <paramref name="relativePath"/> inside <paramref name="repositoryPath"/>, refusing a

@@ -7,6 +7,7 @@ using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Git;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
+using Zenkins.Server.Artifacts;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Tenancy;
@@ -792,6 +793,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // column. The configuration lives next to the feature (src/Server/Git) so the model grows by one
         // call here, not by two blocks; the tenant predicate is installed there against this instance.
         modelBuilder.ConfigureGitCredentials(this);
+
+        // F-016: the artifact entity (tenant-owned, unique (RunId, Name), cascade from the run). Same
+        // shape as the call above: the storage rules live next to the feature (src/Server/Artifacts).
+        modelBuilder.ConfigureArtifacts(this);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

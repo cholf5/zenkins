@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using Zenkins.Shared.Pipelines;
+using Zenkins.Worker.Artifacts;
 using Zenkins.Worker.Git;
 using Zenkins.Worker.Lua;
 
@@ -89,6 +90,14 @@ public sealed class PipelineRunOptions
     /// so a <c>secret()</c> reference fails the step that made it instead of silently becoming empty.
     /// </summary>
     public IRunSecretSource Secrets { get; init; } = EmptyRunSecretSource.Instance;
+
+    /// <summary>
+    /// The run's artifact publisher (card F-016). The executor publishes the paths a step declares
+    /// (<c>artifacts = { "bin/Release" }</c>) after its process exits 0, with this call's cancellation token,
+    /// so a cancel or the deadline kills the upload too. Null means "this run publishes no artifacts"; a step
+    /// that declares one then fails rather than pretending it was published.
+    /// </summary>
+    public IRunArtifactPublisher? Artifacts { get; init; }
 
     /// <summary>
     /// Why this run's cancellation fired, asked at the instant a step is killed (card F-015): a user cancel
@@ -505,6 +514,60 @@ public sealed class PipelineRunner
             var duration = stopwatch.Elapsed.TotalSeconds.ToString("0.0#", CultureInfo.InvariantCulture);
             Log($"zenkins: step {position} \"{step.Name}\" exited with code {exitCode} after {duration}s.");
 
+            // F-016: a step that succeeded publishes what it declared. A failing step publishes nothing, and a
+            // refused path or a breached cap fails the step with the closed artifact reason (the log line names
+            // the path or the limit) - the artifact is never truncated and never silently skipped.
+            if (exitCode == 0 && step.ArtifactPaths.Length > 0)
+            {
+                string? artifactFailure;
+                try
+                {
+                    artifactFailure = await PublishArtifactsAsync(step, position, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The run was canceled (or its deadline passed) while the upload was in flight: the server's
+                    // upload was aborted with this token, the step records why, and the run reports through
+                    // F-009's canceled endpoint. No Ready row is left behind - the reserved row stays Pending and
+                    // the sweeper closes it.
+                    var cancellationReason = _options.CancellationFailureReason?.Invoke()
+                        ?? PipelineStepFailureReasons.Canceled;
+                    Log($"zenkins: step {position} \"{step.Name}\" was killed while publishing its artifact.");
+                    await ReportStepAsync(
+                        i + 1,
+                        step.Name,
+                        PipelineStepStatus.Failed,
+                        failureReason: cancellationReason,
+                        cancellationToken: CancellationToken.None);
+                    SetCurrentStep(null);
+                    await SkipRemainingAsync(
+                        steps, i + 1, PipelineStepFailureReasons.RunCanceled, CancellationToken.None);
+                    return PipelineRunOutcome.Cancellation(commit);
+                }
+
+                if (artifactFailure is not null)
+                {
+                    await ReportStepAsync(
+                        i + 1,
+                        step.Name,
+                        PipelineStepStatus.Failed,
+                        failureReason: artifactFailure,
+                        cancellationToken: cancellationToken);
+                    SetCurrentStep(null);
+                    if (!step.ContinueOnError)
+                    {
+                        await SkipRemainingAsync(
+                            steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
+                        return PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
+                    }
+
+                    Log($"zenkins: step {position} \"{step.Name}\" failed but continue_on_error is set; "
+                        + "running the remaining step(s).");
+                    failedIndex ??= i + 1;
+                    continue;
+                }
+            }
+
             await ReportStepAsync(
                 i + 1,
                 step.Name,
@@ -540,7 +603,13 @@ public sealed class PipelineRunner
             // ends Failed and names the step that failed (card F-015, TC-002).
             Log($"zenkins: the run failed because step {index}/{steps.Length} \"{steps[index - 1].Name}\" "
                 + $"failed{(failedExitCode is { } code ? $" with exit code {code}" : string.Empty)}.");
-            return PipelineRunOutcome.StepFailed(failedExitCode ?? 1, commit);
+
+            // F-016: a step that failed only because its artifact could not be published never exited
+            // non-zero, so no exit code exists to record - the reason carries it (the same rule the other
+            // "nothing ran" failures follow: never invent a code).
+            return failedExitCode is { } failedCode
+                ? PipelineRunOutcome.StepFailed(failedCode, commit)
+                : PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
         }
 
         return PipelineRunOutcome.Succeeded(commit);
@@ -670,6 +739,50 @@ public sealed class PipelineRunner
         GitFailureKind.Credential => PipelineFailureReasons.GitCredential,
         _ => PipelineFailureReasons.GitFailed,
     };
+
+    /// <summary>
+    /// Publishes every path the step declared, in order (card F-016). Returns <see langword="null"/> on success
+    /// and the closed step failure reason when a path was refused or an upload failed - the message has already
+    /// gone to the run log. A cancellation is <b>not</b> caught here: the caller maps it onto F-009's canceled
+    /// path, so a killed upload can never be reported as a step failure the run ignores.
+    /// </summary>
+    private async Task<string?> PublishArtifactsAsync(
+        PipelineStep step,
+        string position,
+        CancellationToken cancellationToken)
+    {
+        if (_options.Artifacts is not { } publisher)
+        {
+            Log(
+                $"zenkins: step {position} \"{step.Name}\" declares artifacts but this run has no artifact "
+                + "publisher configured; nothing was published.");
+            return PipelineStepFailureReasons.ArtifactFailed;
+        }
+
+        try
+        {
+            foreach (var declaredPath in step.ArtifactPaths)
+            {
+                await publisher.PublishAsync(declaredPath, cancellationToken);
+            }
+
+            return null;
+        }
+        catch (ArtifactPublishException failure)
+        {
+            Log($"zenkins: step {position} \"{step.Name}\" could not publish its artifact: {failure.Message}");
+            return failure.FailureReason;
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            // Defence in depth (card F-016): the publisher maps transport failures onto its closed reasons, but a
+            // bug that escaped it must not leave the step Running forever - it fails the step like any other
+            // publication failure, and the message (already this run's line) says what happened.
+            Log($"zenkins: step {position} \"{step.Name}\" could not publish its artifact "
+                + $"({failure.GetType().Name}: {failure.Message}).");
+            return PipelineStepFailureReasons.ArtifactFailed;
+        }
+    }
 
     private static string Render(IReadOnlyList<string> argv)
     {

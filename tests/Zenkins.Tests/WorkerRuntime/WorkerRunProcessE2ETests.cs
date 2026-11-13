@@ -467,6 +467,12 @@ public sealed class WorkerRunProcessE2ETests
         startInfo.Environment["ConnectionStrings__Default"] = $"Data Source={databasePath}";
         startInfo.Environment["Database__ApplyMigrationsOnStartup"] = "true";
 
+        // F-016: the artifact store root follows this test's temp database, never src/Server/App_Data/artifacts
+        // (the working directory below is the repository's server project).
+        startInfo.Environment["Artifacts__RootPath"] = Path.Combine(
+            Path.GetDirectoryName(databasePath)!,
+            $"zenkins-f016-store-{Guid.NewGuid():N}");
+
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The Server process could not be started.");
         return process;

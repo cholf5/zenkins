@@ -413,6 +413,18 @@ public sealed class WorkerRunLoop(
                 // simulates the same cancel cannot drift from this decision).
                 CancellationFailureReason = () => StepCancellationReason.For(
                     cancelRequested.IsCompletedSuccessfully ? cancelRequested.Result.Reason : null),
+
+                // F-016: the artifact publisher for this run. The source root is the checkout only, the caps
+                // come from the same configuration keys the server reads (a console app reads them as
+                // Artifacts__MaxFileBytes), and the run's kill token bounds each upload.
+                Artifacts = new Zenkins.Worker.Artifacts.ArtifactPublisher(
+                    new Zenkins.Worker.Artifacts.ArtifactUploadClient(api, workerToken),
+                    claim.RunId,
+                    work.RepositoryPath,
+                    work.RootPath,
+                    Zenkins.Shared.Artifacts.ArtifactLimits.FromConfiguration(
+                        key => Environment.GetEnvironmentVariable(key.Replace(":", "__", StringComparison.Ordinal))),
+                    Emit),
             },
             definitions,
             cancellationToken => api.FetchGitCredentialAsync(workerToken, claim.RunId, cancellationToken),

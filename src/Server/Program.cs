@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Zenkins.Server.Auth;
+using Zenkins.Server.Artifacts;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
 using Zenkins.Server.Git;
@@ -30,6 +31,10 @@ builder.Services.AddZenkinsRuns();
 builder.Services.AddZenkinsLogs(builder.Configuration);
 builder.Services.AddZenkinsSecrets();
 builder.Services.AddZenkinsGit();
+
+// F-016: the local artifact store (App_Data/artifacts), the upload/download service and the sweeper that
+// closes abandoned uploads and orphaned directories.
+builder.Services.AddZenkinsArtifacts();
 
 // F-012: the Data Protection key ring is data, not a machine default. It encrypts every stored
 // secret and mints the F-008 log-subscription tickets, so it is persisted next to the database and
@@ -117,8 +122,22 @@ var dataProtectionKeysDirectory = SecretDataProtection.ResolveKeysDirectory(
     app.Configuration,
     app.Environment.ContentRootPath,
     app.Services.GetRequiredService<ZenkinsDataOptions>());
-EnsureWritableDirectory(dataProtectionKeysDirectory, "Data Protection key ring");
+EnsureWritableDirectory(
+    dataProtectionKeysDirectory,
+    "Data Protection key ring",
+    "Point DataProtection:KeysDirectory at a writable directory and back it up with the database - "
+    + "without this key ring, stored secrets cannot be decrypted.");
 app.Logger.LogInformation("Data Protection key ring: {KeysDirectory}", dataProtectionKeysDirectory);
+
+// F-016: the artifact store is data like the key ring - fail fast when its root cannot be written, instead of
+// surfacing it on the first upload of the first run.
+var artifactRoot = app.Services.GetRequiredService<ArtifactOptions>().RootPath;
+EnsureWritableDirectory(
+    artifactRoot,
+    "artifact store",
+    "Point Artifacts:RootPath at a writable directory with room for the run artifacts, and back it up "
+    + "with the database - the store holds the bytes every downloaded artifact comes from.");
+app.Logger.LogInformation("Artifact store: {ArtifactRoot}", artifactRoot);
 
 // Startup migration hook (I-002 deferred it to F-001). Off in production by default so a multi-node
 // deployment runs `dotnet ef database update` once; development gets a ready database on first run.
@@ -186,6 +205,9 @@ app.MapWorkerEndpoints();
 // reporting API (F-006); the background lease sweeper is registered by AddZenkinsRuns.
 app.MapRunEndpoints();
 
+// F-016: the worker artifact API (create/files/finalize) and the per-artifact download.
+app.MapArtifactEndpoints();
+
 // Log streaming hubs (F-008): the worker upstream (worker-token authenticated) and the browser
 // subscription hub (subscription-ticket authenticated). Both authenticate before any hub method
 // runs - an unauthenticated negotiate is a bare 401.
@@ -194,9 +216,12 @@ app.MapHub<RunLogHub>("/hubs/run-logs");
 
 app.Run();
 
-// F-012: a one-line startup assertion instead of a late decryption failure. Writing and deleting a
-// probe file is the only portable check (permissions, read-only mounts, a path that is a file).
-static void EnsureWritableDirectory(string path, string description)
+// F-012/F-016: a one-line startup assertion instead of a late failure (an unreadable key ring means
+// undecryptable secrets; an unwritable store means artifacts that cannot be published). Writing and
+// deleting a probe file is the only portable check (permissions, read-only mounts, a path that is a file).
+// The remedy is per purpose: a key-ring failure is about backups of the key material, a store failure
+// about the build products and disk space.
+static void EnsureWritableDirectory(string path, string description, string remedy)
 {
     try
     {
@@ -209,9 +234,7 @@ static void EnsureWritableDirectory(string path, string description)
         or NotSupportedException or ArgumentException or System.Security.SecurityException)
     {
         throw new InvalidOperationException(
-            $"The {description} directory '{path}' is not writable: {exception.Message} "
-            + "Point DataProtection:KeysDirectory at a writable directory and back it up with the "
-            + "database - without this key ring, stored secrets cannot be decrypted.",
+            $"The {description} directory '{path}' is not writable: {exception.Message} {remedy}",
             exception);
     }
 }

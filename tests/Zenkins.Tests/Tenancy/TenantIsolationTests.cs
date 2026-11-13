@@ -281,6 +281,98 @@ public sealed class TenantIsolationTests : IDisposable
     }
 
     [Fact]
+    public void Duplicate_artifact_name_in_one_run_is_rejected_by_the_unique_index_sqlite()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // A's run already publishes "bin/Release", so a second artifact with the same name in the same run
+            // must be refused by the database: the (RunId, Name) index is what makes artifact("bin") twice a
+            // pipeline bug instead of an ambiguous download.
+            context.Set<Artifact>().Add(new Artifact
+            {
+                RunId = TwoOrgsFixture.BuildRunAId,
+                Name = TwoOrgsFixture.ArtifactAName,
+                Kind = "Directory",
+                Status = "Pending",
+            });
+
+            var exception = Assert.Throws<DbUpdateException>(() => context.SaveChanges());
+
+            var sqlite = Assert.IsType<SqliteException>(exception.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains(
+                "UNIQUE constraint failed: Artifacts.RunId, Artifacts.Name",
+                sqlite.Message,
+                StringComparison.Ordinal);
+        }
+
+        using var verification = _fixture.CreateContext();
+        var artifact = Assert.Single(verification.Set<Artifact>().ToList());
+        Assert.Equal(TwoOrgsFixture.OrgAId, artifact.OrganizationId);
+        Assert.Equal("Ready", artifact.Status);
+    }
+
+    [Fact]
+    public void The_artifact_name_index_is_per_run_not_global()
+    {
+        // The same name in another run is not a duplicate: a repository's pipeline may well publish
+        // "bin/Release" on every run.
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            var anotherRun = new BuildRun
+            {
+                OrganizationId = TwoOrgsFixture.OrgAId,
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                TriggerType = BuildRunTriggerType.Manual,
+                RequiredTags = string.Empty,
+                GitBranch = "main",
+                PipelinePath = "pipeline.lua",
+            };
+            context.BuildRuns.Add(anotherRun);
+            context.Set<Artifact>().Add(new Artifact
+            {
+                RunId = anotherRun.Id,
+                Name = TwoOrgsFixture.ArtifactAName,
+                Kind = "Directory",
+                Status = "Pending",
+            });
+            context.SaveChanges();
+        }
+
+        using var verification = _fixture.CreateContext();
+        Assert.Equal(2, verification.Set<Artifact>().Count());
+    }
+
+    [Fact]
+    public async Task Deleting_a_run_cascades_its_artifacts_and_leaves_another_runs_artifacts_alone()
+    {
+        _fixture.UseOrganizationA();
+
+        using (var context = _fixture.CreateContext())
+        {
+            // An artifact is not meaningful without its run (card F-016), so the foreign key cascades - the same
+            // shape F-015's step rows use, and the path a project/organization delete takes.
+            context.BuildRuns.Remove(context.BuildRuns.Single(run => run.Id == TwoOrgsFixture.BuildRunAId));
+            context.SaveChanges();
+        }
+
+        var remaining = await _fixture.ReadAcrossTenantsAsync<Artifact>(_ => true, CancellationToken);
+
+        // A's artifact went with its run...
+        Assert.DoesNotContain(remaining, artifact => artifact.RunId == TwoOrgsFixture.BuildRunAId);
+
+        // ...and the cascade did not reach across runs or tenants.
+        var survivor = Assert.Single(remaining);
+        Assert.Equal(TwoOrgsFixture.ArtifactBId, survivor.Id);
+        Assert.Equal(TwoOrgsFixture.BuildRunBId, survivor.RunId);
+        Assert.Equal(TwoOrgsFixture.OrgBId, survivor.OrganizationId);
+    }
+
+    [Fact]
     public void The_secret_name_index_is_per_organization_not_global()
     {
         // The fixture seeds ALPHA_TOKEN for A and BETA_TOKEN for B - different names, so the existing

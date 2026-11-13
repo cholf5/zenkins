@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -18,16 +19,27 @@ namespace Zenkins.Tests.Tenancy;
 public sealed class AuthenticatedTenantApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _connectionString;
+    private readonly string _artifactsPath;
 
     public AuthenticatedTenantApplicationFactory(TwoOrgsFixture fixture)
     {
         ArgumentNullException.ThrowIfNull(fixture);
         _connectionString = fixture.ConnectionString;
+        _artifactsPath = fixture.ArtifactsPath;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+
+        // F-016: the real Program asserts and creates the artifact store root at startup, so it is pointed at this
+        // fixture's temp directory - the repository's App_Data must not gain an artifacts tree per test run.
+        builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                [Zenkins.Server.Artifacts.ArtifactOptions.RootPathConfigurationKey] = _artifactsPath,
+            }));
+
         builder.ConfigureTestServices(services =>
         {
             // Program resolves Database:Provider / ConnectionStrings:Default at startup; replacing

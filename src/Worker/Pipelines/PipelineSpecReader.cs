@@ -46,7 +46,8 @@ public static class PipelineSpecReader
     private const string ShellKey = "shell";
 
     private static readonly string[] PipelineKeys = ["name", "env", "steps", "triggers"];
-    private static readonly string[] StepKeys = ["name", "run", "shell", "env", "continue_on_error", "when"];
+    private static readonly string[] StepKeys =
+        ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts"];
     private static readonly string[] WhenKeys = ["branch", "platform", "env"];
     private static readonly string[] TriggerKeys = ["branches"];
 
@@ -142,6 +143,7 @@ public static class PipelineSpecReader
             var stepEnv = ReadEnv(table, path + ".env");
             var continueOnError = ReadContinueOnError(table, path);
             var when = ReadWhen(table, path);
+            var artifactPaths = ReadArtifactPaths(table, path);
 
             steps[i] = new PipelineStep(
                 stepName,
@@ -149,7 +151,8 @@ public static class PipelineSpecReader
                 Shell: shell,
                 Env: stepEnv,
                 ContinueOnError: continueOnError,
-                When: when);
+                When: when,
+                Artifacts: artifactPaths);
         }
 
         return steps;
@@ -203,6 +206,70 @@ public static class PipelineSpecReader
         }
 
         return argv;
+    }
+
+    /// <summary>
+    /// Reads a step's declared artifact paths (card F-016): <c>artifacts = { "bin/Release" }</c>, the
+    /// declarative spelling of PRD §3.7's <c>artifact("bin/Release")</c>. Strict about shape - a list of
+    /// non-empty strings, bounded in number - but deliberately <b>not</b> about the paths themselves: those
+    /// are validated when the executor publishes them, by the same shared rules the server applies, so a
+    /// traversal fails the step that declared it (with the path named) instead of the whole definition.
+    /// </summary>
+    private static string[]? ReadArtifactPaths(LuaHostTable table, string path)
+    {
+        var artifactsPath = path + ".artifacts";
+        if (!TryGet(table, "artifacts", out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        if (value.Kind != LuaHostValueKind.Table || !value.Table.IsSequence)
+        {
+            throw Invalid($"{artifactsPath} must be a list of paths ({{ \"bin/Release\" }}), got {Describe(value)}.");
+        }
+
+        var items = value.Table.Items;
+        if (items.Count == 0)
+        {
+            throw Invalid($"{artifactsPath} must hold at least one path.");
+        }
+
+        if (items.Count > PipelineSpecSchema.MaxArtifactsPerStep)
+        {
+            throw Invalid(
+                $"{artifactsPath} must hold at most {PipelineSpecSchema.MaxArtifactsPerStep} paths "
+                + $"(found {items.Count}).");
+        }
+
+        var paths = new string[items.Count];
+        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var elementPath = $"{artifactsPath}[{i + 1}]";
+            if (items[i].Kind != LuaHostValueKind.String)
+            {
+                throw Invalid($"{elementPath} must be a string, got {Describe(items[i])}.");
+            }
+
+            if (items[i].Text.Length == 0)
+            {
+                throw Invalid($"{elementPath} is empty; every artifact path must be a non-empty string.");
+            }
+
+            // The same path twice in one step would make the run's artifact names ambiguous (create would answer
+            // a 409 mid-run). It is a definition mistake, so it is refused here, with the field path.
+            if (seen.TryGetValue(items[i].Text, out var firstIndex))
+            {
+                throw Invalid(
+                    $"{elementPath} '{items[i].Text}' is already declared by {artifactsPath}[{firstIndex}]; "
+                    + "a step declares each artifact once.");
+            }
+
+            seen.Add(items[i].Text, i + 1);
+            paths[i] = items[i].Text;
+        }
+
+        return paths;
     }
 
     private static SortedDictionary<string, string>? ReadEnv(LuaHostTable table, string path)

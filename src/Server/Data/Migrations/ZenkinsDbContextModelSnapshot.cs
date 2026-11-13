@@ -88,6 +88,65 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.Artifact", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FileCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("ManifestJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<long>("TotalBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("RunId");
+
+                    b.HasIndex("RunId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("Artifacts", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Artifacts_Kind", "\"Kind\" IN ('File', 'Directory')");
+
+                            t.HasCheckConstraint("CK_Artifacts_Status", "\"Status\" IN ('Pending', 'Ready', 'Incomplete')");
+                        });
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.BootstrapMarker", b =>
                 {
                     b.Property<string>("Id")
@@ -714,6 +773,23 @@ namespace Zenkins.Server.Data.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.Artifact", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.BuildRun", "Run")
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildLog", b =>

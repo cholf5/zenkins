@@ -43,7 +43,8 @@ public sealed record PipelineStep(
     string[]? Shell = null,
     SortedDictionary<string, string>? Env = null,
     bool ContinueOnError = false,
-    PipelineCondition? When = null)
+    PipelineCondition? When = null,
+    string[]? Artifacts = null)
 {
     /// <summary>Whether the step declares an execution-time condition (<c>when = { … }</c>).</summary>
     [JsonIgnore]
@@ -56,6 +57,16 @@ public sealed record PipelineStep(
     /// <summary>The argv actually executed: <c>run</c>, or <c>shell</c>'s program + argv.</summary>
     [JsonIgnore]
     public string[] Argv => Run ?? Shell ?? [];
+
+    /// <summary>
+    /// The paths this step publishes as run artifacts (<c>artifacts = { "bin/Release" }</c>), the
+    /// declarative spelling of PRD §3.7's <c>artifact("bin/Release")</c> (card F-016). The C# executor
+    /// publishes them after the step's process exits 0, so a failing step publishes nothing; each path
+    /// is resolved inside <c>work/{run-id}/repository</c> by the shared
+    /// <see cref="Zenkins.Shared.Artifacts.ArtifactPathRules"/> and re-validated by the Server.
+    /// </summary>
+    [JsonIgnore]
+    public string[] ArtifactPaths => Artifacts ?? [];
 }
 
 /// <summary>The optional <c>triggers</c> table. Informational for a manual run; F-017 reads it.</summary>
@@ -125,6 +136,12 @@ public static class PipelineSpecSchema
 
     /// <summary>An upper bound on a pipeline or step name (mirrors the 200-character name rule).</summary>
     public const int MaxNameLength = 200;
+
+    /// <summary>
+    /// An upper bound on the artifacts one step may publish (card F-016). An artifact is a declared
+    /// build product, not a filesystem listing: a step publishing dozens of them is a pipeline mistake.
+    /// </summary>
+    public const int MaxArtifactsPerStep = 16;
 
     /// <summary>
     /// The size cap on the frozen JSON. A spec is a hand-written step list, so 256 KiB is generous;
@@ -256,9 +273,58 @@ public static class PipelineSpecJson
             {
                 return false;
             }
+
+            // F-016: the declared artifact paths are re-validated against the shared path rules by the
+            // upload endpoint; here the envelope only refuses a shape the executor could not even try
+            // (an empty entry, or more entries than a step may publish).
+            if (!TryReadArtifactPaths(step.Artifacts, $"{path}.artifacts", out error))
+            {
+                return false;
+            }
         }
 
         spec = parsed;
+        return true;
+    }
+
+    /// <summary>
+    /// The envelope check of one step's artifact list (card F-016): a bounded list of non-empty strings.
+    /// The <b>path rules</b> are deliberately not duplicated here - they live in
+    /// <see cref="Zenkins.Shared.Artifacts.ArtifactPathRules"/> and are applied by both the Worker (before
+    /// it sends anything) and this Server's upload endpoint (on every received relative path), which is
+    /// what makes the two validations independent implementations of one rule set rather than a copy.
+    /// </summary>
+    internal static bool TryReadArtifactPaths(string[]? artifacts, string path, out string? error)
+    {
+        error = null;
+        if (artifacts is null)
+        {
+            return true;
+        }
+
+        if (artifacts.Length is 0 or > PipelineSpecSchema.MaxArtifactsPerStep)
+        {
+            error = $"{path} must hold 1..{PipelineSpecSchema.MaxArtifactsPerStep} paths.";
+            return false;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < artifacts.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(artifacts[i]))
+            {
+                error = $"{path}[{i + 1}] must be a non-empty path.";
+                return false;
+            }
+
+            if (!seen.Add(artifacts[i]))
+            {
+                // Ambiguous artifact names are a definition mistake, not something to store and discover at upload.
+                error = $"{path}[{i + 1}] '{artifacts[i]}' is declared twice.";
+                return false;
+            }
+        }
+
         return true;
     }
 

@@ -284,6 +284,34 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
         Assert.NotNull(await context.FindAsync<BuildLog>(keyOfA, CancellationToken));
     }
 
+    // ---- F-016: artifacts -------------------------------------------------
+
+    [Fact]
+    public Task Artifacts_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<Artifact>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_artifact_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<Artifact>(
+            _fixture,
+            () => new Artifact
+            {
+                // Only the tenant field is wrong; everything else is a legal artifact.
+                RunId = TwoOrgsFixture.BuildRunAId,
+                Name = $"smuggled/{Guid.NewGuid():N}",
+                Kind = "File",
+                Status = "Pending",
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_artifacts() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<Artifact>(
+            _fixture,
+            TwoOrgsFixture.ArtifactAId,
+            TwoOrgsFixture.ArtifactBId,
+            CancellationToken);
+
     [Fact]
     public void Every_tenant_owned_entity_is_covered_by_the_harness()
     {

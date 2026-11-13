@@ -96,6 +96,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only secret.</summary>
     public static readonly Guid SecretBId = new("b0000000-0000-4000-8000-000000000062");
 
+    /// <summary>A's only artifact (of A's only run), the positive control for the F-016 probes.</summary>
+    public static readonly Guid ArtifactAId = new("a0000000-0000-4000-8000-000000000081");
+
+    /// <summary>B's only artifact.</summary>
+    public static readonly Guid ArtifactBId = new("b0000000-0000-4000-8000-000000000082");
+
     /// <summary>A's only Git credential, the positive control for the F-013 probes.</summary>
     public static readonly Guid GitCredentialAId = new("a0000000-0000-4000-8000-000000000071");
 
@@ -141,6 +147,12 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string GitCredentialACiphertext = "CfDJ8-fixture-alpha-git-ciphertext";
     public const string GitCredentialBCiphertext = "CfDJ8-fixture-beta-git-ciphertext";
 
+    // F-016: one ready artifact per organization's run. The manifest is a well-formed (empty-file) record:
+    // the tenancy probes never download, they only prove the row is invisible to the other tenant.
+    public const string ArtifactAName = "bin/Release";
+    public const string ArtifactBName = "out/web";
+    public const string ArtifactManifestJson = "{\"version\":1,\"fileCount\":0,\"totalBytes\":0,\"files\":[]}";
+
     private readonly string _databasePath;
     private bool _migrated;
 
@@ -163,6 +175,13 @@ public sealed class TwoOrgsFixture : IDisposable
 
     /// <summary>Absolute path of this fixture's temporary SQLite file (never inside the repository).</summary>
     public string DatabasePath => _databasePath;
+
+    /// <summary>
+    /// This fixture's artifact store root (card F-016): a sibling of the temporary database, because a host that
+    /// boots the real <c>Program</c> creates and asserts it at startup - it must never be
+    /// <c>src/Server/App_Data/artifacts</c>, which <c>**/App_Data/</c> hides from <c>git status</c>.
+    /// </summary>
+    public string ArtifactsPath => _databasePath + "-artifacts";
 
     /// <summary>Connection string for the same file, for hosts and options built outside the fixture.</summary>
     public string ConnectionString => $"Data Source={_databasePath}";
@@ -449,6 +468,31 @@ public sealed class TwoOrgsFixture : IDisposable
                 CreatedByUserId = OrgBOwnerUserId,
             });
 
+        // F-016: one artifact per organization, both Ready, both hanging off that organization's run - the
+        // read/write/find probes need a row on each side, and the unique (RunId, Name) index needs one to
+        // collide with.
+        context.Set<Artifact>().AddRange(
+            new Artifact
+            {
+                Id = ArtifactAId,
+                OrganizationId = OrgAId,
+                RunId = BuildRunAId,
+                Name = ArtifactAName,
+                Kind = "Directory",
+                Status = "Ready",
+                ManifestJson = ArtifactManifestJson,
+            },
+            new Artifact
+            {
+                Id = ArtifactBId,
+                OrganizationId = OrgBId,
+                RunId = BuildRunBId,
+                Name = ArtifactBName,
+                Kind = "File",
+                Status = "Ready",
+                ManifestJson = ArtifactManifestJson,
+            });
+
         // F-013: one Git credential per organization, so the read/write/find probes are not vacuous.
         context.GitCredentials.AddRange(
             new GitCredential
@@ -507,6 +551,20 @@ public sealed class TwoOrgsFixture : IDisposable
     {
         // SQLite pools connections; on Windows the file stays locked until the pool is drained.
         SqliteConnection.ClearAllPools();
+
+        try
+        {
+            if (Directory.Exists(ArtifactsPath))
+            {
+                Directory.Delete(ArtifactsPath, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
 
         foreach (var path in new[] { _databasePath, _databasePath + "-shm", _databasePath + "-wal" })
         {

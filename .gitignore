@@ -9,7 +9,10 @@ obj/
 *.sln.docstates
 project.lock.json
 project.fragment.lock.json
-artifacts/
+# Only the repository root's publish output: an unanchored `artifacts/` also swallows source directories
+# that happen to be named that (F-016's src/Server/Artifacts, src/Worker/Artifacts, tests/**/Artifacts), and a
+# commit would then silently drop them. The runtime store is under App_Data/, which is ignored on its own.
+/artifacts/
 
 # ---- Test / coverage ----
 TestResults/

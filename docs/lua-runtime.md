@@ -373,6 +373,27 @@ The four I/O primitives are **C# executor code owned by F-014** in v0.3: a run p
 form — a Lua `step()` that calls `run()` and receives its answer through a suspension — is the later
 capability §6.1 describes; the protocol in §5.2 exists now so that form does not need a new driver.
 
+**`artifact()` is declarative, for the same reason (F-016).** A v0.3 step body is an argv list, not a
+Lua function, so there is no Lua frame inside a step that could make the call. Publishing is
+therefore declared on the step and collected by the executor after its process exits 0:
+
+```lua
+pipeline {
+  name = "publish",
+  steps = {
+    { name = "Build", run = { "dotnet", "publish", "-c", "Release" }, artifacts = { "bin/Release" } },
+  },
+}
+```
+
+The Lua function `artifact()` exists only to **refuse**, in the definition phase and in any later
+step-phase runtime: its message is the shared "available inside steps only" wording plus a pointer at
+the `artifacts` field. The executor resolves each declared path inside `work/{run-id}/repository`
+(the only source root), canonicalises **every** path component in turn — a symlink whose target leaves
+the checkout is refused by name wherever it appears, including an intermediate directory such as
+`link/secret.txt` — enforces the three caps, and publishes through the run's cancellation token, so a
+cancel or the run's deadline kills an upload exactly like it kills a process tree.
+
 Why this split:
 
 - Every primitive that touches the host is one auditable C# function with a fixed signature; there

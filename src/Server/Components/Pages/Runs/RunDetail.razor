@@ -1,9 +1,12 @@
 @page "/runs/{RunId:guid}"
 @attribute [Authorize]
+@using Zenkins.Server.Artifacts
+@using Zenkins.Shared.Artifacts
 @using Zenkins.Shared.Pipelines
 @inject UserSession UserSession
 @inject RunService RunsService
 @inject RunLogAccess RunLogAccess
+@inject ArtifactService ArtifactsService
 
 <PageTitle>Run @(_run?.Id.ToString("N")[..8] ?? "") · Zenkins</PageTitle>
 
@@ -181,6 +184,54 @@
                 </dl>
             </BbCardContent>
         </BbCard>
+        @* F-016: what the run published. Only a finalized (Ready) artifact has a download link; a
+           Pending/Incomplete one is listed with its state instead, so the page never offers a file that
+           is not actually there. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Artifacts</BbCardTitle>
+                <BbCardDescription>
+                    The build products this run published (PRD §3.7). A single file downloads as itself; a
+                    directory downloads as a zip that restores the same tree.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_artifacts.Count == 0)
+                {
+                    <p id="run-artifacts-empty" class="bb:text-sm bb:text-muted-foreground">
+                        This run published no artifacts.
+                    </p>
+                }
+                else
+                {
+                    <ul id="run-artifacts" class="bb:space-y-3 bb:text-sm">
+                        @foreach (var artifact in _artifacts)
+                        {
+                            <li id="@($"run-artifact-{artifact.Name}")" class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                <span class="bb:font-medium bb:break-all">@artifact.Name</span>
+                                <BbBadge Variant="BadgeVariant.Secondary">@artifact.Kind</BbBadge>
+                                @if (artifact.FileCount > 0)
+                                {
+                                    <span class="bb:text-xs bb:text-muted-foreground">
+                                        @artifact.FileCount file(s), @FormatBytes(artifact.TotalBytes)
+                                    </span>
+                                }
+                                @if (artifact.CanDownload)
+                                {
+                                    <BbButton Href="@($"/runs/{_run.Id}/artifacts/{artifact.Id}/download")"
+                                              Variant="ButtonVariant.Outline">Download</BbButton>
+                                }
+                                else
+                                {
+                                    <span class="bb:text-xs bb:text-muted-foreground">@artifact.Status</span>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+
         @* The run's log (F-008): live while the run executes, full history once it is finished.
            The ticket below is minted for this session and lets the panel's server-side
            HubConnection authenticate to the browser hub (a circuit cannot replay the cookie). *@
@@ -200,6 +251,9 @@
     /// <summary>The subscription ticket the log panel presents to the browser hub. Only minted for
     /// a member session after the run itself was readable - the page is the only minter.</summary>
     private string? _accessTicket;
+
+    /// <summary>What the run published (card F-016): every artifact row, with only Ready ones downloadable.</summary>
+    private IReadOnlyList<ArtifactView> _artifacts = [];
 
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
@@ -241,6 +295,7 @@
         if (_run is not null && session.Organization is { } organization)
         {
             _accessTicket = RunLogAccess.MintTicket(session.UserId, organization.OrganizationId);
+            _artifacts = await ArtifactsService.GetRunArtifactsAsync(RunId);
         }
     }
 
@@ -285,8 +340,13 @@
         PipelineStepFailureReasons.TimedOut => "the run's deadline passed",
         PipelineStepFailureReasons.NotStarted => "the process could not be started",
         PipelineStepFailureReasons.SecretUnavailable => "a secret could not be resolved",
+        PipelineStepFailureReasons.ArtifactPathRejected => "an artifact path was refused",
+        PipelineStepFailureReasons.ArtifactFailed => "an artifact could not be published",
         _ => reason,
     };
+
+    /// <summary>A stored size as prose ("1.5 MB"); the row stores bytes, people read units.</summary>
+    private static string FormatBytes(long bytes) => ArtifactLimits.FormatBytes(bytes);
 
     /// <summary>A step's duration, in the same shape the run's own duration uses.</summary>
     private static string FormatDuration(TimeSpan duration) =>

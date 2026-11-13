@@ -34,6 +34,7 @@ public static class TenantIsolationProbes
         [
             typeof(OrganizationMember), typeof(Project), typeof(BuildRun), typeof(BuildLog),
             typeof(BuildStep), typeof(WorkerEntity), typeof(WorkerToken), typeof(Secret), typeof(GitCredential),
+            typeof(Artifact),
         ];
 
     /// <summary>

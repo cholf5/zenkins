@@ -28,6 +28,7 @@ public sealed class AuthTestHost : IDisposable
     public const string ValidPassword = "CorrectHorse9!Battery";
 
     private readonly string _databasePath;
+    private readonly string _artifactsPath;
     private readonly WebApplicationFactory<Program> _factory;
 
     /// <param name="configureTestServices">
@@ -41,9 +42,23 @@ public sealed class AuthTestHost : IDisposable
     {
         _databasePath = Path.Combine(Path.GetTempPath(), $"zenkins-f001-{Guid.NewGuid():N}.db");
 
+        // F-016: the real Program asserts and creates the artifact store root at startup, so every host that
+        // boots it must point the store at its own temp directory. Without this the store defaults to
+        // <content root>/App_Data/artifacts - i.e. src/Server/App_Data/artifacts inside the repository, which
+        // `**/App_Data/` hides from `git status` and which would therefore accumulate on every full test run.
+        _artifactsPath = Path.Combine(Path.GetTempPath(), $"zenkins-f016-store-{Guid.NewGuid():N}");
+
         _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment("Development");
+
+            // Registered before the caller's own sources, so a test that wants a specific root still wins.
+            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [Zenkins.Server.Artifacts.ArtifactOptions.RootPathConfigurationKey] = _artifactsPath,
+                }));
+
             if (configureAppConfiguration is not null)
             {
                 builder.ConfigureAppConfiguration((_, configuration) => configureAppConfiguration(configuration));
@@ -65,6 +80,9 @@ public sealed class AuthTestHost : IDisposable
 
     /// <summary>The running host's service provider (root scope).</summary>
     public IServiceProvider Services => _factory.Services;
+
+    /// <summary>This host's artifact store root (a temp directory, never inside the repository).</summary>
+    public string ArtifactsPath => _artifactsPath;
 
     /// <summary>
     /// The in-memory <see cref="TestServer"/>: F-008's hub tests build SignalR connections whose
@@ -231,6 +249,21 @@ public sealed class AuthTestHost : IDisposable
             catch (UnauthorizedAccessException)
             {
             }
+        }
+
+        // The artifact store this host created (F-016): a temp directory, removed with the host.
+        try
+        {
+            if (Directory.Exists(_artifactsPath))
+            {
+                Directory.Delete(_artifactsPath, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 }
