@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [DOC-002](issues/doc-002-lua-runtime-contract.md) | Lua runtime contract (engine, sandbox, execution model) | P2 | S | none | none |
 | [F-011](issues/f-011-lua-runtime-host.md) | Lua runtime host and sandbox (Worker) | P1 | M | none | DOC-002 |
 | [F-012](issues/f-012-secrets-encrypted-storage.md) | Secrets: encrypted storage and Owner-only management | P1 | M | none | none |
 | [F-013](issues/f-013-git-clone-checkout.md) | Git: clone, fetch, checkout with HTTPS/SSH credentials | P1 | L | none | F-011, F-012 |
@@ -40,3 +39,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-004](issues/f-004-worker-registration-tokens.md) | Worker registration, tokens and heartbeat (Server) | P1 | 2026-11-13 |
 | [F-005](issues/f-005-worker-console-host.md) | Worker console host (register, heartbeat, reconnect) | P1 | 2026-11-13 |
 | [DOC-001](issues/doc-001-developer-setup-guide.md) | Developer setup guide | P2 | 2026-11-12 |
+| [DOC-002](issues/doc-002-lua-runtime-contract.md) | Lua runtime contract (engine, sandbox, execution model) | P2 | 2026-11-13 |

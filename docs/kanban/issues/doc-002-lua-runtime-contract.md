@@ -4,7 +4,7 @@ title: Lua runtime contract (engine, sandbox, execution model)
 type: docs
 priority: P2
 size: S
-status: review
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
@@ -251,3 +251,9 @@ PASS (0 warnings / 0 errors, links and anchors resolve).
   Appendix A re-extracted from the document, built (0 warnings / 0 errors under
   `TreatWarningsAsErrors`), run and diffed against the pasted output — identical apart from timings;
   `dotnet build -c Release` 0 warnings / 0 errors; all links and anchors resolve; working tree clean.
+- Results (2026-11-13, accepted): review round 4 PASS — the document is the implementation contract
+  for F-011…F-017 and the acceptance basis for its own card. Verification re-run at acceptance:
+  Appendix A extracted from the document builds under `TreatWarningsAsErrors` (0 warnings /
+  0 errors), runs, and matches the pasted output apart from timing lines; `dotnet build
+  Zenkins.slnx -c Release` 0 warnings / 0 errors; every relative link and heading anchor resolves.
+  Card moved to Done.
