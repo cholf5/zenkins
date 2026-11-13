@@ -38,6 +38,7 @@ The Server never executes builds. Workers connect outbound to the Server, pull j
 
 - [Product requirements (v1.0)](docs/prd.md) — the spec of record
 - [Development setup](docs/development.md) — clone, build, run, configure, troubleshoot
+- [Lua runtime contract](docs/lua-runtime.md) — engine, sandbox surface, execution model, fixtures
 - [Roadmap](docs/kanban/roadmap.md) — milestones and long-term direction
 - [Kanban board](docs/kanban/board.md) — what is being worked on now
 
@@ -66,6 +67,7 @@ troubleshooting — are in [`docs/development.md`](docs/development.md).
 docs/
   prd.md                 # product requirements
   development.md         # developer setup guide
+  lua-runtime.md         # Lua engine, sandbox and execution contract
   kanban/                # roadmap, board, issue cards, templates
 src/                     # .NET projects (Server, Shared, Worker)
 ```
