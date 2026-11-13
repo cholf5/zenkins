@@ -47,6 +47,9 @@
                 }
                 else
                 {
+                    @* D-002: one clock instant per render, exactly like the dashboard takes - two
+                       rows on this page must never disagree about "now" when showing elapsed time. *@
+                    var now = DateTimeOffset.UtcNow;
                     <ul class="bb:divide-y">
                         @foreach (var run in _runs)
                         {
@@ -72,7 +75,10 @@
                                     </p>
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
-                                    <BbBadge Variant="RunBadgeVariant(run.Status)">@run.Status</BbBadge>
+                                    <RunStatusBadge Status="@run.Status" />
+                                    @* D-002: the same duration display the dashboard shows - a finished
+                                       run's duration, or live elapsed while it is still running. *@
+                                    <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, now)</span>
                                     <span>@run.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
                                 </div>
                             </li>
@@ -114,15 +120,6 @@
 
         _runs = await RunsService.GetProjectRunsAsync(ProjectId);
     }
-
-    private static BadgeVariant RunBadgeVariant(string status) => status switch
-    {
-        BuildRunStatus.Queued => BadgeVariant.Secondary,
-        BuildRunStatus.Running => BadgeVariant.Default,
-        BuildRunStatus.Success => BadgeVariant.Success,
-        BuildRunStatus.Failed => BadgeVariant.Destructive,
-        _ => BadgeVariant.Outline,
-    };
 
     private void SetNotFound()
     {

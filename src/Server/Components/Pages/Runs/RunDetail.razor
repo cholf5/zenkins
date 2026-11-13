@@ -22,7 +22,7 @@
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
                 <BbCardTitle As="h1" tabindex="-1">Run @(_run.Id.ToString("N")[..8])</BbCardTitle>
-                <BbBadge Variant="@RunBadgeVariant(_run.Status)">@_run.Status</BbBadge>
+                <RunStatusBadge Status="@_run.Status" />
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                 @* F-009: cancel is offered while the run can still be stopped. A Queued run is
@@ -95,7 +95,7 @@
                                     }
                                     @if (step.Duration is { } duration)
                                     {
-                                        <span class="bb:text-xs bb:text-muted-foreground">@FormatDuration(duration)</span>
+                                        <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.FormatDuration(duration)</span>
                                     }
                                     @if (step.FailureReason is { } reason)
                                     {
@@ -159,7 +159,9 @@
                     </div>
                     <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Duration</dt>
-                        <dd id="run-duration">@(FormatDuration(_run.StartedAt, _run.EndedAt))</dd>
+                        @* D-002: the shared display bit - a finished run's duration, live elapsed
+                           while it is still running, "-" when it never started. *@
+                        <dd id="run-duration">@RunDisplay.DurationOrElapsed(_run.StartedAt, _run.EndedAt, DateTimeOffset.UtcNow)</dd>
                     </div>
                     <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Queued</dt>
@@ -299,17 +301,6 @@
         }
     }
 
-    private static BadgeVariant RunBadgeVariant(string status) => status switch
-    {
-        BuildRunStatus.Queued => BadgeVariant.Secondary,
-        BuildRunStatus.Running => BadgeVariant.Default,
-        BuildRunStatus.Success => BadgeVariant.Success,
-        BuildRunStatus.Failed => BadgeVariant.Destructive,
-        BuildRunStatus.Canceled => BadgeVariant.Outline,
-        BuildRunStatus.Lost => BadgeVariant.Destructive,
-        _ => BadgeVariant.Outline,
-    };
-
     /// <summary>The per-run timeout display: the override in minutes, or the server default.</summary>
     private static string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds
         ? $"{seconds / 60} min (per-run override)"
@@ -347,24 +338,4 @@
 
     /// <summary>A stored size as prose ("1.5 MB"); the row stores bytes, people read units.</summary>
     private static string FormatBytes(long bytes) => ArtifactLimits.FormatBytes(bytes);
-
-    /// <summary>A step's duration, in the same shape the run's own duration uses.</summary>
-    private static string FormatDuration(TimeSpan duration) =>
-        duration.TotalMinutes >= 1
-            ? $"{(int)duration.TotalMinutes}m {duration.Seconds:D2}s"
-            : $"{duration.TotalSeconds:F1}s";
-
-    /// <summary>Duration from the persisted start and end times; "-" while the run has no end.</summary>
-    private static string FormatDuration(DateTimeOffset? startedAt, DateTimeOffset? endedAt)
-    {
-        if (startedAt is not { } start || endedAt is not { } end)
-        {
-            return "-";
-        }
-
-        var duration = end - start;
-        return duration.TotalMinutes >= 1
-            ? $"{(int)duration.TotalMinutes}m {duration.Seconds:D2}s"
-            : $"{duration.TotalSeconds:F1}s";
-    }
 }

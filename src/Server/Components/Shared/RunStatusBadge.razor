@@ -1,0 +1,9 @@
+@* The one status badge for build runs (card D-002): the dashboard, the runs list and the run
+   detail page render this component, so the same run carries the same colour everywhere. *@
+<BbBadge Variant="@RunDisplay.BadgeFor(Status)">@Status</BbBadge>
+
+@code {
+    /// <summary>The run status to render (a <see cref="BuildRunStatus"/> value).</summary>
+    [Parameter, EditorRequired]
+    public string Status { get; set; } = string.Empty;
+}

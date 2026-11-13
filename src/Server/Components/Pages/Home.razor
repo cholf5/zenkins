@@ -1,6 +1,8 @@
 @page "/"
 @attribute [Authorize]
+@implements IAsyncDisposable
 @inject UserSession UserSession
+@inject DashboardQuery Dashboard
 
 <PageTitle>Dashboard · Zenkins</PageTitle>
 
@@ -28,32 +30,264 @@
             </BbCardContent>
         </BbCard>
     }
-    else
+    else if (_summary is { } summary)
     {
+        @* One clock instant per render: the elapsed display of every running row is measured
+           against it, and the interactive circuit's clock below re-renders to move it. *@
+        var now = DateTimeOffset.UtcNow;
+
+        @* Counts, not charts (card D-002): the three numbers the operator asks for on arrival. *@
+        <div class="bb:grid bb:gap-4 bb:sm:grid-cols-3">
+            <BbCard>
+                <BbCardContent>
+                    <p id="dashboard-queued-count" class="bb:text-3xl bb:font-semibold">@summary.QueuedCount</p>
+                    <p class="bb:text-sm bb:text-muted-foreground">
+                        @(summary.QueuedCount == 1 ? "run waiting in the queue" : "runs waiting in the queue")
+                    </p>
+                </BbCardContent>
+            </BbCard>
+            <BbCard>
+                <BbCardContent>
+                    <p id="dashboard-running-count" class="bb:text-3xl bb:font-semibold">@summary.RunningCount</p>
+                    <p class="bb:text-sm bb:text-muted-foreground">
+                        @(summary.RunningCount == 1 ? "run executing on a worker" : "runs executing on workers")
+                    </p>
+                </BbCardContent>
+            </BbCard>
+            <BbCard>
+                <BbCardContent>
+                    <p id="dashboard-failure-count" class="bb:text-3xl bb:font-semibold">@summary.FailuresInWindow</p>
+                    <p class="bb:text-sm bb:text-muted-foreground">
+                        failed or lost since @summary.WindowStart.ToString("yyyy-MM-dd")
+                    </p>
+                </BbCardContent>
+            </BbCard>
+        </div>
+
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Build activity</BbCardTitle>
+                <BbCardTitle As="h2">Workers</BbCardTitle>
                 <BbCardDescription>
-                    Recent builds, running jobs, the queue and worker status will appear here.
+                    Workers of the active organization. Online and offline are the statuses the
+                    offline monitor wrote - this page never judges a heartbeat by itself.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
-                <BbEmpty Title="No builds yet"
-                         Description="Connect a worker and create a project to see build activity on this dashboard.">
-                    <Icon>
-                        <LucideIcon Name="activity" Class="bb:h-12 bb:w-12" />
-                    </Icon>
-                </BbEmpty>
+                @if (!summary.HasWorkers)
+                {
+                    <BbEmpty id="dashboard-empty-workers"
+                             Title="No workers connected"
+                             Description="Mint a registration token on the Workers page and start a worker with it; queued runs wait until one heartbeats.">
+                        <Icon>
+                            <LucideIcon Name="server" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                }
+                else
+                {
+                    <p id="dashboard-workers-summary" class="bb:flex bb:flex-wrap bb:items-baseline bb:gap-x-2 bb:text-sm">
+                        <span id="dashboard-workers-online" class="bb:text-2xl bb:font-semibold">@summary.WorkersOnline</span>
+                        <span>online</span>
+                        <span id="dashboard-workers-busy" class="bb:text-2xl bb:font-semibold">@summary.WorkersBusy</span>
+                        <span>busy</span>
+                        <span id="dashboard-workers-offline" class="bb:text-2xl bb:font-semibold">@summary.WorkersOffline</span>
+                        <span>offline</span>
+                    </p>
+                }
             </BbCardContent>
         </BbCard>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Recent runs</BbCardTitle>
+                <BbCardDescription>
+                    The last 20 runs across the organization's projects, newest first. A running run
+                    shows live elapsed time; browse full history on a project's runs page.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (!summary.HasProjects)
+                {
+                    <BbEmpty id="dashboard-empty-projects"
+                             Title="No projects yet"
+                             Description="Create a project and start its first run; queue, workers and recent activity appear here.">
+                        <Icon>
+                            <LucideIcon Name="folder-git-2" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                    <div class="bb:mt-4">
+                        <BbButton Href="/projects/new" Variant="ButtonVariant.Default">New project</BbButton>
+                    </div>
+                }
+                else if (summary.RecentRuns.Count == 0)
+                {
+                    <BbEmpty id="dashboard-empty-runs"
+                             Title="No runs yet"
+                             Description="Open a project and start a run; it waits in the queue here until an eligible worker claims it.">
+                        <Icon>
+                            <LucideIcon Name="play" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                }
+                else
+                {
+                    <ul class="bb:divide-y">
+                        @foreach (var run in summary.RecentRuns)
+                        {
+                            var shortId = run.RunId.ToString("N")[..8];
+                            <li id="@($"dashboard-run-{shortId}")" class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
+                                <div class="bb:min-w-0">
+                                    <p class="bb:font-medium">
+                                        <a href="/runs/@run.RunId" class="bb:underline bb:underline-offset-4">Run @shortId</a>
+                                        <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
+                                            <a href="/projects/@run.ProjectId">@run.ProjectName</a> · @run.GitBranch
+                                        </span>
+                                    </p>
+                                    <p class="bb:text-xs bb:text-muted-foreground">
+                                        @run.TriggerType.ToLowerInvariant()
+                                        @if (run.FailureReason is { } reason)
+                                        {
+                                            <span> · @reason</span>
+                                        }
+                                    </p>
+                                </div>
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    <RunStatusBadge Status="@run.Status" />
+                                    <span id="@($"dashboard-run-{shortId}-duration")">
+                                        @RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, now)
+                                    </span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Recent failures</BbCardTitle>
+                <BbCardDescription>
+                    Failed and lost runs among the recent ones, with the reason that was recorded.
+                    Canceled runs are a decision, not a failure, and never appear here.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (summary.RecentFailures.Count == 0)
+                {
+                    <p id="dashboard-no-failures" class="bb:text-sm bb:text-muted-foreground">
+                        No failed or lost runs since @summary.WindowStart.ToString("yyyy-MM-dd").
+                    </p>
+                }
+                else
+                {
+                    <ul class="bb:divide-y">
+                        @foreach (var failure in summary.RecentFailures)
+                        {
+                            <li id="@($"dashboard-failure-{failure.RunId.ToString("N")[..8]}")" class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
+                                <div class="bb:min-w-0">
+                                    <p class="bb:text-sm bb:font-medium">
+                                        <a href="/runs/@failure.RunId" class="bb:underline bb:underline-offset-4">Run @failure.RunId.ToString("N")[..8]</a>
+                                        <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">@failure.ProjectName · @failure.GitBranch</span>
+                                    </p>
+                                    <p class="bb:text-xs bb:text-muted-foreground">
+                                        @(failure.FailureReason ?? $"exit code {failure.ExitCode}")
+                                    </p>
+                                </div>
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    <RunStatusBadge Status="@failure.Status" />
+                                    <span>@failure.Recency.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+    }
+    else
+    {
+        @* Authenticated but nothing readable yet (the session resolved no organization): the same
+           explicit state the no-organization case shows, instead of empty numbers. *@
+        <NoOrganizationNotice />
     }
 </div>
 
 @code {
     private UserSessionInfo? _session;
+    private DashboardSummary? _summary;
+
+    private PeriodicTimer? _elapsedClock;
+    private CancellationTokenSource? _elapsedClockCts;
+    private Task? _elapsedClockTask;
 
     protected override async Task OnInitializedAsync()
     {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read. Never rely on the layout having done it first.
         _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _summary = await Dashboard.GetSummaryAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // The elapsed column ticks only inside an interactive circuit (the prerender pass has no
+        // one to show it to) and only while something is running. It re-renders the already-read
+        // summary against the current clock - it never re-queries the database.
+        if (!firstRender
+            || !RendererInfo.IsInteractive
+            || _summary is not { RunningCount: > 0 })
+        {
+            return;
+        }
+
+        _elapsedClock = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _elapsedClockCts = new CancellationTokenSource();
+        _elapsedClockTask = RunElapsedClockAsync(_elapsedClock, _elapsedClockCts.Token);
+    }
+
+    private async Task RunElapsedClockAsync(PeriodicTimer clock, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await clock.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    StateHasChanged();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The circuit went away between the tick and the re-render: the clock is done.
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_elapsedClockCts is not null)
+        {
+            await _elapsedClockCts.CancelAsync();
+            _elapsedClockCts.Dispose();
+        }
+
+        if (_elapsedClockTask is not null)
+        {
+            // The loop observes the cancellation above and returns; the timer is disposed last so
+            // no tick can fire into a disposed component.
+            await _elapsedClockTask;
+        }
+
+        _elapsedClock?.Dispose();
     }
 }
