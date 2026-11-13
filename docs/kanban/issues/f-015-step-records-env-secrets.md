@@ -4,7 +4,7 @@ title: Step records, per-step logs, env, continue_on_error, secrets and redactio
 type: feature
 priority: P1
 size: L
-status: todo
+status: done
 created: 2026-11-13
 updated: 2026-11-13
 blocked: none
@@ -66,45 +66,45 @@ Decisions:
 
 ## Acceptance Criteria
 
-- [ ] `BuildStep` entity (`OrganizationId`, `RunId`, `Index`, `Name`, `Status`, `StartedAt`,
+- [x] `BuildStep` entity (`OrganizationId`, `RunId`, `Index`, `Name`, `Status`, `StartedAt`,
       `EndedAt`, `ExitCode`, `FailureReason`) + migration, unique `(RunId, Index)`, cascade from the
       run; PostgreSQL contract gate clean.
-- [ ] Each step is reported before it starts (`Running`) and after it ends (`Success`/`Failed`/
+- [x] Each step is reported before it starts (`Running`) and after it ends (`Success`/`Failed`/
       `Skipped`) with timing and exit code; a run page opened mid-run shows completed, current and
       pending steps.
-- [ ] `continue_on_error = true` runs subsequent steps after a failure; the run still ends `Failed`
+- [x] `continue_on_error = true` runs subsequent steps after a failure; the run still ends `Failed`
       naming the failing step; with `false` the default (F-014) is unchanged.
-- [ ] `when` skips a step (`Skipped`) without spawning a process, records the reason in the run log,
+- [x] `when` skips a step (`Skipped`) without spawning a process, records the reason in the run log,
       and a skipped step does not affect the run's success. Conditions evaluate `branch`, `platform`
       and `env` exactly as declared; an unknown key in `when` is a validation error.
-- [ ] Environment precedence holds in both `env()` (Lua) and the child process, pinned by a test that
+- [x] Environment precedence holds in both `env()` (Lua) and the child process, pinned by a test that
       sets the same variable at all three levels and reads it back from both.
-- [ ] `secret("NAME")` returns the decrypted value inside a step; unknown name → step fails with a
+- [x] `secret("NAME")` returns the decrypted value inside a step; unknown name → step fails with a
       message naming the name; a Member-triggered run can still read the organization's secrets (the
       script is trusted code — that is the PRD's ruling), but a *different organization's* run
       cannot.
-- [ ] Redaction: a secret or git-credential value echoed by a child appears as `***` in the streamed
+- [x] Redaction: a secret or git-credential value echoed by a child appears as `***` in the streamed
       and persisted log, on both stdout and stderr, and in worker-generated lines; the plaintext is
       absent from the database, the download endpoint and the UI. A line-level split is documented as
       a known gap, not silently accepted.
-- [ ] Per-step log segments: `BuildLog.StepId` is set for lines emitted during a step, `null`
+- [x] Per-step log segments: `BuildLog.StepId` is set for lines emitted during a step, `null`
       otherwise; the run page groups lines under step headers.
-- [ ] Cancellation and deadlines still kill the running process tree and end the run `Canceled`/
+- [x] Cancellation and deadlines still kill the running process tree and end the run `Canceled`/
       `timeout`, with the in-flight step left `Failed` and the remaining steps `Skipped` (or pending,
       if the run ends before it reaches them — the same terminal-state discipline as elsewhere).
-- [ ] Worker-side secret cache is per run and never persisted; a worker restart re-fetches; no
+- [x] Worker-side secret cache is per run and never persisted; a worker restart re-fetches; no
       plaintext appears in worker stdout, temp files or crash logs.
 
 ## Subtasks
 
-- [ ] `BuildStep` entity + migration + `BuildLog.StepId`; server ingestion of step transitions with
+- [x] `BuildStep` entity + migration + `BuildLog.StepId`; server ingestion of step transitions with
       tenant/run validation and ordering.
-- [ ] Worker executor: step state transitions, `when` evaluation, env composition, `continue_on_error`,
+- [x] Worker executor: step state transitions, `when` evaluation, env composition, `continue_on_error`,
       per-step log stamping.
-- [ ] `secret()` primitive: run-scoped worker fetch endpoint, per-run cache, error contract; reuse
+- [x] `secret()` primitive: run-scoped worker fetch endpoint, per-run cache, error contract; reuse
       F-013's redaction filter (now fed by both credential and secret values).
-- [ ] Run page: step list with statuses, step headers in the log panel.
-- [ ] Tests (`Category=Steps`): records and ordering, skip semantics, continue_on_error, env
+- [x] Run page: step list with statuses, step headers in the log panel.
+- [x] Tests (`Category=Steps`): records and ordering, skip semantics, continue_on_error, env
       precedence, secret happy/unknown/cross-org, redaction (both streams, worker lines, persisted
       rows), per-step log grouping, cancel/deadline step states, tenancy probes for `BuildStep`.
 
@@ -174,6 +174,45 @@ Expected:
   boundary — the card's acceptance criteria and the contract document must keep saying so, because a
   future reader will otherwise treat `***` as a guarantee.
 
+### 2026-11-13 — implemented, reviewed twice, pinned, accepted
+
+- **Two conflicts with the existing code had to be decided, not discovered.** The card says `***`
+  while the filter said `[redacted]`, and the filter silently *dropped* values shorter than four
+  characters — while an organization secret has no minimum length, so short secrets were not redacted
+  at all. Both follow the card now: one marker, no threshold, and the old threshold is recited in the
+  test that proves a two-character secret is replaced.
+- **`env()` and `secret()` return late-bound references, not values.** At definition time no step is
+  running, so an eagerly read value could only ever be the pipeline's; the precedence chain the card
+  requires — inherited < pipeline < step < run environment — cannot hold for both the script and the
+  child unless resolution happens at the step boundary. References resolve there, and a secret is
+  decrypted and registered with the filter at that same moment, so the definition phase holds no
+  plaintext and the frozen spec holds only references. The cost is documented rather than hidden: a
+  script that compares or prints a reference sees the reference, and `${env:V}` whose value contains
+  `${secret:Y}` hands the child a literal, which leaks nothing but is not substituted.
+- **The crash path was a real hole.** A worker that failed outside a step wrote its diagnostic
+  straight to stderr, bypassing both the filter and the line lock, so an exception carrying a
+  decrypted value would have reached the console and the temp file as plaintext. That path now goes
+  through one product type that redacts, writes through the same lock and emits to the run's stream,
+  and a test drives it with an exception whose message contains a registered value.
+- Both review rounds found assertions that could not fail, which is worse than missing ones: the
+  console "contains no plaintext" check read a writer nothing ever wrote to, and the timeout predicate
+  was re-implemented in the test harness, so the test would keep passing after the production version
+  drifted. The first is deleted and the claim moved to a path with real content; the second is now one
+  shared type used by the loop and the harness.
+- Evidence that would otherwise be theatre: "the step was skipped" is a marker file the step itself
+  would have written; the temp logs are read from disk after the run rather than reused from memory;
+  the concurrency test asserts 1500 intact lines across six writers rather than merely finishing; and
+  the deadline case drives the real sweeper and asserts the cancel request it produced.
+- A step id arriving from a worker is validated against the run before the line is stored. A foreign
+  or unknown id is cleared but the line is kept — discarding it would let a bad id erase genuine
+  diagnostics, which is the failure mode this project keeps trying to avoid.
+- Gate: `dotnet build -c Release` 0 warnings 0 errors; `Category=Steps` 33/0/0; full suite 708/0/0,
+  zero skipped; `Category=Pipeline` 93, `Category=Lua` 94, `Category=Secrets` 64, `Category=Git` 48,
+  `Category=TenantIsolation` 62 unchanged; PostgreSQL contract gate exits 0 without a running database.
+- Recorded, not changed: the page cannot assert "this two-character value appears nowhere" because
+  every response embeds a fresh random token that can contain it; the test asserts the reference is
+  rendered and the value is not, and says why in a comment.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
@@ -187,4 +226,7 @@ Expected:
   `src/Worker/Lua/*`, `tests/Zenkins.Tests/Steps/*`, `tests/Zenkins.Tests/Tenancy/*`
 - How to run/verify: `dotnet build -c Release`; `dotnet test -c Release --filter "Category=Steps"`;
   full suite; PostgreSQL contract gate.
-- Results: not run (card not started).
+- Results: accepted 2026-11-13 after two review rounds and two rework rounds. `dotnet build -c Release`
+  0 warnings 0 errors; `Category=Steps` 33/0/0; full suite 708/0/0, zero skipped; five categories
+  unchanged; PostgreSQL contract gate exits 0 without a running database; `[redacted]` no longer
+  appears anywhere in the repository.
