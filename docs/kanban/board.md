@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [Q-003](issues/q-003-v03-test-debt.md) | Close the v0.3 test debt recorded on accepted cards | P2 | M | none | F-012, F-014, F-016, F-017 |
 
 ## Done
 
@@ -46,3 +45,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [D-004](issues/d-004-run-log-viewer.md) | Run detail: pause, search and per-step log filtering | P1 | 2026-11-14 |
 | [Q-004](issues/q-004-recovery-acceptance.md) | Recovery acceptance: server restart, worker crash, honest Lost | P1 | 2026-11-14 |
 | [D-005](issues/d-005-workers-page.md) | Workers page: detail, current runs and safe controls | P2 | 2026-11-14 |
+| [Q-003](issues/q-003-v03-test-debt.md) | Close the v0.3 test debt recorded on accepted cards | P2 | 2026-11-14 |
