@@ -13,10 +13,11 @@ loop (`dotnet run` from a clone).
 > I-003's publish smoke added a fourth category and the third exclusion the same day (fix round).
 > I-004 added a fifth category (PublishAot) and the fourth exclusion on the same day, together with
 > the AOT analyzer surface on the Worker and Shared projects (§1's toolchain note only applies to
-> that suite). Every command in the POSIX (macOS/Linux) form below was run in that order from
-> a fresh `git clone`; the expected outputs quoted here are the ones those runs produced. PowerShell
-> equivalents differ only in shell syntax (`$env:`, `Remove-Item`, `Tee-Object`) and are given
-> wherever they differ.
+> that suite). Q-009 added a sixth category (GitSshd) and the fifth exclusion on 2026-11-15, with
+> the OpenSSH-server prerequisite of §1 for that suite only. Every command in the POSIX (macOS/Linux)
+> form below was run in that order from a fresh `git clone`; the expected outputs quoted here are the
+> ones those runs produced. PowerShell equivalents differ only in shell syntax (`$env:`,
+> `Remove-Item`, `Tee-Object`) and are given wherever they differ.
 
 ## 1. Prerequisites
 
@@ -39,6 +40,16 @@ Command Line Tools; Windows: the Visual Studio C++ workload; Linux: clang plus z
 headers. Nothing else in this guide needs it (`dotnet build` runs the AOT analyzers without any
 native toolchain, and .NET does not cross-compile AOT for another OS — each OS publishes its own
 RID). See [`docs/native-aot.md`](native-aot.md) for the decision and its evidence.
+
+A second named prerequisite exists for **one suite only**: `Category=GitSshd` (Q-009) runs a real
+OpenSSH server as a user process to verify the SSH clone path end to end, so it needs the machine's
+OpenSSH tools — `sshd` and `ssh-keygen` (`ssh` for the recording shim), found on `PATH` or at the
+standard locations (`/usr/sbin/sshd`, `/usr/bin/ssh-keygen`, `/usr/bin/ssh`). macOS and Linux
+distributions ship them; Windows ships no `sshd` by default. Where the tools are absent the suite's
+facts **skip with the reason recorded** (never a silent omission), and the fast suite never reaches
+that suite at all (§2's fifth exclusion). The fixture generates every key it uses into its own
+temporary directory and reads, writes and trusts nothing in the host's `~/.ssh` — the same synthetic
+environment discipline as card Q-008.
 
 ### Which SDK version
 
@@ -80,9 +91,9 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-### Five suites: the fast one, and four acceptance harnesses
+### Six suites: the fast one, and five acceptance harnesses
 
-The test project has four deliberately slow categories, and all of them are acceptance harnesses
+The test project has five deliberately slow categories, and all of them are acceptance harnesses
 that prove the product end to end instead of proving its parts:
 
 - **`Category=Milestone`** (Q-002) starts a real Server process, a real Worker process, a real Git
@@ -108,31 +119,42 @@ that prove the product end to end instead of proving its parts:
   `pipeline.lua` under the JIT and the AOT worker produces identical step outcomes, log lines and
   artifact bytes. It needs the native toolchain of §1 (macOS: Xcode CLT; Windows: VS C++; Linux:
   clang + zlib) and each OS publishes its own RID.
+- **`Category=GitSshd`** (Q-009) starts a **real `sshd`** — as a user process, with the fixture's
+  own generated host key, authorized key and `sshd_config` on loopback — and extends F-018's
+  credential proof to the SSH transport: a real Server + Worker pair clones a private repository
+  from the delivered SSH key and runs to `Success` (the sshd's own accepted-fingerprint log is the
+  counter that proves nothing ambient authenticated), the no-credential / rejected-key /
+  wrong-host-key refusals each surface with their named reason, and the ssh invocation the real run
+  used is captured through a recording shim and matched word for word against the hardened
+  `GIT_SSH_COMMAND` pins. It needs the OpenSSH tools of §1 and nothing on the host's `~/.ssh`;
+  where the tools are absent the facts skip with the reason recorded.
 
-None of the harnesses is part of the fast loop, so the fast filter has to exclude **four**
+None of the harnesses is part of the fast loop, so the fast filter has to exclude **five**
 categories. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix
-round for the triple, I-004 for the quadruple): the quadruple exclusion runs green, and a single
-`Category!=Milestone` alone would pull the other three harnesses in.
+round for the triple, I-004 for the quadruple) and on 2026-11-15 (Q-009 for the quintuple): the
+quintuple exclusion runs green, and dropping `Category!=GitSshd` alone pulls the sshd suite in.
 
 ```bash
 dotnet build -c Release                                                                                                        # the harnesses run the built binaries
-dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot"            # the fast suite
+dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd"   # the fast suite
 dotnet test -c Release --filter "Category=Milestone"                                                                           # the milestone acceptance harness
 dotnet test -c Release --filter "Category=Recovery"                                                                            # the recovery acceptance harness
 dotnet test -c Release --filter "Category=PublishSmoke"                                                                        # the publish-smoke acceptance harness
 dotnet test -c Release --filter "Category=PublishAot"                                                                          # the AOT acceptance harness (needs the native toolchain)
+dotnet test -c Release --filter "Category=GitSshd"                                                                             # the real-sshd acceptance harness (needs the OpenSSH tools; skips with a recorded reason without them)
 ```
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot` | `dotnet build -c Release` | ~2¼ min on the reference machine (1001 tests, snapshot of the revision) |
-| Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (6 tests) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd` | `dotnet build -c Release` | ~2½ min on the reference machine (1044 tests, snapshot of the revision) |
+| Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (8 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
+| GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
-own filtered run. `dotnet test` with no filter runs **all five** (1015 at the time of writing) but
+own filtered run. `dotnet test` with no filter runs **all six** (1063 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

@@ -717,6 +717,45 @@ internal class MilestoneHost : IDisposable
         return Assert.Single(document.RootElement.EnumerateArray()).GetProperty("id").GetGuid();
     }
 
+    /// <summary>
+    /// Creates an organization <b>SSH-key</b> Git credential through the project settings tab; returns
+    /// its id. The value is the full private-key block (card Q-009's fixture serves the matching public
+    /// half); the optional HTTPS user name does not exist for this kind and is not posted.
+    /// </summary>
+    public async Task<Guid> CreateSshGitCredentialAsync(Guid projectId, string name, string privateKey)
+    {
+        var settingsPath = $"/projects/{projectId}/settings";
+        var response = await OrganizationTestHost.PostFormAsync(
+            Owner,
+            settingsPath,
+            "/git-credentials/create",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = name,
+                ["Kind"] = "SshKey",
+                ["Value"] = privateKey,
+                ["ProjectId"] = projectId.ToString(),
+            });
+        Assert.True(
+            (int)response.StatusCode is 302 or 303,
+            $"Creating the SSH Git credential failed with {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+
+        var list = await AuthTestHost.GetStringAsync(Owner, $"/projects/{projectId}/git-credentials");
+        using var document = JsonDocument.Parse(list);
+        // A project may already hold credentials (a test attaches a rejected one, then the good one),
+        // so the id is resolved by name rather than by position.
+        foreach (var element in document.RootElement.EnumerateArray())
+        {
+            if (string.Equals(element.GetProperty("name").GetString(), name, StringComparison.Ordinal))
+            {
+                return element.GetProperty("id").GetGuid();
+            }
+        }
+
+        Assert.Fail($"the credential '{name}' was not in the organization's credential list: {list}");
+        return Guid.Empty;
+    }
+
     /// <summary>Attaches a credential through the settings tab's form (card F-018's write path).</summary>
     public async Task AttachGitCredentialAsync(Guid projectId, Guid credentialId)
     {
