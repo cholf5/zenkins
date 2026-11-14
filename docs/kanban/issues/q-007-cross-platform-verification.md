@@ -28,7 +28,9 @@ instead of assumed. Every acceptance harness so far ran on macOS.
 Two machines make closing this cheap, both already on this account (see `list_machines`):
 
 - Windows — `WINDOWS-DEV-BOX`, Windows 10.0.19045 (Intel Ultra 7 265), available.
-- Linux — the `linux-cloud-host` SSH host (203.0.113.10, ubuntu, x86_64), reachable.
+- Linux — either the `linux-cloud-host` SSH host (203.0.113.10, ubuntu, x86_64) or, if that is not
+  reachable from the Worker host, the WSL2 distribution on `WINDOWS-DEV-BOX` with systemd enabled (see the
+  WSL2 decision below). The card records which one produced the evidence.
 
 The card records what these machines actually are and what was actually run on them; it does not
 assume either is usable until the environment gate below passes.
@@ -51,6 +53,12 @@ Decisions:
   processes left running, and a short note of what was deliberately left (nothing, or why).
 - **Record, don't round up.** Each machine's OS build, the exact commands, and every deviation go in
   the card. Anything not exercised stays labelled.
+- **WSL2 counts as a Linux target only when labelled as such** (PM ruling, 2026-11-14). The Windows
+  machine also carries Docker and WSL. A WSL2 distribution with systemd enabled is a legitimate way to
+  exercise the unit for real — but it is Microsoft's kernel, not bare metal and not a cloud VM, so
+  every claim it produces is written as "WSL2 (<distro>, systemd enabled)" and `docs/install.md` §4
+  keeps its "not executed" label until a real distribution has run it. A bare-metal or cloud Linux
+  host, if reachable, is still preferred and outranks WSL evidence for the same step.
 
 ## Acceptance Criteria
 

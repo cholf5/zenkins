@@ -30,8 +30,9 @@ the Npgsql provider. I-003 and D-006 both record the gap explicitly rather than 
 
 Decisions:
 
-- **A real instance, named in the card.** Docker (or a native install) is fine; the card records the
-  server version and where it runs, so the claim can be reproduced.
+- **A real instance, named in the card.** Docker (or a native install) is fine, including a PostgreSQL
+  container on the Windows Worker host — the card records the server version, where it runs and how it
+  was started, so the claim can be reproduced.
 - **Environment-only configuration.** The same published artifact, configured through environment
   variables, with no rebuild and no source tree.
 - **Migrations are the subject, not a background step.** Apply from empty with
