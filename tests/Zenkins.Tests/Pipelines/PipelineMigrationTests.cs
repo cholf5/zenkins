@@ -92,7 +92,9 @@ public sealed class PipelineMigrationTests
         }
         finally
         {
-            TryDelete(databasePath);
+            // Q-011: the old TryDelete swallowed IOException only, so a briefly-pooled SQLite handle
+            // left the database file behind; TempRootCleanup retries and records any residual.
+            TempRootCleanup.DeleteDatabase(databasePath);
         }
     }
 
@@ -156,7 +158,9 @@ public sealed class PipelineMigrationTests
         }
         finally
         {
-            TryDelete(databasePath);
+            // Q-011: the old TryDelete swallowed IOException only, so a briefly-pooled SQLite handle
+            // left the database file behind; TempRootCleanup retries and records any residual.
+            TempRootCleanup.DeleteDatabase(databasePath);
         }
     }
 
@@ -168,16 +172,5 @@ public sealed class PipelineMigrationTests
                 $"Data Source={databasePath}"))
             .Options;
         return new ZenkinsDbContext(options, new TenantContext(), systemDataScope);
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (IOException)
-        {
-        }
     }
 }

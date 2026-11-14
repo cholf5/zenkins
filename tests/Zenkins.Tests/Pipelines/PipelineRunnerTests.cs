@@ -487,13 +487,9 @@ public sealed class PipelineRunnerTests
 
         public void Dispose()
         {
-            try
-            {
-                Directory.Delete(_workRoot, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
+            // Q-011: a failed delete used to be swallowed (IOException-only) and the root was left in
+            // the system temp forever; TempRootCleanup retries the transient failures instead.
+            TempRootCleanup.DeleteDirectory(_workRoot);
         }
     }
 

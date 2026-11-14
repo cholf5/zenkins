@@ -41,19 +41,35 @@ internal sealed class GitTestDirectory : IDisposable
 
     public void Dispose()
     {
-        try
+        // Q-011: a single failed delete used to abandon the root silently, which is how the
+        // zenkins-* roots accumulated in the system temp. A fixture's own git child can hold a
+        // handle or its working directory a moment after the test ends, so the deletion is retried
+        // briefly and a root that survives every attempt is reported with one warning line - never
+        // silently abandoned. A leak in a failing test must still not mask the real failure, so
+        // Dispose itself never throws.
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            if (Directory.Exists(RootPath))
+            try
             {
-                Directory.Delete(RootPath, recursive: true);
+                if (Directory.Exists(RootPath))
+                {
+                    Directory.Delete(RootPath, recursive: true);
+                }
+
+                return;
             }
-        }
-        catch (IOException)
-        {
-            // A leaked handle in a failing test must not mask the real failure.
-        }
-        catch (UnauthorizedAccessException)
-        {
+            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == 9)
+                {
+                    Console.Error.WriteLine(
+                        $"zenkins test cleanup: '{RootPath}' survived 10 deletion attempts "
+                        + $"({failure.GetType().Name}: {failure.Message}) - left behind in the system temp.");
+                    return;
+                }
+
+                Thread.Sleep(200);
+            }
         }
     }
 }

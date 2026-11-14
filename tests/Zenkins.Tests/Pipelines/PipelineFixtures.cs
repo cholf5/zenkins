@@ -151,3 +151,74 @@ internal static class PipelineTestData
             Step("Package", "append", markerFile, "package"));
 
 }
+
+/// <summary>
+/// Best-effort deletion of the per-run temp roots and files the Pipelines harnesses create (card
+/// Q-011). The harness Disposes used to swallow only <see cref="IOException"/> and gave up on the
+/// first failed delete, so any other transient failure (a child process or the macOS indexer still
+/// holding a handle that releases a moment later, a read-only bit) abandoned the root in the system
+/// temp forever - about 9,500 <c>zenkins-*</c> roots accumulated that way across many runs. A failed
+/// delete is now retried a few times over roughly two seconds (the usual cause - a dying child's
+/// handle - releases inside that window) and a root that survives every attempt is reported with one
+/// warning line: never silently abandoned, and never thrown out of Dispose, because a teardown
+/// failure must not mask the test's own result.
+/// </summary>
+internal static class TempRootCleanup
+{
+    /// <summary>Bounded: cleanup delays a failing teardown by at most ~2s, never the green path.</summary>
+    private const int Attempts = 10;
+
+    private const int PauseMilliseconds = 200;
+
+    /// <summary>Deletes a per-run temp root and everything under it, best effort.</summary>
+    public static void DeleteDirectory(string path) =>
+        Delete(path, isDirectory: true);
+
+    /// <summary>
+    /// Deletes a per-run temp SQLite database, best effort. The journal mode writes two sidecar
+    /// files (<c>-wal</c> / <c>-shm</c>) next to the database while it is open, so the trio is
+    /// deleted together - deleting only the <c>.db</c> left two leaked files per migration test.
+    /// </summary>
+    public static void DeleteDatabase(string path)
+    {
+        foreach (var sidecar in new[] { path, path + "-wal", path + "-shm" })
+        {
+            Delete(sidecar, isDirectory: false);
+        }
+    }
+
+    private static void Delete(string path, bool isDirectory)
+    {
+        for (var attempt = 0; attempt < Attempts; attempt++)
+        {
+            try
+            {
+                if (isDirectory)
+                {
+                    if (Directory.Exists(path))
+                    {
+                        Directory.Delete(path, recursive: true);
+                    }
+                }
+                else if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+
+                return;
+            }
+            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == Attempts - 1)
+                {
+                    Console.Error.WriteLine(
+                        $"zenkins test cleanup: '{path}' survived {Attempts} deletion attempts "
+                        + $"({failure.GetType().Name}: {failure.Message}) - left behind in the system temp.");
+                    return;
+                }
+
+                Thread.Sleep(PauseMilliseconds);
+            }
+        }
+    }
+}

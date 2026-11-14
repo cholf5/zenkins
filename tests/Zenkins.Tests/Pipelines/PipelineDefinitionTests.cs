@@ -174,8 +174,8 @@ public sealed class PipelineDefinitionTests
             pipeline { name = "Build", steps = { { name = "Only", run = { "dotnet", "--info" } } } }
             """;
 
-        var failure = Assert.Throws<PipelineDefinitionException>(() =>
-            new LuaRuntimeTestDefinition(definition).Run());
+        using var run = new LuaRuntimeTestDefinition(definition);
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
 
         Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
         Assert.Contains("available inside steps only", failure.Message, StringComparison.Ordinal);
@@ -203,7 +203,8 @@ public sealed class PipelineDefinitionTests
             }
             """;
 
-        var result = new LuaRuntimeTestDefinition(definition).Run();
+        using var run = new LuaRuntimeTestDefinition(definition);
+        var result = run.Run();
 
         Assert.Equal("${secret:DEPLOY_TOKEN}", result.Spec.Steps[0].Argv[1]);
         Assert.Equal("${env:CONFIG}", result.Spec.Steps[0].Env!["CONFIG"]);
@@ -224,8 +225,8 @@ public sealed class PipelineDefinitionTests
             pipeline { name = "Build", steps = { { name = "Only", run = { "dotnet", "--info" } } } }
             """;
 
-        var failure = Assert.Throws<PipelineDefinitionException>(() =>
-            new LuaRuntimeTestDefinition(definition).Run());
+        using var run = new LuaRuntimeTestDefinition(definition);
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
 
         Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
         Assert.Contains($"{helper}() takes one environment-variable-shaped name", failure.Message, StringComparison.Ordinal);
@@ -244,7 +245,8 @@ public sealed class PipelineDefinitionTests
             pipeline { name = "Build", steps = { { name = "Only", run = { "dotnet", "--info" } } } }
             """;
 
-        var result = new LuaRuntimeTestDefinition(definition).Run();
+        using var run = new LuaRuntimeTestDefinition(definition);
+        var result = run.Run();
 
         Assert.Equal("Build", result.Spec.Name);
     }
@@ -256,7 +258,7 @@ public sealed class PipelineDefinitionTests
     [Fact]
     public void A_missing_pipeline_file_names_its_path()
     {
-        var runner = new DefinitionRun(pipelinePath: "ci/pipeline.lua");
+        using var runner = new DefinitionRun(pipelinePath: "ci/pipeline.lua");
 
         var failure = Assert.Throws<PipelineDefinitionException>(() => runner.Run());
 
@@ -267,7 +269,7 @@ public sealed class PipelineDefinitionTests
     [Fact]
     public void A_syntax_error_reports_the_position_and_nothing_runs()
     {
-        var runner = new DefinitionRun("local x = = 1");
+        using var runner = new DefinitionRun("local x = = 1");
 
         var failure = Assert.Throws<PipelineDefinitionException>(() => runner.Run());
 
@@ -283,7 +285,7 @@ public sealed class PipelineDefinitionTests
         // The prelude is loaded as its own chunk, so a script error on line 3 must say line 3 - not
         // "line 3 + prelude length". A syntax error alone would not prove that (it is reported from the
         // chunk's own parse, before any prelude ran); this one raises at runtime.
-        var runner = new DefinitionRun(string.Join('\n',
+        using var runner = new DefinitionRun(string.Join('\n',
             "local steps = {",
             "  { name = \"Only\", run = { \"dotnet\", \"--info\" } },",
             "}",
@@ -302,7 +304,7 @@ public sealed class PipelineDefinitionTests
         // A deadline a fraction of a second away is the deterministic stand-in for "the run's wall
         // clock ran out": the F-011 driver abandons the coroutine at its next yield point, so this
         // cannot hang the test.
-        var runner = new DefinitionRun("while true do end")
+        using var runner = new DefinitionRun("while true do end")
         {
             Deadline = DateTimeOffset.UtcNow.AddMilliseconds(150),
         };
@@ -315,7 +317,7 @@ public sealed class PipelineDefinitionTests
     [Fact]
     public void A_canceled_definition_is_an_operation_cancellation_not_a_failure()
     {
-        var runner = new DefinitionRun("while true do end");
+        using var runner = new DefinitionRun("while true do end");
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
 
         Assert.Throws<OperationCanceledException>(() => runner.Run(cancellation.Token));
@@ -324,7 +326,7 @@ public sealed class PipelineDefinitionTests
     [Fact]
     public void A_pipeline_path_that_leaves_the_repository_is_refused()
     {
-        var runner = new DefinitionRun(pipelinePath: "../outside.lua");
+        using var runner = new DefinitionRun(pipelinePath: "../outside.lua");
 
         var failure = Assert.Throws<PipelineDefinitionException>(() => runner.Run());
 
@@ -365,13 +367,9 @@ public sealed class PipelineDefinitionTests
 
         public void Dispose()
         {
-            try
-            {
-                Directory.Delete(_root, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
+            // Q-011: a failed delete used to be swallowed (IOException-only) and the root was left in
+            // the system temp forever; TempRootCleanup retries the transient failures instead.
+            TempRootCleanup.DeleteDirectory(_root);
         }
     }
 }

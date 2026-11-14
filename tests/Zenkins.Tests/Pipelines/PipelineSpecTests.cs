@@ -69,7 +69,8 @@ public sealed class PipelineSpecTests
             }
             """;
 
-        var result = new LuaRuntimeTestDefinition(definition).Run();
+        using var run = new LuaRuntimeTestDefinition(definition);
+        var result = run.Run();
 
         Assert.Equal(PipelineSpecSchema.Version, result.Spec.Version);
         Assert.Equal("Build", result.Spec.Name);
@@ -89,11 +90,12 @@ public sealed class PipelineSpecTests
     {
         // PRD §3.3.2 writes `pipeline { … }` without a return; a script may also `return` it. Both
         // reach the host through the same structured seam value.
-        var result = new LuaRuntimeTestDefinition(
+        using var run = new LuaRuntimeTestDefinition(
             """
             local spec = pipeline { name = "Build", steps = { { name = "Only", run = { "dotnet", "--info" } } } }
             return spec
-            """).Run();
+            """);
+        var result = run.Run();
 
         Assert.Equal("Build", result.Spec.Name);
         Assert.Single(result.Spec.Steps);
@@ -110,7 +112,7 @@ public sealed class PipelineSpecTests
             pipeline { name = "Pure", steps = { { name = "Only", run = { "dotnet", "--info" } } } }
             """;
 
-        var runner = new LuaRuntimeTestDefinition(definition);
+        using var runner = new LuaRuntimeTestDefinition(definition);
         var result = runner.Run();
 
         Assert.Equal("Pure", result.Spec.Name);
@@ -149,8 +151,8 @@ public sealed class PipelineSpecTests
     [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" } } }, triggers = { branches = { 1 } } }", "pipeline.triggers.branches[1] must be a non-empty string")]
     public void An_invalid_definition_is_rejected_with_its_field_path(string definition, string expected)
     {
-        var failure = Assert.Throws<PipelineDefinitionException>(() =>
-            new LuaRuntimeTestDefinition(definition).Run());
+        using var run = new LuaRuntimeTestDefinition(definition);
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
 
         Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
         Assert.Contains(expected, failure.Message, StringComparison.Ordinal);
@@ -164,8 +166,8 @@ public sealed class PipelineSpecTests
             Enumerable.Range(1, PipelineSpecSchema.MaxSteps + 1)
                 .Select(index => $"{{ name = \"s{index}\", run = {{ \"x\" }} }}"));
 
-        var failure = Assert.Throws<PipelineDefinitionException>(() =>
-            new LuaRuntimeTestDefinition($"pipeline {{ name = \"x\", steps = {{\n{steps}\n}} }}").Run());
+        using var run = new LuaRuntimeTestDefinition($"pipeline {{ name = \"x\", steps = {{\n{steps}\n}} }}");
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
 
         Assert.Contains("at most 200 steps", failure.Message, StringComparison.Ordinal);
     }
@@ -173,8 +175,8 @@ public sealed class PipelineSpecTests
     [Fact]
     public void A_definition_that_is_not_a_table_is_rejected()
     {
-        var failure = Assert.Throws<PipelineDefinitionException>(() =>
-            new LuaRuntimeTestDefinition("x = 1").Run());
+        using var run = new LuaRuntimeTestDefinition("x = 1");
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
 
         Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
         Assert.Contains("pipeline { name = ..., steps = { ... } }", failure.Message, StringComparison.Ordinal);
@@ -188,8 +190,8 @@ public sealed class PipelineSpecTests
         var definition = "local t = {} local inner = t for i = 1, 40 do inner.x = {} inner = inner.x end "
             + "return { name = \"deep\", steps = { { name = \"Only\", run = { \"dotnet\" } } }, extra = t }";
 
-        var failure = Assert.Throws<PipelineDefinitionException>(() =>
-            new LuaRuntimeTestDefinition(definition).Run());
+        using var run = new LuaRuntimeTestDefinition(definition);
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
 
         Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
         Assert.Contains("nests tables deeper than", failure.Message, StringComparison.Ordinal);
@@ -200,7 +202,7 @@ public sealed class PipelineSpecTests
     {
         // An empty Lua table has no shape of its own (the seam reports it as an empty list), so every
         // map-typed field accepts it as "nothing declared".
-        var result = new LuaRuntimeTestDefinition(
+        using var run = new LuaRuntimeTestDefinition(
             """
             pipeline {
               name = "Empty",
@@ -208,7 +210,8 @@ public sealed class PipelineSpecTests
               steps = { { name = "Only", run = { "dotnet", "--info" }, env = {} } },
               triggers = {},
             }
-            """).Run();
+            """);
+        var result = run.Run();
 
         Assert.Equal("Empty", result.Spec.Name);
         Assert.Null(result.Spec.Env);
@@ -222,9 +225,9 @@ public sealed class PipelineSpecTests
     [Fact]
     public void A_table_that_mixes_array_and_map_keys_is_a_clear_error_not_a_lossy_read()
     {
-        var failure = Assert.Throws<PipelineDefinitionException>(() =>
-            new LuaRuntimeTestDefinition(
-                "pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" } }, key = \"v\" } }").Run());
+        using var run = new LuaRuntimeTestDefinition(
+            "pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" } }, key = \"v\" } }");
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
 
         Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
         Assert.Contains("mixes array and map keys", failure.Message, StringComparison.Ordinal);
@@ -335,12 +338,9 @@ internal sealed class LuaRuntimeTestDefinition : IDisposable
 
     public void Dispose()
     {
-        try
-        {
-            Directory.Delete(_root, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
+        // Q-011: a failed delete used to be swallowed (IOException-only) and the root was left in
+        // the system temp forever; TempRootCleanup retries the transient failures instead. This
+        // fixture is created per test case, so it was the dominant leak source (f014-def-*).
+        TempRootCleanup.DeleteDirectory(_root);
     }
 }
