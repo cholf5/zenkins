@@ -438,6 +438,15 @@ sudo rm /etc/systemd/system/zenkins-server.service
 sudo systemctl daemon-reload
 ```
 
+The order is deliberate, and the pair is **not idempotent** (measured on card Q-007, Ubuntu 26.04.1,
+systemd 259): `disable --now` on an installed unit exits 0, and so does a second
+`systemctl stop` while the unit file still exists. Once
+`/etc/systemd/system/zenkins-server.service` is gone, `systemctl disable --now zenkins-server`
+exits **1** (`Failed to disable unit: Unit zenkins-server.service does not exist`) and
+`systemctl stop` exits **5** (`Unit zenkins-server.service not loaded`). An uninstall script that
+may run twice should test for the unit file (or treat those codes as "already uninstalled") instead
+of reading silence as success — the Windows script has the same asymmetry, documented in §5.5.
+
 Left in place: `/opt/zenkins/server/App_Data/{zenkins.db, keys/, artifacts/}`, the `zenkins` user
 and group (remove with `sudo userdel zenkins && sudo groupdel zenkins` if you want them gone — they
 were created outside the unit), and the journald log entries (`journalctl --vacuum-time=…` or your
@@ -509,7 +518,12 @@ and restart the service); persistent paths still resolve beside the binaries reg
 `Get-Service ZenkinsServer` / `sc.exe query ZenkinsServer` for state; then the §3.4 bootstrap
 against `http://127.0.0.1:5000` — the same application. The service has no console: the .NET
 Windows service lifetime routes the application's logging to the **Windows Event Log**
-(Application) — recorded as the framework's behaviour; none of this guide's runs observed it. Worker
+(Application). **Verified on 2026-11-14 (card Q-007)**: the Application log really does carry that
+output. The application's own framework log entries arrive under the provider `Zenkins.Server`
+(hosting and EF Core messages among them), and the service's SCM start/stop records arrive under the
+provider named after the service, `ZenkinsServer`. Read the provider and the message body, not a
+fixed event id: the ids are the logging framework's own (an EF Core query message, for one, is
+reported with the framework's id for that category, so the same application reports many ids). Worker
 registration and the first build are §3.5–§3.6 with the win-x64 artifacts and Git for Windows — with
 one difference: a step's `run` list is executed as an argv vector with no shell, so §3.6's `sh -c`
 has no Windows equivalent. The same three-step pipeline on Windows:
@@ -559,6 +573,12 @@ errors) instead of letting PowerShell see 1 as an error.
 
 The script stops and deletes the service and removes its `Environment` registry value. Left in
 place: `C:\zenkins\server\App_Data\{zenkins.db, keys, artifacts}` and the Event Log entries (§9).
+
+The uninstaller is **not idempotent** (behaviour since card Q-007): every `sc.exe` step in the
+script is checked, so running `-Uninstall` again after the service is gone fails loudly —
+`sc.exe delete … 1060: The specified service does not exist as an installed service` and a non-zero
+exit code — instead of printing `uninstalled:` and exiting 0. A provisioning script that may run it
+twice should treat that exit code as "already uninstalled".
 With the service gone, nothing holds the binaries any more — deleting the deployment directory
 deletes the data with it:
 
@@ -721,7 +741,7 @@ Uninstalling removes the **service**; the binaries and the data are two further 
 |---|---|---|
 | macOS (§3.9) | The launchd job (`bootout`) and `~/Library/LaunchAgents/com.zenkins.server.plist` | `<zenkins-home>/` — `App_Data/{zenkins.db, keys/, artifacts/}` and `logs/` |
 | Linux (§4.5) | The unit file and its enablement | `<install-dir>/App_Data/{zenkins.db, keys/, artifacts/}`, the `zenkins` user and group, journald entries |
-| Windows (§5.5) | The service and its `Environment` registry value | `<InstallDir>\App_Data\{zenkins.db, keys, artifacts}`, Event Log entries |
+| Windows (§5.5) | The service and its `Environment` registry value | `<InstallDir>\App_Data\{zenkins.db, keys, artifacts}`, Event Log entries and their source registrations |
 | Worker (§6) | Whatever you ran it under | `~/.zenkins/worker-tokens/…/worker.token` (the credential) and `work/` next to the binary (disposable run directories) |
 
 **Removing the binaries too.** No delivered uninstaller deletes the deployment directory; delete it
@@ -746,6 +766,19 @@ outside them: the `zenkins` service account and journald entries on Linux (remov
 `sudo userdel zenkins && sudo groupdel zenkins` and `journalctl --vacuum-time=…`), the Event Log
 entries on Windows, and — on every Worker machine — `~/.zenkins/worker-tokens/…/worker.token` plus
 `work/`.
+
+On Windows the [Event Log *source registrations*](../deploy/windows/install-server-service.ps1) are
+part of that residue, and they are easy to miss because they are registry keys of their own, not
+children of the service key: after `-Uninstall` removed
+`HKLM\SYSTEM\CurrentControlSet\Services\ZenkinsServer`, both
+`HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Zenkins.Server` (the application's own
+framework logging) and `…\Application\ZenkinsServer` (the SCM channel) were still present and the
+`Zenkins.Server` provider still resolved — verified with card Q-007. They hold no credentials or
+build data, so leaving them is harmless; remove them explicitly
+(`Remove-Item -Recurse HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\Zenkins.Server`,
+the same for `ZenkinsServer`) if the host must come back to a pristine registry. They are not part of
+the service key: an event-log source name is a machine-wide namespace entry (one source of a given
+name per host), so it survives the service's deletion and no delivered uninstaller touches it.
 
 "Uninstall" in the delivered scripts never deletes user data — deleting `App_Data/` is the
 operator's explicit act, and it is irreversible (§8's table says what each subdirectory costs).
@@ -780,9 +813,9 @@ next restart.
 
 **Where the logs are.** macOS: `<zenkins-home>/logs/server.log` and `server.err.log` (the plist's
 `StandardOutPath`/`StandardErrorPath`). Linux: `journalctl -u zenkins-server`. Windows: the Windows
-Event Log (Application), via the service lifetime (recorded as framework behaviour, not observed on
-the verification machine). Startup failures print before any request is served — that is the first
-place to look.
+Event Log (Application), via the service lifetime — verified in its own right: the provider
+`Zenkins.Server` carries the application's framework log entries there (§5.3). Startup failures print
+before any request is served — that is the first place to look.
 
 **The worker says `the server rejected the worker token with 401/403 (unknown, used or revoked)`.**
 The persisted credential no longer matches a server-side token (server database replaced, token

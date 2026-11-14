@@ -33,9 +33,27 @@ param(
 
 $ServiceName = "ZenkinsServer"
 
+# Q-007: every sc.exe call is checked. The earlier version ignored $LASTEXITCODE, so a second
+# install over an existing service (sc.exe create answers 1073 'already exists') still printed
+# 'installed' and exited 0 - a reinstall onto a different directory looked successful while the
+# old binPath stayed in the SCM. A failed step now stops the script with a non-zero exit code.
+function Invoke-Sc {
+    param([string[]]$ScArguments, [string]$Step)
+
+    $output = & sc.exe @ScArguments 2>&1
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        Write-Error "error: sc.exe $($ScArguments -join ' ') failed with exit code $code ($Step). Last output: $($output -join ' ')"
+        exit 1
+    }
+
+    return $output
+}
+
 if ($Uninstall) {
-    sc.exe stop $ServiceName | Out-Null
-    sc.exe delete $ServiceName
+    # A service that is already stopped answers 1062 here; that is not an uninstall failure.
+    & sc.exe stop $ServiceName 2>&1 | Out-Null
+    Invoke-Sc @('delete', $ServiceName) -Step 'deleting the service registration' | Out-Null
     # The per-service environment lives in the registry; remove it with the service.
     Remove-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName" `
         -Name "Environment" -ErrorAction SilentlyContinue
@@ -55,8 +73,10 @@ if (-not (Test-Path $Exe)) {
 }
 
 # binPath= requires the space after '='; the apphost is the service binary.
-sc.exe create $ServiceName binPath= "`"$Exe`"" start= auto DisplayName= "Zenkins Server"
-sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/5000
+Invoke-Sc @('create', $ServiceName, 'binPath=', "`"$Exe`"", 'start=', 'auto', 'DisplayName=', 'Zenkins Server') `
+    -Step 'creating the service' | Out-Null
+Invoke-Sc @('failure', $ServiceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/5000/restart/5000') `
+    -Step 'configuring restart-on-crash' | Out-Null
 
 # -Port lands through the per-service environment: the SCM reads this REG_MULTI_SZ and merges it
 # into the service process environment at start. It must be written BEFORE the first start - a
@@ -69,5 +89,5 @@ New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName" `
         "Database__ApplyMigrationsOnStartup=true"
     ) -Force | Out-Null
 
-sc.exe start $ServiceName
+Invoke-Sc @('start', $ServiceName) -Step 'starting the service' | Out-Null
 Write-Host "installed: $ServiceName ($Exe, port $Port via service Environment) - data lives in $InstallDir\App_Data"
