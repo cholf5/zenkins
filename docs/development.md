@@ -5,7 +5,8 @@ run, configuration, repository layout, and troubleshooting.
 
 > **Verified on:** macOS 26.5 (arm64) with .NET SDK **10.0.403**, on 2026-11-12; re-verified after
 > project CRUD landed. The test suites (§2) were re-verified on 2026-11-14, when the recovery
-> acceptance suite (Q-004) added a third category and the fast filter grew its second exclusion.
+> acceptance suite (Q-004) added a third category and the fast filter grew its second exclusion;
+> I-003's publish smoke added a fourth category and the third exclusion the same day (fix round).
 > Every command in the POSIX (macOS/Linux) form below was run in that order from
 > a fresh `git clone`; the expected outputs quoted here are the ones those runs produced. PowerShell
 > equivalents differ only in shell syntax (`$env:`, `Remove-Item`, `Tee-Object`) and are given
@@ -66,10 +67,10 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-### Three suites: the fast one, and two acceptance harnesses
+### Four suites: the fast one, and three acceptance harnesses
 
-The test project has two deliberately slow categories, and both are acceptance harnesses that prove
-the product end to end instead of proving its parts:
+The test project has three deliberately slow categories, and all of them are acceptance harnesses
+that prove the product end to end instead of proving its parts:
 
 - **`Category=Milestone`** (Q-002) starts a real Server process, a real Worker process, a real Git
   repository (with a real `pipeline.lua`), a real webhook delivery and a real artifact download.
@@ -80,31 +81,44 @@ the product end to end instead of proving its parts:
   prove what a crash really does: a queued run survives the restart, a killed worker's run becomes
   `Lost` with the offline reason, the killed worker's late report is refused, and a restarted worker
   claims new work instead of resuming the abandoned one.
+- **`Category=PublishSmoke`** (I-003) publishes self-contained artifacts for the local RID (Server
+  as a folder, Worker as a folder plus a single-file variant) with the product's
+  warnings-as-errors, runs the same real scenario against the published apphosts executed directly
+  (no `dotnet exec`, no Development crutch), and proves the packaging claims themselves: the data
+  lands beside the binaries, an upgrade cycle (stop → replace → start) preserves the database, the
+  key ring and the artifacts, and the same binaries honour a second environment without rebuilding.
 
-Neither harness is part of the fast loop, so the fast filter has to exclude **two** categories. The
-runner accepts the `&`-joined double exclusion - verified on 2026-11-14: the combination runs (931
-tests, 0 failed, 0 skipped), and the single exclusion `Category!=Milestone` alone would now pull the
-four recovery tests in (it answers 935 with them, 931 without):
+None of the harnesses is part of the fast loop, so the fast filter has to exclude **three**
+categories. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix
+round): the triple exclusion runs (997 tests, 0 failed, 0 skipped), and a single
+`Category!=Milestone` alone would pull the recovery and publish-smoke tests in.
 
 ```bash
-dotnet build -c Release                                                  # the harnesses run the built binaries
-dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery" # the fast suite
-dotnet test -c Release --filter "Category=Milestone"                     # the milestone acceptance harness
-dotnet test -c Release --filter "Category=Recovery"                      # the recovery acceptance harness
+dotnet build -c Release                                                                          # the harnesses run the built binaries
+dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke"  # the fast suite
+dotnet test -c Release --filter "Category=Milestone"                                             # the milestone acceptance harness
+dotnet test -c Release --filter "Category=Recovery"                                              # the recovery acceptance harness
+dotnet test -c Release --filter "Category=PublishSmoke"                                          # the publish-smoke acceptance harness
 ```
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery` | `dotnet build -c Release` | ~1½–2 min on the reference machine (931 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke` | `dotnet build -c Release` | ~2¼ min on the reference machine (997 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (6 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
+| PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 
-`dotnet test` with no filter runs **all three** (941 at the time of writing, ~2 min). That is why each
-harness carries its own category, so the fast loop is one flag away and a machine without the Release
-build never pays for it: both harnesses only ever launch the Release-build output of
+**The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
+own filtered run. `dotnet test` with no filter runs **all four** (1009 at the time of writing) but
+is *not* the gate: it executes everything in one process, and the publish smoke's three
+self-contained publishes load the machine while the process-sensitive harnesses run - that combined
+run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only
+ever launch the Release-build output of
 `Zenkins.Server.dll` and `Zenkins.Worker.dll` from the `src` project trees, and fail fast with a
 message naming `dotnet build -c Release` if those binaries are absent (the same rule the F-005/F-007
-process E2Es follow).
+process E2Es follow). A self-contained publish under the same `bin` tree does not count as a
+harness binary: its runtimeconfig names no framework, so `dotnet exec` cannot run it, and the
+harnesses deliberately select only framework-dependent binaries.
 
 What the harnesses need, and what they do not:
 
@@ -160,10 +174,21 @@ the URL printed in the log.
 
 ### Where the database lives
 
-`src/Server/App_Data/zenkins.db` — a single SQLite file, created on demand, next to the running
-project's content root. While the app runs you will also see `zenkins.db-wal` and `zenkins.db-shm`.
-The whole `App_Data` directory and all `*.db*` files are git-ignored; nothing database-related is
-ever committed.
+Two locations, and which one applies depends on how the app starts (card I-003's path discipline:
+relative persistent paths resolve from `AppContext.BaseDirectory` — the directory the binaries run
+from — never from the current working directory):
+
+- **`dotnet run` (development):** `src/Server/bin/Debug/net10.0/App_Data/zenkins.db` — under the
+  build output, because that is where the binaries the runtime executes live. While the app runs
+  you will also see `zenkins.db-wal` and `zenkins.db-shm`.
+- **`dotnet ef` (design time):** `src/Server/App_Data/zenkins.db` — the design-time factory
+  deliberately targets the source tree, so EF tooling finds the repository's database. That fork is
+  deliberate; point `ConnectionStrings:Default` at the database you actually mean when the two must
+  agree.
+
+Everything `App_Data` is git-ignored wherever it lands (`**/App_Data/`); nothing database-related
+is ever committed. A published run (§6) keeps its data in `App_Data/` under the **publish
+directory**, regardless of the directory it was started from.
 
 ### What Development changes
 
@@ -201,22 +226,25 @@ whenever the request is HTTPS.
 
 ### Reset the local database
 
-Stop the app (Ctrl+C), then delete the data directory; the next run recreates and migrates it:
+Stop the app (Ctrl+C), then delete the data directory; the next run recreates and migrates it. For
+`dotnet run` that directory is under the build output (see *Where the database lives* above);
+`src/Server/App_Data` only holds what `dotnet ef` (or a pre-I-003 dev run) put there — delete it
+too when it exists:
 
 ```bash
-rm -rf src/Server/App_Data
+rm -rf src/Server/bin/Debug/net10.0/App_Data src/Server/App_Data
 dotnet run --project src/Server
 ```
 
 ```powershell
-Remove-Item -Recurse -Force src/Server/App_Data
+Remove-Item -Recurse -Force src/Server/bin/Debug/net10.0/App_Data, src/Server/App_Data
 dotnet run --project src/Server
 ```
 
 The register page says "first account becomes the Owner" again afterwards. This is the standard
 recovery for a dev database you no longer trust — see §6. A *published* run keeps its database in
-`App_Data/` under the directory you started it from (§6), not in the repository: if you ran the
-published DLL elsewhere, delete that directory instead.
+`App_Data/` under the **publish directory** (§6), not in the repository: delete that directory's
+`App_Data` instead.
 
 ### Headless smoke test (optional, macOS/Linux)
 
@@ -548,12 +576,19 @@ dotnet .\Zenkins.Server.dll
 Set-Location ..\..   # back to the repository root
 ```
 
-`artifacts/` is git-ignored, so the publish output cannot accidentally be committed. **The published
-app's content root is the current working directory**, not the directory containing the DLL: started
-from `artifacts/publish`, the SQLite file is `artifacts/publish/App_Data/zenkins.db`; started with
-`dotnet ./artifacts/publish/Zenkins.Server.dll` from the repository root, it is
-`<repo root>/App_Data/zenkins.db` and `artifacts/publish/App_Data` never exists. `cd` first if you want
-the database next to the binaries.
+`artifacts/` is git-ignored, so the publish output cannot accidentally be committed. Since I-003
+the **published app keeps its data beside its own binaries**: the SQLite file, the Data Protection
+key ring and the artifact store are always `<publish dir>/App_Data/*` — they resolve from
+`AppContext.BaseDirectory`, whichever directory you start the app from, so `cd` no longer matters
+for the data. What still follows the working directory is **appsettings.json discovery** (the
+content root): start the published app from its own directory, or configure everything through
+environment variables — the service templates in `deploy/` do exactly that (the launchd plist and
+the systemd unit pin `WorkingDirectory`; the Windows service sets a per-service environment, and
+its header documents why appsettings.json is unreliable there).
+
+The supported way to produce publish output is the I-003 matrix, `scripts/publish.sh`
+(win-x64 / linux-x64 / osx-arm64; Server as a folder, Worker as a folder plus a single-file
+variant), with install/uninstall packaging per OS under `deploy/`.
 
 Production does not migrate on startup, so that database starts empty — and
 `dotnet ef database update --project src/Server` on its own does **not** fill it: the design-time

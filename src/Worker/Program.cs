@@ -67,9 +67,10 @@ internal static class Program
                 configuration.ServerUrl,
                 configuration.WorkerName),
             new WorkDirectoryService(
-                // ZENKINS_WORK_ROOT, default "work/" relative to the worker's current directory
-                // (absolute values pass through GetFullPath unchanged).
-                Path.GetFullPath(configuration.WorkRoot)),
+                // The run directories' root: a relative value (the default "work", or a relative
+                // ZENKINS_WORK_ROOT) resolves against AppContext.BaseDirectory, not the current
+                // directory - the I-003 path discipline; absolute values pass through unchanged.
+                configuration.ResolveWorkRoot()),
             BackoffScheduler.Default(),
             Console.Out,
             Console.Error);

@@ -19,38 +19,40 @@ public static class SecretDataProtection
 
     /// <summary>
     /// Configuration key for the persisted key-ring directory (<c>DataProtection:KeysDirectory</c>).
-    /// Absolute, or relative to the content root.
+    /// Absolute, or relative to <see cref="AppContext.BaseDirectory"/> (the publish/install directory —
+    /// the I-003 path discipline, never the working directory).
     /// </summary>
     public const string KeysDirectoryConfigurationKey = "DataProtection:KeysDirectory";
 
     /// <summary>
-    /// Default key-ring directory, relative to the content root: next to the development database.
-    /// Must be backed up with the database - losing it means every secret is re-entered, not restored.
+    /// Default key-ring directory, relative to <see cref="AppContext.BaseDirectory"/>: next to the
+    /// published database. Must be backed up with the database - losing it means every secret is
+    /// re-entered, not restored.
     /// </summary>
     public const string DefaultKeysDirectoryRelativePath = "App_Data/keys";
 
     /// <summary>
     /// Resolves the persisted key-ring directory.
     /// <para>
-    /// Precedence: the configured value (absolute, or relative to <paramref name="contentRootPath"/>),
+    /// Precedence: the configured value (absolute, or relative to <see cref="AppContext.BaseDirectory"/>),
     /// then <c>keys/</c> next to the SQLite database file (so a backup of <c>App_Data</c> carries both
     /// the ciphertexts and the ring that reads them - and a test host with a temporary database
-    /// automatically gets a temporary ring), then <see cref="DefaultKeysDirectoryRelativePath"/> for a
-    /// server database, which has no local file to sit next to.
+    /// automatically gets a temporary ring), then <see cref="DefaultKeysDirectoryRelativePath"/> under
+    /// the application base directory for a server database, which has no local file to sit next to.
+    /// Relative values never resolve from the working directory or the content root: a packaged server
+    /// runs with an arbitrary working directory, and its key ring follows its binaries (I-003).
     /// </para>
     /// </summary>
     public static string ResolveKeysDirectory(
         IConfiguration configuration,
-        string contentRootPath,
         ZenkinsDataOptions? dataOptions = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentException.ThrowIfNullOrWhiteSpace(contentRootPath);
 
         var configured = configuration[KeysDirectoryConfigurationKey];
         if (!string.IsNullOrWhiteSpace(configured))
         {
-            return Path.GetFullPath(configured, contentRootPath);
+            return Path.GetFullPath(configured, AppContext.BaseDirectory);
         }
 
         if (dataOptions is { Provider: DatabaseProvider.Sqlite } sqlite)
@@ -69,6 +71,6 @@ public static class SecretDataProtection
             }
         }
 
-        return Path.Combine(contentRootPath, DefaultKeysDirectoryRelativePath);
+        return Path.Combine(AppContext.BaseDirectory, DefaultKeysDirectoryRelativePath);
     }
 }

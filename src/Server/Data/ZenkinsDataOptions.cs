@@ -23,10 +23,19 @@ public sealed record ZenkinsDataOptions(DatabaseProvider Provider, string Connec
 
     /// <summary>
     /// Reads the provider and connection string. When no connection string is configured and the
-    /// provider is SQLite, the database defaults to <c>App_Data/zenkins.db</c> under
-    /// <paramref name="contentRootPath"/> (git-ignored, created on demand).
+    /// provider is SQLite, the database defaults to <c>App_Data/zenkins.db</c>.
+    /// <para>
+    /// <b>I-003 path discipline:</b> a relative default resolves against
+    /// <see cref="AppContext.BaseDirectory"/> — the publish/install directory — and never the process
+    /// working directory or the content root: a service-packaged server (Windows Service, systemd,
+    /// launchd) runs with an arbitrary working directory, and its data must land beside its own
+    /// binaries regardless of who started it. <paramref name="relativePathBase"/> exists only for the
+    /// design-time EF factory, which deliberately targets the development source tree; runtime callers
+    /// pass nothing. <c>Assembly.Location</c> is banned everywhere (IL3000 under single-file, which
+    /// I-004 inherits).
+    /// </para>
     /// </summary>
-    public static ZenkinsDataOptions FromConfiguration(IConfiguration configuration, string contentRootPath)
+    public static ZenkinsDataOptions FromConfiguration(IConfiguration configuration, string? relativePathBase = null)
     {
         var providerText = configuration[ProviderConfigurationKey];
         var provider = string.IsNullOrWhiteSpace(providerText)
@@ -47,7 +56,10 @@ public sealed record ZenkinsDataOptions(DatabaseProvider Provider, string Connec
                     + $"'{nameof(DatabaseProvider.Postgres)}'.");
             }
 
-            connectionString = $"Data Source={Path.Combine(contentRootPath, "App_Data", "zenkins.db")}";
+            connectionString = $"Data Source={Path.Combine(
+                relativePathBase ?? AppContext.BaseDirectory,
+                "App_Data",
+                "zenkins.db")}";
         }
 
         return new ZenkinsDataOptions(provider, connectionString);

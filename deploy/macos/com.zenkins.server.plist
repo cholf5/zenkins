@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  I-003: the launchd job definition for the published Zenkins Server (macOS).
+
+  The app runs as a plain supervised process - the hosting layer needs no launchd lifetime, and
+  launchd owns restart-on-crash (KeepAlive) and start-on-load (RunAtLoad). @ZENKINS_HOME@ is the
+  deployment directory (the publish output copied to its final home); the Server resolves every
+  persistent path (App_Data/zenkins.db, App_Data/keys, App_Data/artifacts) from its own location
+  (AppContext.BaseDirectory), so the data lives beside the binaries whichever directory launchd
+  starts the job from. WorkingDirectory is still pinned to the home directory so appsettings.json
+  next to the binaries is found.
+
+  Placeholders: @ZENKINS_HOME@ (absolute path of the deployment directory), @ZENKINS_PORT@.
+  Install/uninstall: deploy/macos/install-launchd.sh
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zenkins.server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@ZENKINS_HOME@/Zenkins.Server</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@ZENKINS_HOME@</string>
+
+    <!-- Start when the job is loaded (login/boot); restart the process if it crashes. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ASPNETCORE_URLS</key>
+        <string>http://127.0.0.1:@ZENKINS_PORT@</string>
+        <key>Database__Provider</key>
+        <string>Sqlite</string>
+        <!-- PostgreSQL deployments switch the provider here; the connection string is another
+             variable (ConnectionStrings__Default). Startup migrations: on for a single-node
+             self-host; multi-node deployments run `dotnet ef database update` once instead. -->
+        <key>Database__ApplyMigrationsOnStartup</key>
+        <string>true</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@ZENKINS_HOME@/logs/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>@ZENKINS_HOME@/logs/server.err.log</string>
+</dict>
+</plist>

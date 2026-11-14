@@ -276,6 +276,28 @@ internal static class MilestonePipelines
         Pipeline("feature-pipeline", env: null, EchoStep("FeatureOnly", "echo", "feature-branch"));
 
     /// <summary>
+    /// The published smoke's definition (card I-003 TC-001): the happy path's shape - three steps, a
+    /// pipeline-level env var, a secret claim, an artifact - but its steps are plain POSIX shell, so a
+    /// machine with no SDK and no runtime on its PATH can still execute every child process. The only
+    /// .NET in the published scenario is inside the Server and Worker binaries themselves. On Windows
+    /// (whose publish is cross-compiled on this card and never smoke-run) the suite falls back to the
+    /// dotnet-hosted happy definition the fixture already ships.
+    /// </summary>
+    public static string PublishedHappy => OperatingSystem.IsWindows()
+        ? Happy
+        : Pipeline(
+            "published-milestone",
+            $"{GreetingVariable} = \"{Greeting}\"",
+            Step("Restore", "sh", "-c", "echo \"$ZK_GREETING\""),
+            Step("Build", "sh", "-c", "echo building; echo \"${secret:" + SecretName + "}\""),
+            StepWithArtifact(
+                "Publish",
+                "report.txt",
+                "sh",
+                "-c",
+                "echo probe-written; echo 'artifact-body-42' > report.txt"));
+
+    /// <summary>
     /// The secret-hygiene definition: the same secret reaches <b>stdout</b>, <b>stderr</b> and an
     /// <b>artifact file</b>. The log side must say <c>***</c>; the artifact keeps the bytes the pipeline
     /// chose to write (Q-002's ruling: artifact bytes are never rewritten).

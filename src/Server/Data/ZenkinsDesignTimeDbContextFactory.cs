@@ -31,6 +31,9 @@ public sealed class ZenkinsDesignTimeDbContextFactory : IDesignTimeDbContextFact
             .AddEnvironmentVariables()
             .Build();
 
+        // The design-time factory deliberately targets the development source tree: the default
+        // SQLite file stays at src/Server/App_Data/zenkins.db for `dotnet ef`, while the runtime
+        // resolves the same default from AppContext.BaseDirectory (the I-003 path discipline).
         var options = ZenkinsDataOptions.FromConfiguration(configuration, contentRoot);
         var builder = new DbContextOptionsBuilder<ZenkinsDbContext>().UseZenkinsDatabase(options);
 

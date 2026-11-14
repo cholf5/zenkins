@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Xunit;
@@ -774,14 +775,44 @@ public sealed class WorkerProcessE2ETests
             .Where(path => path.Contains(releaseMarker, StringComparison.Ordinal)
                 && path.Contains($"{Path.DirectorySeparatorChar}net10.0{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
                 && !path.Contains("ref", StringComparison.Ordinal))
+            // A self-contained publish (I-003) writes its build output to bin/Release/net10.0/<rid>/ -
+            // a runtimeconfig that names no framework, which `dotnet exec` cannot run here. The E2E
+            // drives the framework-dependent build, so only those candidates qualify.
+            .Where(NamesAFramework)
             .Select(path => new FileInfo(path))
             .OrderBy(file => file.LastWriteTimeUtc)
             .ToArray();
 
         Assert.True(
             candidates.Length > 0,
-            $"No built '{fileName}' found under '{binRoot}' (Release). Run 'dotnet build -c Release' before the E2E.");
+            $"No built '{fileName}' found under '{binRoot}' (Release). Run 'dotnet build -c Release' before the E2E. "
+            + "(A self-contained publish under the same bin tree does not count: its runtimeconfig names no framework.)");
         return candidates[^1].FullName;
+    }
+
+    /// <summary>Whether the runtimeconfig.json next to an app DLL names a framework (framework-dependent).
+    /// A self-contained publish's runtimeconfig lists <c>includedFrameworks</c> instead.</summary>
+    private static bool NamesAFramework(string appDllPath)
+    {
+        var runtimeConfigPath = Path.Combine(
+            Path.GetDirectoryName(appDllPath)!,
+            Path.GetFileNameWithoutExtension(appDllPath) + ".runtimeconfig.json");
+        if (!File.Exists(runtimeConfigPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(runtimeConfigPath));
+            var runtimeOptions = document.RootElement.GetProperty("runtimeOptions");
+            return runtimeOptions.TryGetProperty("framework", out _)
+                || runtimeOptions.TryGetProperty("frameworks", out _);
+        }
+        catch (Exception failure) when (failure is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

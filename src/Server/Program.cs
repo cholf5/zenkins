@@ -23,8 +23,18 @@ using Zenkins.Server.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// I-003: service hosting through the hosting layer, never hand-written wrappers. Each extension is a
+// guarded no-op off its platform and service context (on macOS neither applies: launchd supervises the
+// published apphost directly via deploy/macos). Where they do apply, the framework swaps in the
+// service lifetime and owns the shutdown story. The data-path guarantee is NOT the content root:
+// it is this codebase's own AppContext.BaseDirectory resolvers below (a packaged server runs with an
+// arbitrary working directory), and appsettings.json discovery stays a working-directory question -
+// pin it in the unit/plist (WorkingDirectory) or configure entirely through environment variables.
+builder.Host.UseWindowsService();
+builder.Host.UseSystemd();
+
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddZenkinsData(builder.Configuration, builder.Environment.ContentRootPath);
+builder.Services.AddZenkinsData(builder.Configuration);
 builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
@@ -49,8 +59,9 @@ builder.Services.AddZenkinsWebhooks();
 //
 // The path is resolved when the options are materialised, not here: deployment/test configuration
 // sources are applied later than this line, and a path read too early would silently fall back to
-// the default. The startup assertion below then fails fast when the directory is not writable.
-var contentRootPath = builder.Environment.ContentRootPath;
+// the default. Relative values resolve from AppContext.BaseDirectory (the publish/install directory —
+// the I-003 path discipline); the startup assertion below then fails fast when the directory is not
+// writable.
 builder.Services
     .AddDataProtection()
     // One application name keeps the keys stable across deployments; changing it orphans the ring.
@@ -58,10 +69,7 @@ builder.Services
 builder.Services.AddOptions<KeyManagementOptions>()
     .Configure<IConfiguration, ILoggerFactory, ZenkinsDataOptions>((options, configuration, loggerFactory, dataOptions) =>
     {
-        var keysDirectory = SecretDataProtection.ResolveKeysDirectory(
-            configuration,
-            contentRootPath,
-            dataOptions);
+        var keysDirectory = SecretDataProtection.ResolveKeysDirectory(configuration, dataOptions);
 
         // PersistKeysToFileSystem's own effect, spelled out because the directory has to be resolved
         // after every configuration source has been applied (see above).
@@ -126,7 +134,6 @@ var app = builder.Build();
 // already unrecoverable.
 var dataProtectionKeysDirectory = SecretDataProtection.ResolveKeysDirectory(
     app.Configuration,
-    app.Environment.ContentRootPath,
     app.Services.GetRequiredService<ZenkinsDataOptions>());
 EnsureWritableDirectory(
     dataProtectionKeysDirectory,

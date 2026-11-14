@@ -51,6 +51,16 @@
     -->
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.15" />
     <!--
+      I-003: service hosting through the hosting layer. UseWindowsService()/UseSystemd() stay
+      guarded no-ops off their platform and service context (the Server is built and published on
+      all three RIDs); when they do apply, the framework swaps in the service lifetime. They do NOT
+      pin the content root - data paths are guaranteed by the codebase's own AppContext.BaseDirectory
+      resolvers, and appsettings discovery by the unit/plist WorkingDirectory or service environment.
+      Pinned to the same 10.0.15 servicing band.
+    -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.15" />
+    <!--
       F-011: the pipeline engine, per docs/lua-runtime.md §1/§8. Pinned to the exact stable release
       (2.0.0, not 3.0.0-beta.1) because the beta is a single prerelease and reproduces the same
       pcall-with-__call defect the stable build has, so the prerelease buys no behaviour we depend on

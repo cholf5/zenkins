@@ -23,13 +23,11 @@ public sealed class SecretDataProtectionTests
     [InlineData("explicit-absolute-directory")]
     [InlineData("relative-data-source-keeps-the-ring-beside-the-working-directory")]
     [InlineData("sqlite-keeps-the-ring-next-to-the-database")]
-    [InlineData("postgres-falls-back-to-the-content-root")]
+    [InlineData("postgres-falls-back-to-the-application-base-directory")]
     public void Each_resolution_branch_lands_where_the_documentation_says(string branch)
     {
         var root = Path.Combine(Path.GetTempPath(), $"zenkins-f012-resolve-{Guid.NewGuid():N}");
-        var contentRoot = Path.Combine(root, "content");
         var dataDirectory = Path.Combine(root, "data");
-        Directory.CreateDirectory(contentRoot);
         Directory.CreateDirectory(dataDirectory);
 
         try
@@ -42,7 +40,8 @@ public sealed class SecretDataProtectionTests
             {
                 case "explicit-relative-directory":
                     // The configured value wins over the database location and is relative to the
-                    // content root.
+                    // application base directory (the publish/install directory) - the I-003 path
+                    // discipline, never the working directory or the content root.
                     dataOptions = new ZenkinsDataOptions(
                         DatabaseProvider.Sqlite,
                         $"Data Source={Path.Combine(dataDirectory, "zenkins.db")}");
@@ -50,7 +49,7 @@ public sealed class SecretDataProtectionTests
                     {
                         [SecretDataProtection.KeysDirectoryConfigurationKey] = "custom/keys",
                     });
-                    expected = Path.Combine(contentRoot, "custom", "keys");
+                    expected = Path.Combine(AppContext.BaseDirectory, "custom", "keys");
                     break;
 
                 case "explicit-absolute-directory":
@@ -83,13 +82,14 @@ public sealed class SecretDataProtectionTests
                     expected = Path.Combine(dataDirectory, "keys");
                     break;
 
-                case "postgres-falls-back-to-the-content-root":
+                case "postgres-falls-back-to-the-application-base-directory":
                     // A server database has no local file to sit next to, so the documented default is
-                    // App_Data/keys under the content root.
+                    // App_Data/keys under the application base directory (the publish/install
+                    // directory - card I-003).
                     dataOptions = new ZenkinsDataOptions(
                         DatabaseProvider.Postgres,
                         "Host=localhost;Port=5432;Database=zenkins;Username=zenkins;Password=zenkins");
-                    expected = Path.Combine(contentRoot, "App_Data", "keys");
+                    expected = Path.Combine(AppContext.BaseDirectory, "App_Data", "keys");
                     break;
 
                 default:
@@ -99,7 +99,6 @@ public sealed class SecretDataProtectionTests
 
             var resolved = SecretDataProtection.ResolveKeysDirectory(
                 configuration.Build(),
-                contentRoot,
                 dataOptions);
 
             Assert.Equal(Path.GetFullPath(expected), resolved);

@@ -9,10 +9,11 @@ namespace Zenkins.Server.Artifacts;
 /// <see cref="Zenkins.Server.Data.ZenkinsDataOptions"/>.
 /// <para>
 /// <b>The store root is data, like the database.</b> <c>Artifacts:RootPath</c> defaults to
-/// <c>App_Data/artifacts</c> under the content root - next to <c>App_Data/zenkins.db</c>, so a backup of
-/// the data directory is a backup of the build history. A relative value is resolved against the content
-/// root at first use (not at registration), so a deployment's configuration source cannot land after the
-/// path was frozen.
+/// <c>App_Data/artifacts</c>, resolved from <see cref="AppContext.BaseDirectory"/> — next to
+/// <c>App_Data/zenkins.db</c>, so a backup of the data directory is a backup of the build history.
+/// A relative value (default or configured) resolves against the application base directory, never
+/// the content root or the working directory: the I-003 path discipline, so a service-packaged
+/// server keeps its store beside its own binaries whichever directory it was started from.
 /// </para>
 /// </summary>
 /// <param name="RootPath">Absolute path of the artifact store's root directory.</param>
@@ -47,14 +48,14 @@ public sealed record ArtifactOptions(
         SweepIntervalSeconds: 60,
         PendingTimeout: TimeSpan.FromMinutes(30));
 
-    /// <summary>Reads the options, resolving a relative store root against <paramref name="contentRootPath"/>.</summary>
-    public static ArtifactOptions FromConfiguration(IConfiguration configuration, string contentRootPath)
+    /// <summary>Reads the options. A relative store root (default or configured) resolves against
+    /// <see cref="AppContext.BaseDirectory"/> (the I-003 path discipline).</summary>
+    public static ArtifactOptions FromConfiguration(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentException.ThrowIfNullOrWhiteSpace(contentRootPath);
 
         return new ArtifactOptions(
-            ResolveRootPath(configuration, contentRootPath),
+            ResolveRootPath(configuration),
             ArtifactLimits.FromConfiguration(key => configuration[key]),
             ReadSeconds(configuration, SweepIntervalSecondsConfigurationKey, Defaults.SweepIntervalSeconds),
             ReadTimeout(configuration));
@@ -63,15 +64,21 @@ public sealed record ArtifactOptions(
     /// <summary>
     /// The absolute store root. Exposed separately because the startup composition needs it before the
     /// options object exists (the directory is created and asserted writable like the key ring).
+    /// <para>
+    /// Resolution is delayed to first use, not registration: the configuration sources are applied while
+    /// the host builds, and a path read too early would silently freeze a default. A relative value —
+    /// the <c>App_Data/artifacts</c> default or a configured one — resolves against
+    /// <see cref="AppContext.BaseDirectory"/> (the publish/install directory); an absolute value passes
+    /// through unchanged.
+    /// </para>
     /// </summary>
-    public static string ResolveRootPath(IConfiguration configuration, string contentRootPath)
+    public static string ResolveRootPath(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentException.ThrowIfNullOrWhiteSpace(contentRootPath);
 
         var configured = configuration[RootPathConfigurationKey];
         var path = string.IsNullOrWhiteSpace(configured) ? DefaultRootPath : configured;
-        return Path.GetFullPath(Path.Combine(Path.GetFullPath(contentRootPath), path));
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
     }
 
     private static int ReadSeconds(IConfiguration configuration, string key, int fallback)

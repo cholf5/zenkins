@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Xunit;
@@ -109,6 +110,18 @@ internal class MilestoneHost : IDisposable
     private ProcessLog? _serverLogs;
     private bool _disposed;
 
+    // I-003's published mode: the self-contained apphosts run directly (never `dotnet exec`), so the
+    // smoke proves the publish output boots and serves without the SDK or a runtime on its PATH, in
+    // the Production environment, with the product's own path defaults.
+    private bool _published;
+    private string _serverAppHost = string.Empty;
+    private string _workerAppHost = string.Empty;
+    private string _publishedServerWorkingDirectory = string.Empty;
+    private string _publishedUrls = string.Empty;
+    private string? _publishedDatabasePath;
+    private string? _publishedStoreDirectory;
+    private string? _publishedKeysDirectory;
+
     // Q-004's restart capability: the facts a restart needs (the same binaries, the same options) are
     // remembered from the first start, so a restarted server is byte-for-byte the same deployment over
     // the same database, key ring and store.
@@ -132,19 +145,19 @@ internal class MilestoneHost : IDisposable
     public string RootPath { get; }
 
     /// <summary>The server's SQLite file (the run/step/log/artifact record lives here).</summary>
-    public string DatabasePath { get; }
+    public string DatabasePath { get; private set; }
 
     /// <summary>The worker's work root (<c>work/{run-id}/repository|artifacts|temp</c>).</summary>
-    public string WorkRoot { get; }
+    public string WorkRoot { get; private set; }
 
     /// <summary>The worker's data directory (its persisted token).</summary>
-    public string WorkerDataDirectory { get; }
+    public string WorkerDataDirectory { get; private set; }
 
     /// <summary>The server's Data Protection key ring (never the machine's or the repository's).</summary>
-    public string KeysDirectory { get; }
+    public string KeysDirectory { get; private set; }
 
     /// <summary>The server's artifact store (never <c>src/Server/App_Data</c>).</summary>
-    public string StoreDirectory { get; }
+    public string StoreDirectory { get; private set; }
 
     /// <summary>Where the server listens (a port the OS picked).</summary>
     public string ServerUrl { get; private set; } = string.Empty;
@@ -225,29 +238,147 @@ internal class MilestoneHost : IDisposable
         Owner = await SignInOwnerAsync(ServerUrl);
     }
 
+    /// <summary>
+    /// I-003's published smoke: starts the <b>published</b> Server and Worker self-contained apphosts
+    /// directly - no <c>dotnet exec</c>, no <c>ASPNETCORE_ENVIRONMENT</c> (so the Production environment
+    /// the artifacts ship with), no path configuration unless one is given - so the scenario proves the
+    /// publish output alone completes the real Q-002 story.
+    /// <para>
+    /// Without explicit paths the Server's persistent state lands where the product's defaults put it:
+    /// <c>App_Data/</c> under the publish directory (the AppContext.BaseDirectory discipline), which the
+    /// smoke asserts. With <paramref name="databasePath"/> / <paramref name="storeDirectory"/> /
+    /// <paramref name="keysDirectory"/> the harness instead configures that placement through the
+    /// documented configuration keys (TC-003's same-binaries-different-environment run). The worker's
+    /// token and work directories always follow this instance's harness root, like every other host.
+    /// </para>
+    /// </summary>
+    public static async Task<MilestoneHost> StartPublishedAsync(
+        string serverAppHost,
+        string workerAppHost,
+        int? port = null,
+        string? databasePath = null,
+        string? storeDirectory = null,
+        string? keysDirectory = null,
+        MilestoneHostOptions? options = null)
+    {
+        options ??= new MilestoneHostOptions();
+        var root = Path.Combine(Path.GetTempPath(), $"zenkins-i003-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        var repositoryRoot = FindRepositoryRoot();
+        var dotnet = ResolveDotnetPath();
+
+        var host = new MilestoneHost(root, dotnet, workerAppHost);
+        host.ConfigurePublishedLayout(
+            serverAppHost,
+            workerAppHost,
+            Directory.CreateDirectory(Path.Combine(root, "server-cwd")).FullName,
+            $"http://127.0.0.1:{port?.ToString(CultureInfo.InvariantCulture) ?? "0"}",
+            databasePath,
+            storeDirectory,
+            keysDirectory);
+
+        try
+        {
+            await host.StartCoreAsync(repositoryRoot, serverAppHost, options);
+
+            var (token, response) = await WorkerTestHost.MintRegistrationTokenAsync(host.Owner);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            host.RegistrationToken = token;
+            return host;
+        }
+        catch
+        {
+            host.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Published-mode layout: the Server runs from its own apphost with an arbitrary working directory,
+    /// and its persistent paths follow the publish directory's <c>App_Data</c> (or the caller's explicit
+    /// configuration) for the harness's assertions. The worker's scratch paths stay under the harness
+    /// root, as they were constructed.
+    /// </summary>
+    private void ConfigurePublishedLayout(
+        string serverAppHost,
+        string workerAppHost,
+        string serverWorkingDirectory,
+        string urls,
+        string? databasePath,
+        string? storeDirectory,
+        string? keysDirectory)
+    {
+        _published = true;
+        _serverAppHost = serverAppHost;
+        _workerAppHost = workerAppHost;
+        _publishedServerWorkingDirectory = serverWorkingDirectory;
+        _publishedUrls = urls;
+        _publishedDatabasePath = databasePath;
+        _publishedStoreDirectory = storeDirectory;
+        _publishedKeysDirectory = keysDirectory;
+
+        var appData = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(serverAppHost))!,
+            "App_Data");
+        DatabasePath = databasePath ?? Path.Combine(appData, "zenkins.db");
+        KeysDirectory = keysDirectory ?? Path.Combine(appData, "keys");
+        StoreDirectory = storeDirectory ?? Path.Combine(appData, "artifacts");
+    }
+
     protected void StartServer(string repositoryRoot, string serverDll, MilestoneHostOptions options)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = _dotnetPath,
-            WorkingDirectory = Path.Combine(repositoryRoot, "src", "Server"),
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add(serverDll);
-        startInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
-        startInfo.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
-        startInfo.Environment["Database__Provider"] = "Sqlite";
-        startInfo.Environment["ConnectionStrings__Default"] = $"Data Source={DatabasePath}";
-        startInfo.Environment["Database__ApplyMigrationsOnStartup"] = "true";
 
-        // Every piece of server state that would otherwise default into the repository or the machine's
-        // profile follows this instance's temporary root (the F-016/F-012 discipline).
-        startInfo.Environment["Artifacts__RootPath"] = StoreDirectory;
-        startInfo.Environment["DataProtection__KeysDirectory"] = KeysDirectory;
+        if (_published)
+        {
+            // The published artifact boots as itself: the apphost executed directly (no `dotnet`), the
+            // Production environment, and no path configuration beyond what the published layout asked
+            // for. The Server's own defaults resolve from AppContext.BaseDirectory - the publish
+            // directory - so the data lands there whatever the working directory is (card I-003).
+            startInfo.FileName = _serverAppHost;
+            startInfo.WorkingDirectory = _publishedServerWorkingDirectory;
+            startInfo.Environment["ASPNETCORE_URLS"] = _publishedUrls;
+            startInfo.Environment["Database__Provider"] = "Sqlite";
+            startInfo.Environment["Database__ApplyMigrationsOnStartup"] = "true";
+            if (_publishedDatabasePath is { } publishedDatabasePath)
+            {
+                startInfo.Environment["ConnectionStrings__Default"] = $"Data Source={publishedDatabasePath}";
+            }
+
+            if (_publishedStoreDirectory is { } publishedStoreDirectory)
+            {
+                startInfo.Environment["Artifacts__RootPath"] = publishedStoreDirectory;
+            }
+
+            if (_publishedKeysDirectory is { } publishedKeysDirectory)
+            {
+                startInfo.Environment["DataProtection__KeysDirectory"] = publishedKeysDirectory;
+            }
+        }
+        else
+        {
+            startInfo.FileName = _dotnetPath;
+            startInfo.WorkingDirectory = Path.Combine(repositoryRoot, "src", "Server");
+            startInfo.ArgumentList.Add("exec");
+            startInfo.ArgumentList.Add(serverDll);
+            startInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
+            startInfo.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
+            startInfo.Environment["Database__Provider"] = "Sqlite";
+            startInfo.Environment["ConnectionStrings__Default"] = $"Data Source={DatabasePath}";
+            startInfo.Environment["Database__ApplyMigrationsOnStartup"] = "true";
+
+            // Every piece of server state that would otherwise default into the repository or the machine's
+            // profile follows this instance's temporary root (the F-016/F-012 discipline).
+            startInfo.Environment["Artifacts__RootPath"] = StoreDirectory;
+            startInfo.Environment["DataProtection__KeysDirectory"] = KeysDirectory;
+        }
 
         // A short lease sweep and - when a test moves it - a short default deadline, so the milestone
         // suite proves the real timeout path without waiting out a production timeout.
@@ -344,14 +475,19 @@ internal class MilestoneHost : IDisposable
         Assert.Empty(_workers);
         var startInfo = new ProcessStartInfo
         {
-            FileName = _dotnetPath,
+            // Published mode runs the self-contained apphost directly; the framework-dependent harness
+            // goes through the dotnet host. Either way it is a real worker process (I-003).
+            FileName = _published ? _workerAppHost : _dotnetPath,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add(_workerDll);
+        if (!_published)
+        {
+            startInfo.ArgumentList.Add("exec");
+            startInfo.ArgumentList.Add(_workerDll);
+        }
         startInfo.Environment["ZENKINS_SERVER_URL"] = ServerUrl;
         startInfo.Environment["ZENKINS_REGISTRATION_TOKEN"] = RegistrationToken;
         WorkerName = name ?? $"milestone-{Guid.NewGuid():N}".ToLowerInvariant();
@@ -724,7 +860,11 @@ internal class MilestoneHost : IDisposable
         using var lookedUp = LookUpProcess(WorkerProcessId);
         Assert.False(lookedUp.HasExited, $"the worker process {WorkerProcessId} is not alive.");
         Assert.Equal(trackedStart, lookedUp.StartTime.ToUniversalTime());
-        Assert.Contains("dotnet", lookedUp.ProcessName, StringComparison.OrdinalIgnoreCase);
+
+        // The framework-dependent harness runs under the dotnet host; the published apphost (I-003)
+        // runs under its own executable name - which is exactly the claim the published smoke tests.
+        var expectedProcessName = _published ? "zenkins" : "dotnet";
+        Assert.Contains(expectedProcessName, lookedUp.ProcessName, StringComparison.OrdinalIgnoreCase);
 
         // (c) The server registered exactly this worker (by the name this host passed it).
         var workers = await ReadAsync(
@@ -1093,6 +1233,11 @@ internal class MilestoneHost : IDisposable
             .Where(path => path.Contains(releaseMarker, StringComparison.Ordinal)
                 && path.Contains($"{Path.DirectorySeparatorChar}net10.0{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
                 && !path.Contains($"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            // A self-contained publish (I-003's matrix, or the published smoke's own fixture) writes its
+            // build output to bin/Release/net10.0/<rid>/ - a runtimeconfig that names no framework, which
+            // `dotnet exec` cannot run on this machine. The suite drives the framework-dependent build,
+            // so only candidates whose runtimeconfig names a framework qualify.
+            .Where(NamesAFramework)
             .Select(path => new FileInfo(path))
             .OrderBy(file => file.LastWriteTimeUtc)
             .ToArray();
@@ -1100,8 +1245,35 @@ internal class MilestoneHost : IDisposable
         Assert.True(
             candidates.Length > 0,
             $"No built '{fileName}' found under '{binRoot}' (Release). Run 'dotnet build -c Release' first - "
-            + "the milestone suite runs the real binaries, it does not compile them.");
+            + "the milestone suite runs the real binaries, it does not compile them. (A self-contained publish "
+            + "under the same bin tree does not count: its runtimeconfig names no framework, so `dotnet exec` "
+            + "cannot run it on this machine.)");
         return candidates[^1].FullName;
+    }
+
+    /// <summary>Whether the runtimeconfig.json next to an app DLL names a framework (framework-dependent).
+    /// A self-contained publish's runtimeconfig lists <c>includedFrameworks</c> instead.</summary>
+    private static bool NamesAFramework(string appDllPath)
+    {
+        var runtimeConfigPath = Path.Combine(
+            Path.GetDirectoryName(appDllPath)!,
+            Path.GetFileNameWithoutExtension(appDllPath) + ".runtimeconfig.json");
+        if (!File.Exists(runtimeConfigPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(runtimeConfigPath));
+            var runtimeOptions = document.RootElement.GetProperty("runtimeOptions");
+            return runtimeOptions.TryGetProperty("framework", out _)
+                || runtimeOptions.TryGetProperty("frameworks", out _);
+        }
+        catch (Exception failure) when (failure is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

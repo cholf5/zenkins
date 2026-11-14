@@ -12,15 +12,20 @@ public static class DataServiceCollectionExtensions
     /// Registers the provider selected by <c>Database:Provider</c> / <c>ConnectionStrings:Default</c>,
     /// the scoped tenant context and system scope, the scoped context, and a scoped factory for
     /// per-operation contexts.
+    /// <para>
+    /// The relative <c>App_Data</c> default resolves from <see cref="AppContext.BaseDirectory"/> (the
+    /// publish/install directory), not the content root — the I-003 path discipline: a packaged server
+    /// runs with an arbitrary working directory, and its data follows its binaries.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddZenkinsData(
         this IServiceCollection services,
-        IConfiguration configuration,
-        string contentRootPath)
+        IConfiguration configuration)
     {
-        var options = ZenkinsDataOptions.FromConfiguration(configuration, contentRootPath);
+        var options = ZenkinsDataOptions.FromConfiguration(configuration);
 
-        // Options are immutable and content-root dependent, so they are captured once at startup.
+        // Options are immutable and application-base-directory dependent (the I-003 path discipline),
+        // so they are captured once at startup.
         services.AddSingleton(options);
 
         // The concrete type is what the auth pipeline switches tenants through; the interface is

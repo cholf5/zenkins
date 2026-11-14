@@ -51,7 +51,7 @@ public sealed class OrganizationRowLockTests : IDisposable
 
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddZenkinsData(_fixture.Configuration, Path.GetTempPath());
+        services.AddZenkinsData(_fixture.Configuration);
         services.AddSingleton<ILookupNormalizer, UpperInvariantLookupNormalizer>();
         services.AddSingleton<IOrganizationRowLock>(recorder);
         services.AddScoped<OrganizationManagementService>();

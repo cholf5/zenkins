@@ -1,0 +1,55 @@
+# I-003: systemd unit for the published Zenkins Server (Linux).
+#
+# The unit is a template with two substitutions: /opt/zenkins/server (the deployment directory -
+# the publish output copied there) and the port. The app is a plain console process for systemd:
+# UseSystemd() in the hosting layer detects the service context and swaps in the systemd lifetime
+# (it does not pin the content root). Every persistent path (App_Data: database, key ring, artifact
+# store) resolves from the deployment directory via AppContext.BaseDirectory; appsettings.json
+# discovery follows the working directory, which is exactly what the WorkingDirectory line below
+# pins - or drop in fully environment-based configuration instead. Restart=on-failure is the
+# restart-on-crash story; WantedBy=multi-user.target is start-on-boot.
+#
+# Install (as root, with the publish output in /opt/zenkins/server and a `zenkins` service user):
+#   sed -e 's|/opt/zenkins/server|<install-dir>|g' deploy/systemd/zenkins-server.service \
+#     > /etc/systemd/system/zenkins-server.service
+#   chown -R zenkins:zenkins <install-dir>
+#   systemctl daemon-reload
+#   systemctl enable --now zenkins-server
+#
+# Uninstall (data in <install-dir>/App_Data is deliberately left in place):
+#   systemctl disable --now zenkins-server
+#   rm /etc/systemd/system/zenkins-server.service
+#   systemctl daemon-reload
+#
+# Logs: journalctl -u zenkins-server
+#
+# NOTE (card I-003): not executed on the machine at hand (macOS); the unit ships as packaging for
+# DOC-003 to document and verify on a Linux host.
+
+[Unit]
+Description=Zenkins Server (self-contained build worker server)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=zenkins
+Group=zenkins
+WorkingDirectory=/opt/zenkins/server
+ExecStart=/opt/zenkins/server/Zenkins.Server
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5000
+Environment=Database__Provider=Sqlite
+# PostgreSQL deployments switch the provider here; the connection string is another
+# Environment= line (ConnectionStrings__Default). Startup migrations: on for a single-node
+# self-host; multi-node deployments run `dotnet ef database update` once instead.
+Environment=Database__ApplyMigrationsOnStartup=true
+Restart=on-failure
+RestartSec=5
+# Hardening: the server only needs its own data directory and the listening port.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/zenkins/server
+
+[Install]
+WantedBy=multi-user.target

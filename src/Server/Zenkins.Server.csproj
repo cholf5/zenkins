@@ -17,6 +17,9 @@
     <PackageReference Include="BlazorBlueprint.Primitives" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <!-- I-003: service lifetimes through the hosting layer (see Directory.Packages.props). -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />

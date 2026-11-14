@@ -715,7 +715,7 @@ public sealed class TenantIsolationTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddZenkinsData(_fixture.Configuration, Path.GetTempPath());
+        services.AddZenkinsData(_fixture.Configuration);
 
         using var provider = services.BuildServiceProvider();
         using var firstRequest = provider.CreateScope();
@@ -748,7 +748,7 @@ public sealed class TenantIsolationTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddZenkinsData(_fixture.Configuration, Path.GetTempPath());
+        services.AddZenkinsData(_fixture.Configuration);
 
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();

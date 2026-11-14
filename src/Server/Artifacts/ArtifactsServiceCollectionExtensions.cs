@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
 namespace Zenkins.Server.Artifacts;
 
@@ -11,11 +10,12 @@ public static class ArtifactsServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        // Resolved on first use, not at registration: the content root and the configuration sources are
-        // applied while the host builds, and a path read too early would silently freeze a default.
+        // Resolved on first use, not at registration: the configuration sources are applied while the
+        // host builds, and a path read too early would silently freeze a default. A relative root
+        // resolves from AppContext.BaseDirectory (the publish/install directory) - the I-003 path
+        // discipline, not the content root or the working directory.
         services.AddSingleton(sp => ArtifactOptions.FromConfiguration(
-            sp.GetRequiredService<IConfiguration>(),
-            sp.GetRequiredService<IHostEnvironment>().ContentRootPath));
+            sp.GetRequiredService<IConfiguration>()));
 
         // The transfer counters are process-wide on purpose: the streaming test needs a number that says
         // "this many bytes crossed the boundary while the largest buffer stayed at 64 KiB".

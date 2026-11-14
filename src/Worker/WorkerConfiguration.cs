@@ -14,11 +14,12 @@ namespace Zenkins.Worker;
 /// </para>
 /// <para>
 /// F-007 adds: <c>ZENKINS_WORK_ROOT</c> (the per-run work directory root, default <c>work/</c>
-/// relative to the worker's current directory), <c>ZENKINS_CLEANUP_TEMP</c> (delete the run's
-/// <c>temp/</c> after the run, default <c>true</c>), <c>ZENKINS_WORKER_CONCURRENCY</c> (runs
-/// executed simultaneously; registered and heartbeated to the server, which enforces it as
-/// <c>MaxConcurrency</c>, default 1) and <c>ZENKINS_CLAIM_SECONDS</c> (the poll interval between
-/// empty claims, default 2).
+/// resolved — like any relative value — from <see cref="AppContext.BaseDirectory"/> via
+/// <see cref="ResolveWorkRoot"/>, never the current directory; card I-003),
+/// <c>ZENKINS_CLEANUP_TEMP</c> (delete the run's <c>temp/</c> after the run, default <c>true</c>),
+/// <c>ZENKINS_WORKER_CONCURRENCY</c> (runs executed simultaneously; registered and heartbeated to the
+/// server, which enforces it as <c>MaxConcurrency</c>, default 1) and <c>ZENKINS_CLAIM_SECONDS</c> (the
+/// poll interval between empty claims, default 2).
 /// </para>
 /// <para>
 /// F-008 adds: <c>ZENKINS_LOG_BUFFER_LINES</c> (the per-run bound of <em>unsent</em> log lines
@@ -65,6 +66,17 @@ public sealed record WorkerConfiguration(
 
     /// <summary>PRD §3.4.5: default heartbeat interval and maximum concurrent tasks of 1.</summary>
     public const int DefaultHeartbeatSeconds = 15;
+
+    /// <summary>
+    /// The absolute work root the run directories live under (card I-003). A relative value — the
+    /// default <c>work</c> or a configured relative <c>ZENKINS_WORK_ROOT</c> — resolves against
+    /// <see cref="AppContext.BaseDirectory"/>, never the process working directory: a service-packaged
+    /// worker (launchd plist, Windows service) has no meaningful current directory, and the single-file
+    /// drop must keep its runs beside its own binary. <c>Assembly.Location</c> is banned for the same
+    /// reason it is on the server (IL3000 under single-file). An absolute value passes through
+    /// unchanged.
+    /// </summary>
+    public string ResolveWorkRoot() => Path.GetFullPath(WorkRoot, AppContext.BaseDirectory);
 
     /// <summary>F-007 defaults: work root, temp cleanup on, concurrency 1, 2s claim polling.</summary>
     public const string DefaultWorkRoot = "work";

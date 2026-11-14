@@ -142,7 +142,7 @@ public sealed class ActiveOrganizationResolutionTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddZenkinsData(_fixture.Configuration, Path.GetTempPath());
+        services.AddZenkinsData(_fixture.Configuration);
         services.AddScoped<UserOrganizationDirectory>();
 
         // A scope is what a request/circuit would get; keep the provider alive for the test.
