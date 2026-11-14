@@ -39,6 +39,8 @@ The Server never executes builds. Workers connect outbound to the Server, pull j
 
 - [Product requirements (v1.0)](docs/prd.md) — the spec of record
 - [Development setup](docs/development.md) — clone, build, run, configure, troubleshoot
+- [Installation and upgrade guide](docs/install.md) — deploy the published binaries as a service on
+  Windows, Linux or macOS, configure, upgrade with data intact, uninstall
 - [Lua runtime contract](docs/lua-runtime.md) — engine, sandbox surface, execution model, fixtures
 - [Roadmap](docs/kanban/roadmap.md) — milestones and long-term direction
 - [Kanban board](docs/kanban/board.md) — what is being worked on now
@@ -62,12 +64,18 @@ adds them as a member.
 Full instructions — verified prerequisites, PostgreSQL, configuration, repository layout and
 troubleshooting — are in [`docs/development.md`](docs/development.md).
 
+To **deploy** instead of developing — the published binaries installed as a service on a machine
+with no SDK and no repository clone — follow [`docs/install.md`](docs/install.md); it covers
+prerequisites and artifact placement, the Windows Service / systemd / launchd install, first-run
+bootstrap, a registered Worker's first build, upgrading with data intact, and uninstall.
+
 ## Repository layout
 
 ```text
 docs/
   prd.md                 # product requirements
   development.md         # developer setup guide
+  install.md             # install, upgrade and uninstall guide (published artifacts)
   lua-runtime.md         # Lua engine, sandbox and execution contract
   kanban/                # roadmap, board, issue cards, templates
 src/                     # .NET projects (Server, Shared, Worker)

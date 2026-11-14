@@ -3,6 +3,10 @@
 Everything needed to go from a clean machine to a signed-in dashboard: prerequisites, build, first
 run, configuration, repository layout, and troubleshooting.
 
+Deploying instead of developing — the published binaries on a machine with no SDK, installed as a
+service, upgraded with data intact — is [`install.md`](install.md); this guide covers the developer
+loop (`dotnet run` from a clone).
+
 > **Verified on:** macOS 26.5 (arm64) with .NET SDK **10.0.403**, on 2026-11-12; re-verified after
 > project CRUD landed. The test suites (§2) were re-verified on 2026-11-14, when the recovery
 > acceptance suite (Q-004) added a third category and the fast filter grew its second exclusion;
@@ -607,7 +611,9 @@ its header documents why appsettings.json is unreliable there).
 
 The supported way to produce publish output is the I-003 matrix, `scripts/publish.sh`
 (win-x64 / linux-x64 / osx-arm64; Server as a folder, Worker as a folder plus a single-file
-variant), with install/uninstall packaging per OS under `deploy/`.
+variant), with install/uninstall packaging per OS under `deploy/`. The operator-facing side of that
+packaging — install as a service, configure, upgrade with data intact, uninstall, and which of those
+steps were actually executed on each OS — is [`install.md`](install.md).
 
 Production does not migrate on startup, so that database starts empty — and
 `dotnet ef database update --project src/Server` on its own does **not** fill it: the design-time

@@ -15,6 +15,12 @@
 # key ring, artifact store) resolves from the deployment directory via AppContext.BaseDirectory,
 # wherever the service starts.
 #
+# Database__ApplyMigrationsOnStartup=true matches the launchd plist and the systemd unit: a
+# single-node self-host applies pending EF Core migrations at startup (Production would otherwise
+# skip them - Program.cs defaults the flag to Development-only - and a fresh deployment's first
+# /account/register would fail with 'no such table: BootstrapMarkers'). Multi-node deployments
+# that migrate once per deployment remove this line instead.
+#
 # sc.exe failure actions are the restart-on-crash story; StartType Automatic is start-on-boot.
 #
 # NOTE (card I-003): not executed on the machine at hand (macOS); the script ships as packaging for
@@ -57,7 +63,11 @@ sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/rest
 # running service only re-reads it after the next restart.
 New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName" `
     -Name "Environment" -PropertyType MultiString `
-    -Value @("ASPNETCORE_URLS=http://127.0.0.1:$Port") -Force | Out-Null
+    -Value @(
+        "ASPNETCORE_URLS=http://127.0.0.1:$Port",
+        # Same semantics as the launchd plist and the systemd unit (see the header above).
+        "Database__ApplyMigrationsOnStartup=true"
+    ) -Force | Out-Null
 
 sc.exe start $ServiceName
 Write-Host "installed: $ServiceName ($Exe, port $Port via service Environment) - data lives in $InstallDir\App_Data"
