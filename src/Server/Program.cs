@@ -20,6 +20,20 @@ using Zenkins.Server.Runs;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Webhooks;
 using Zenkins.Server.Workers;
+using Zenkins.Shared;
+
+// P-001: the operator's version surface, before anything else runs - no configuration, database or
+// key ring is needed to answer it, and the process exits 0. The stamp comes from this assembly's
+// AssemblyInformationalVersion, written at build time from the one Version property in
+// Directory.Build.props (Zenkins.Shared.ProductVersion strips the source revision). The same stamp
+// is the shell footer's version line, so an operator who only has a browser can read the version of
+// a running deployment; a deliberately new endpoint was weighed and rejected - it would have to
+// enter Q-006's machine-enforced surface inventory and gain a probe row for a read-only string.
+if (args.Contains("--version"))
+{
+    Console.WriteLine("Zenkins Server " + ProductVersion.Current);
+    return 0;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -233,6 +247,11 @@ app.MapHub<WorkerLogHub>("/hubs/worker-logs");
 app.MapHub<RunLogHub>("/hubs/run-logs");
 
 app.Run();
+
+// P-001: the early --version path returned above; reaching this line means the host ran and shut
+// down gracefully, which has always been exit code 0 - now it is spelled out because the early
+// return makes the top-level statements return an int.
+return 0;
 
 // F-012/F-016: a one-line startup assertion instead of a late failure (an unreadable key ring means
 // undecryptable secrets; an unwritable store means artifacts that cannot be published). Writing and

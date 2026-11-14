@@ -23,8 +23,11 @@
         </BbSidebarContent>
 
         <BbSidebarFooter>
+            @* P-001: the version line an operator of a running deployment can read without a shell -
+               the same build stamp the binaries print for --version. Kept in the footer so it is
+               visible on every signed-in page, and collapsed with the sidebar like the rest of it. *@
             <div class="bb:px-2 bb:py-1 bb:text-xs bb:text-muted-foreground bb:group-data-[collapsible=icon]:hidden">
-                CI server · shell preview
+                CI server · shell preview · v@(ProductVersion.Current)
             </div>
         </BbSidebarFooter>
 

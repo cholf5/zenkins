@@ -12,6 +12,14 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <!--
+      P-001: the single source of the product version. The SDK writes this into every assembly's
+      AssemblyInformationalVersion (plus the source revision: "1.0.0+<sha>"), so Server and Worker
+      are stamped at build time from this one line. Operators read the stamp through the binaries'
+      version flag and the shell footer's version line; Zenkins.Shared.ProductVersion is the
+      reader. Bump here, and only here, for the next release.
+    -->
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
 </Project>

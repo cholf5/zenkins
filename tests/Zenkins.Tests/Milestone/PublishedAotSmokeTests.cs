@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Xunit;
 using Xunit.Sdk;
+using Zenkins.Shared;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.RunCancellation;
 
@@ -435,6 +436,16 @@ public sealed partial class PublishedAotSmokeTests : IClassFixture<PublishedAotS
                         .Contains("coreclr", StringComparison.OrdinalIgnoreCase)) == false,
                 "the AOT publish output carries CoreCLR runtime files.");
 
+            // P-001: the version surface must survive NativeAOT too - the same --version flag the
+            // fast suite probes on the JIT worker, here against the native executable before the
+            // scenario runs. Reading the entry assembly's AssemblyInformationalVersion is
+            // metadata-only reflection, which ilc keeps; this probe fails loudly if that ever
+            // regresses. The stamp equals the Tests assembly's because Directory.Build.props
+            // stamps every project from the one Version property.
+            Assert.Equal(
+                "Zenkins Worker " + ProductVersion.From(typeof(PublishedAotSmokeTests).Assembly),
+                await RunVersionProbeAsync(AotWorkerAppHostPath, TestContext.Current.CancellationToken));
+
             // The JIT baseline keeps everything the AOT artifact drops - it is what the consistency
             // run compares against, and the same assertion family PublishedSmokeTests makes.
             JitWorkerAppHostPath = AssertAppHost(JitWorkerPublishDir, WorkerAppHostFileName);
@@ -461,6 +472,31 @@ public sealed partial class PublishedAotSmokeTests : IClassFixture<PublishedAotS
             }
 
             return ValueTask.CompletedTask;
+        }
+
+        /// <summary>Runs the published apphost with <c>--version</c> and returns its trimmed stdout.</summary>
+        private static async Task<string> RunVersionProbeAsync(string appHostPath, CancellationToken cancellationToken)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = appHostPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add("--version");
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"could not start '{appHostPath}' for the --version probe.");
+
+            // Read both pipes before waiting for exit, so a chatty child cannot deadlock the wait.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            Assert.True(
+                process.ExitCode == 0,
+                $"the --version probe of '{appHostPath}' exited {process.ExitCode}: {stderr.Trim()}");
+            return (await stdoutTask).Trim();
         }
 
         private enum PublishKind

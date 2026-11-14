@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using Zenkins.Shared;
 
 namespace Zenkins.Worker;
 
@@ -25,8 +26,20 @@ internal static class Program
     /// </summary>
     private static readonly TimeSpan SignalGracePeriod = TimeSpan.FromSeconds(5);
 
-    public static async Task<int> Main()
+    public static async Task<int> Main(string[] args)
     {
+        // P-001: the operator's version surface. This must run before configuration is read - a
+        // misconfigured or unconfigured host still has to answer --version - and before any other
+        // work, so it is a pure print-and-exit (0). The stamp comes from the entry assembly's
+        // AssemblyInformationalVersion, written at build time from the one Version property in
+        // Directory.Build.props; Zenkins.Shared.ProductVersion reads it, and attribute reflection
+        // of that kind survives NativeAOT (proven by the PublishAot fixture's --version probe).
+        if (args.Contains("--version"))
+        {
+            Console.Out.WriteLine("Zenkins Worker " + ProductVersion.Current);
+            return 0;
+        }
+
         var configurationResult = WorkerConfiguration.FromEnvironment(ReadEnvironment());
         if (configurationResult.Error is { } error)
         {

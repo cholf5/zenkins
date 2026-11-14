@@ -44,7 +44,8 @@ machine that only *runs* Zenkins needs the SDK, a runtime, Docker, Node.js or a 
 What does **not** exist, so no step of this guide invents it: no `zenkins` CLI, no application-level
 `--port` argument (the port is configuration, `ASPNETCORE_URLS`, set by each service template), no
 service template for the Worker (the Worker runs as a plain process; §6), and no single-file or AOT
-Server.
+Server. The one application-level flag either binary understands is `--version`
+(*Finding the version* below, card P-001).
 
 **Where the artifacts come from.** A release bundle — the output of `scripts/publish.sh` produced on
 a machine that *does* have the .NET 10 SDK (the only machine in the story that needs one; for AOT it
@@ -117,6 +118,21 @@ contract both providers share.
 **The key ring is part of the data.** `App_Data/keys` is what makes stored secrets readable; a
 backup of the database without it is not a backup of the secrets (§8). Restrict it to the service
 account like the database file itself.
+
+**Finding the version** (card P-001). Every artifact is stamped at build time from one
+`Version` property in the repository's `Directory.Build.props`, and the stamp is readable without
+the repository, three ways:
+
+```bash
+./Zenkins.Server --version    # Zenkins Server 1.0.0   (the shipped folder or single file; exit 0)
+./Zenkins.Worker --version    # Zenkins Worker 1.0.0   (folder, single-file and NativeAOT variants)
+```
+
+On Windows: `Zenkins.Server.exe --version` and `Zenkins.Worker.exe --version`. A running
+deployment shows the same stamp in the web UI's sidebar footer (`CI server · shell preview ·
+v1.0.0`), which is how an operator with only a browser reads it. All three surfaces print the same
+value — the fast suite's version fact and the PublishAot fixture's probe on the native Worker
+executable assert it (a Server and a Worker of the same artifact set can never disagree).
 
 ## 3. macOS — launchd agent (verified)
 

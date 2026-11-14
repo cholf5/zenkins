@@ -1,0 +1,90 @@
+# P-001: CI runs the acceptance gate of docs/development.md §2 through scripts/verify.sh - the
+# script is §2's gate in executable form, so the workflow runs the script rather than transcribing
+# the commands (no third copy to drift against; §2 documents the same commands it runs).
+#
+# Matrix decisions, recorded with reasons (card P-001):
+# - All three OSes run the SAME gate, no suite excluded anywhere. Q-007 proved the product end to
+#   end on three real machines, and I-004 requires each OS to publish its own RID's NativeAOT
+#   artifact (.NET does not cross-compile AOT), so the PublishAot suite runs on every runner.
+# - NativeAOT toolchains: GitHub-hosted runners carry each OS's toolchain (VS C++ workload on
+#   Windows, Xcode CLT on macOS, clang on Linux). The Linux step below installs clang + zlib dev
+#   headers explicitly - development.md §1's documented prerequisite for that suite; the runner
+#   images usually ship them, and a guarded apt-get is cheaper than a red gate.
+# - GitSshd: ubuntu and macos runners ship the OpenSSH tools the suite needs. Windows ships no
+#   sshd, so there the suite's designed named-skip behaviour fires: every fact skips with the
+#   recorded reason (Q-009's fixture answers "why"), and the gate stays green - that is a recorded
+#   platform fact, not a silent exclusion. The Linux sshd runs as a non-root user process, so the
+#   privilege-separation directory /run/sshd must exist; the guarded mkdir below removes the one
+#   runner-image variant that lacks it (Q-009's card records the non-root caveats).
+# - macOS runners bill at a 10x rate; the single macOS job is accepted as the cost of proving the
+#   osx-arm64 AOT artifact (I-004) and Q-007's third platform in CI. Trim the matrix only by
+#   recording it here.
+# - The SDK is pinned by global.json (floor 10.0.100, rollForward latestFeature) via setup-dotnet.
+#
+# Triggers: every push to main and every pull request targeting it; a push of a version tag (v1.0)
+# runs the same gate, so the revision the PM tags is the revision CI proved green.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Superseded commits of the same PR cancel their run; pushes to main and tags always run whole.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The gate is ~15 warm minutes per OS (build + fast suite ~2.5 min + five harnesses + one AOT
+    # publish); 45 is the sane ceiling, not the expectation.
+    timeout-minutes: 45
+    strategy:
+      # A red suite on one OS must not hide the others - the first runs are the evidence that the
+      # matrix decision was right.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v6
+
+      # §1's Linux AOT prerequisite (clang + zlib development headers), installed not assumed. The
+      # runner images ship both; `apt-get install` on an installed package is a fast no-op.
+      - name: Ensure the NativeAOT link prerequisites exist (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      # Q-009's sshd fixture runs sshd as a non-root user process; sshd refuses to start without
+      # the privilege-separation directory. GitHub's ubuntu images normally create it through the
+      # openssh-server package - the guarded mkdir turns that variant into a no-op instead of a red
+      # fixture failure. (macOS keeps privsep at /var/empty and always has it; Windows runs no facts.)
+      - name: Ensure the sshd privilege-separation directory exists (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo mkdir -p /run/sshd
+
+      - name: Pin the .NET SDK from global.json
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+
+      # The §2 gate, verbatim: scripts/verify.sh runs dotnet build -c Release, the fast suite with
+      # its quintuple exclusion filter, then the five harness filters, failing non-zero on the first
+      # red suite. Git Bash is the shell on Windows too (see the header: the Windows gate is this
+      # same script, not a second transcript).
+      - name: Acceptance gate (development.md §2 via scripts/verify.sh)
+        shell: bash
+        run: bash scripts/verify.sh
