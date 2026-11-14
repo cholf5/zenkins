@@ -36,9 +36,15 @@ public sealed class AuthTestHost : IDisposable
     /// to substitute the bootstrap seam).
     /// </param>
     /// <param name="configureAppConfiguration">Extra configuration sources (used for forwarded-header binding).</param>
+    /// <param name="environment">
+    /// The ASP.NET Core environment. Development by default (the developer exception page, the startup
+    /// migration); F-019's failure-path tests boot the host as Production, because that is the
+    /// configuration a published Server ships and the only one that runs the global exception handler.
+    /// </param>
     public AuthTestHost(
         Action<IServiceCollection>? configureTestServices = null,
-        Action<IConfigurationBuilder>? configureAppConfiguration = null)
+        Action<IConfigurationBuilder>? configureAppConfiguration = null,
+        string environment = "Development")
     {
         _databasePath = Path.Combine(Path.GetTempPath(), $"zenkins-f001-{Guid.NewGuid():N}.db");
 
@@ -50,7 +56,7 @@ public sealed class AuthTestHost : IDisposable
 
         _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
-            builder.UseEnvironment("Development");
+            builder.UseEnvironment(environment);
 
             // Registered before the caller's own sources, so a test that wants a specific root still wins.
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(

@@ -22,7 +22,9 @@ namespace Zenkins.Server.Secrets;
 /// <b>Outcomes.</b> Success is a PRG redirect with <c>?notice=</c>; a foreign or missing id is a
 /// bodyless <c>404</c>; a Member's write is a <c>403</c> with no state change; validation failures
 /// redirect back with a stable <c>?error=</c> code. The submitted <em>value</em> is never echoed into a
-/// redirect (query strings are logged), only the name.
+/// redirect (query strings are logged), only the name. A body that binds to <em>nothing</em> - every
+/// field name lost, or no fields at all - is the same <c>?error=</c> redirect as an empty submission
+/// (F-019), not a null-reference 500.
 /// </para>
 /// </summary>
 public static class SecretEndpoints
@@ -98,13 +100,19 @@ public static class SecretEndpoints
             return Results.Unauthorized();
         }
 
-        var result = await secrets.CreateAsync(userId, form.ToInput(), httpContext.RequestAborted);
+        // F-019: a body whose fields all fail to bind arrives as null, not as an empty form. The
+        // service validates it, so the answer stays the page's own PRG error (?error=name-required)
+        // instead of a null reference, and nothing is stored.
+        var result = await secrets.CreateAsync(userId, form?.ToInput() ?? EmptyInput(), httpContext.RequestAborted);
         return result.Status switch
         {
             SecretMutationStatus.Success => Results.Redirect($"{ListPath}?notice=created"),
             SecretMutationStatus.Forbidden => Forbidden(result),
             SecretMutationStatus.NotFound => Results.NotFound(),
-            _ => ValidationRedirect(result, form.Name),
+
+            // Only the submitted name travels back (never the value), and a body that bound to
+            // nothing has no name to echo.
+            _ => ValidationRedirect(result, form?.Name),
         };
     }
 
@@ -120,7 +128,13 @@ public static class SecretEndpoints
             return Results.Unauthorized();
         }
 
-        var result = await secrets.RotateAsync(userId, secretId, form.ToInput(), httpContext.RequestAborted);
+        // F-019: same shape as create - a lost body is the page's PRG error (?error=value-required),
+        // never a null reference. The route id still decides the target.
+        var result = await secrets.RotateAsync(
+            userId,
+            secretId,
+            form?.ToInput() ?? EmptyInput(),
+            httpContext.RequestAborted);
         return result.Status switch
         {
             SecretMutationStatus.Success => Results.Redirect($"{ListPath}?notice=rotated"),
@@ -179,6 +193,12 @@ public static class SecretEndpoints
 
     private static string? FindUserId(HttpContext httpContext) =>
         httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+    /// <summary>
+    /// The stand-in for a form that bound null (a POST carrying no field the model knows): empty
+    /// values, so the service's validation - not a null reference - answers the request (F-019).
+    /// </summary>
+    private static SecretInput EmptyInput() => new(Name: null, Value: null);
 
     /// <summary>
     /// Marks a response as carrying a secret (card F-015): no intermediary and no client may keep a copy.

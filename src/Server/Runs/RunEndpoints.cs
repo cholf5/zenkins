@@ -99,6 +99,21 @@ public static class RunEndpoints
             return Results.Unauthorized();
         }
 
+        // F-019: a body whose fields all fail to bind arrives as null, not as an empty form. Every
+        // field of this form is optional, so an empty input would pass validation and really start a
+        // run from a body the server could not read. A lost body is refused instead - the same PRG
+        // error a malformed field gets - and no run is created.
+        //
+        // Reading the body happens before the target is resolved, so this answer also reaches a caller
+        // who is not allowed to run the project: a non-member with a lost body sees this redirect
+        // rather than the 403/404 TriggerAsync would give. That is not an authorization bypass - the
+        // Location only echoes the id the caller already supplied, no project row is read, nothing is
+        // triggered, and a following GET of that page is still the usual 403/404.
+        if (form is null)
+        {
+            return Results.Redirect($"/projects/{projectId}?runError={RunErrorCodes.FieldInvalid}");
+        }
+
         var result = await runs.TriggerAsync(userId, projectId, form.ToInput(), httpContext.RequestAborted);
         return result.Status switch
         {

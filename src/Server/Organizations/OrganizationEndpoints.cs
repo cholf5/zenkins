@@ -24,6 +24,9 @@ namespace Zenkins.Server.Organizations;
 /// the UI; a non-member attempting a switch gets 403 and the stored selection is untouched.
 /// Validation failures (last Owner, unknown email, empty name) redirect back to the page with a
 /// stable <c>?error=</c> code so the server-rendered page can explain them; they never report success.
+/// A body that binds to <em>nothing</em> - every field name lost, or none submitted at all - is
+/// handled as an empty submission (F-019): the service names the missing field, or the switch
+/// keeps its existing <c>400</c> that names the id. Neither is a null-reference 500.
 /// </para>
 /// </summary>
 public static class OrganizationEndpoints
@@ -66,7 +69,10 @@ public static class OrganizationEndpoints
             return Results.Unauthorized();
         }
 
-        if (!Guid.TryParse(form.OrganizationId, out var organizationId))
+        // F-019: a body whose fields all fail to bind arrives as null, not as an empty form. A switch
+        // with no target is the answer a malformed one already got - the 400 that names the id - never
+        // a null reference.
+        if (!Guid.TryParse(form?.OrganizationId, out var organizationId))
         {
             return Results.Text("The organization id is not valid.", "text/plain", statusCode: StatusCodes.Status400BadRequest);
         }
@@ -81,7 +87,7 @@ public static class OrganizationEndpoints
                 statusCode: StatusCodes.Status403Forbidden);
         }
 
-        return Results.Redirect(ReturnUrlSanitizer.Sanitize(form.ReturnUrl, "/"));
+        return Results.Redirect(ReturnUrlSanitizer.Sanitize(form?.ReturnUrl, "/"));
     }
 
     /// <summary>Renames the active organization (Owner-only, enforced by the service).</summary>
@@ -96,9 +102,11 @@ public static class OrganizationEndpoints
             return Results.Unauthorized();
         }
 
+        // F-019: a body whose fields all fail to bind arrives as null; the service's validation names
+        // the missing name instead of the handler dereferencing null.
         var result = await management.RenameActiveOrganizationAsync(
             userId,
-            form.Name,
+            form?.Name,
             httpContext.RequestAborted);
 
         return MutationResult(result, SettingsPath, "renamed");
@@ -116,7 +124,8 @@ public static class OrganizationEndpoints
             return Results.Unauthorized();
         }
 
-        var result = await management.InviteAsync(userId, form.Email, httpContext.RequestAborted);
+        // F-019: a null form is an empty submission - the service answers with its own email error.
+        var result = await management.InviteAsync(userId, form?.Email, httpContext.RequestAborted);
 
         return MutationResult(result, MembersPath, "invited");
     }
@@ -134,11 +143,12 @@ public static class OrganizationEndpoints
         }
 
         // No parsing here on purpose: the service authorizes the caller before validating the id or
-        // role, so a Member always gets 403, even for malformed input.
+        // role, so a Member always gets 403, even for malformed input. A null form (F-019) is the same
+        // path with both values missing - the service answers with its own member/role error.
         var result = await management.ChangeRoleAsync(
             userId,
-            form.MembershipId,
-            form.Role,
+            form?.MembershipId,
+            form?.Role,
             httpContext.RequestAborted);
 
         return MutationResult(result, MembersPath, "role-changed");
@@ -156,10 +166,11 @@ public static class OrganizationEndpoints
             return Results.Unauthorized();
         }
 
-        // Authorization before id parsing, same as the role endpoint.
+        // Authorization before id parsing, same as the role endpoint; a null form (F-019) carries no
+        // id, which the service answers as a missing member rather than as a crash.
         var result = await management.RemoveMemberAsync(
             userId,
-            form.MembershipId,
+            form?.MembershipId,
             httpContext.RequestAborted);
 
         return MutationResult(result, MembersPath, "member-removed");

@@ -213,10 +213,13 @@ public static class WebhookEndpoints
             return Results.Unauthorized();
         }
 
+        // F-019: a body whose fields all fail to bind arrives as null, not as an empty form. The
+        // service, not a guard, validates it, so the answer stays the settings tab's own PRG error
+        // (?webhookError=name-required) and no webhook is created.
         var result = await webhooks.CreateAsync(
             userId,
             projectId,
-            form.ToInput(),
+            form?.ToInput() ?? EmptyInput(),
             httpContext.RequestAborted);
 
         return result.Status switch
@@ -390,6 +393,12 @@ public static class WebhookEndpoints
 
     private static string? FindUserId(HttpContext httpContext) =>
         httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+    /// <summary>
+    /// The stand-in for a form that bound null (a POST carrying no field the model knows): empty
+    /// values, so the service's validation - not a null reference - answers the request (F-019).
+    /// </summary>
+    private static WebhookInput EmptyInput() => new(Name: null, BranchFilter: null, RequiredTags: null);
 
     /// <summary>
     /// A 200 HTML response carrying a secret: always <c>no-store</c>, so neither an intermediary nor the

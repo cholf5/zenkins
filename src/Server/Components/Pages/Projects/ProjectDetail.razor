@@ -176,6 +176,10 @@
             <BbCardContent>
                 <form method="post" action="@($"/projects/{_project.Id}/runs/start")" data-zenkins-antiforgery>
                     <div class="bb:space-y-4">
+                        @if (RunRequestError is { } runRequestError)
+                        {
+                            <p id="run-form-error" role="alert" class="bb:text-sm bb:text-destructive">@runRequestError</p>
+                        }
                         <div>
                             <label for="run-branch" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branch (optional)</label>
                             <input id="run-branch"
@@ -273,6 +277,17 @@
     private string? TimeoutError => RunErrorCode switch
     {
         RunErrorCodes.TimeoutInvalid => "The timeout is a whole number of minutes between 1 and 10080; leave it blank for the server default.",
+        _ => null,
+    };
+
+    /// <summary>
+    /// F-019: the trigger body carried no field the form binds (a dropped body, a renamed field), so
+    /// no run was started. The refusal is form-level - there is no single field to blame - but it still
+    /// has to say something, otherwise the page looks like a no-op.
+    /// </summary>
+    private string? RunRequestError => RunErrorCode switch
+    {
+        RunErrorCodes.FieldInvalid => "That request could not be read, so no run was started. Try again.",
         _ => null,
     };
 
