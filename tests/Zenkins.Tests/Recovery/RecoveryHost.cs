@@ -50,7 +50,7 @@ internal sealed record RecoveryWorker(
 /// worker's last heartbeat is five seconds stale, and no sample runs that late.
 /// </para>
 /// </summary>
-internal sealed class RecoveryHost : MilestoneHost
+internal class RecoveryHost : MilestoneHost
 {
     private static readonly TimeSpan WorkerOnlineTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan GraceObservation = TimeSpan.FromSeconds(2);
@@ -58,7 +58,7 @@ internal sealed class RecoveryHost : MilestoneHost
 
     private readonly List<RecoveryWorker> _recoveryWorkers = [];
 
-    private RecoveryHost(string rootPath, string dotnetPath, string workerDll)
+    protected RecoveryHost(string rootPath, string dotnetPath, string workerDll)
         : base(rootPath, dotnetPath, workerDll)
     {
     }
