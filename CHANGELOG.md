@@ -72,12 +72,20 @@ entry when it lands.
   the worker's own row, under both providers — pinned by the `ConcurrencyClaimCapTests` regression
   (red before the fix, three consecutive runs admitting 4 of 8 racing claims past a cap of 1) and a
   real-PostgreSQL claim-burst probe (evidence on card B-002). Ships with the next release.
-- **Q-010 — tag validation is asymmetric between the trigger and the claim.** Trigger-side
-  validation checks the union of all workers' tags while claiming requires one worker to cover all
-  required tags, so a run whose tags split across two workers passes the form and then starves
-  honestly: it stays `Queued`, is never mis-executed and never becomes `Lost` or `Failed` for lack
-  of a worker. A covering worker that registers later claims it. Scheduled for v1.0.1 (card Q-010,
-  tighten-vs-document decision pending); this entry goes with that card.
+- **Q-010 — tag validation is asymmetric between the trigger and the claim; resolved by card
+  Q-010: the asymmetry is the documented semantics.** Trigger-side validation checks the union of
+  all workers' tags while claiming requires one worker to cover all required tags, so a run whose
+  tags split across two workers passes the form and then starves honestly: it stays `Queued`, is
+  never mis-executed and never becomes `Lost` or `Failed` for lack of a worker. Decided on card
+  Q-010 (2026-11-15): the union-accept + honest-starvation semantics stay — a trigger-time
+  single-worker check cannot tell "no worker covers it today" from "no worker ever will", so it
+  would reject exactly the queue-first/worker-registers-later workflow the starvation serves (and
+  the webhook path already accepts uncoverable tags deliberately, F-017) — while the claim side's
+  per-poll coverage check is the one place the rule can be exact. The semantics are now written
+  where the operator meets it (the trigger form's tags-field help text, the install guide's
+  worker-tags section) and pinned end to end by a Concurrency-suite test (split set accepted →
+  queued while uncovered → executes when a covering worker registers; the matched case unchanged).
+  No behaviour change; ships with the next release.
 - **A wrong pinned SSH host key reports `git-failed`, not a host-key-specific reason** (Q-009,
   observed and accepted). The refusal is honest and named in the run log — ssh's own
   `REMOTE HOST IDENTIFICATION HAS CHANGED` and `Host key verification failed` — and the page's

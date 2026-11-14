@@ -170,7 +170,7 @@
                 <BbCardDescription>
                     A run executes this project's pipeline file on the branch you choose. Leave the
                     branch blank to build the default branch. Optional required tags restrict which
-                    worker may claim the run.
+                    worker may claim the run: one worker must declare all of them.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -197,6 +197,17 @@
                                    name="RequiredTags"
                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
                                    placeholder="linux, dotnet" />
+                            @* Q-010: the trigger checks the workers' union (every tag some worker
+                               row declares) while claiming needs one worker that covers all of it -
+                               union-accept + honest starvation is the documented semantics, so the
+                               operator reads it where the asymmetry would surprise. *@
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                Comma-separated. Every tag must be declared by at least one worker
+                                (that is what this form checks), but claiming needs one worker that
+                                declares them all: a set split across workers (e.g. linux,cuda on a
+                                linux-only worker and a cuda-only worker) is accepted and stays
+                                queued until a worker with the full set registers.
+                            </p>
                             @if (TagsError is { } tagsError)
                             {
                                 <p id="run-required-tags-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@tagsError</p>

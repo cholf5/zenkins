@@ -643,13 +643,20 @@ authoritative list with ranges and defaults):
 | `ZENKINS_SERVER_URL` | required | The Server's base URL. |
 | `ZENKINS_REGISTRATION_TOKEN` | required once | Single-use `zreg_` token from the Workers page; the worker persists its own credential afterwards. |
 | `ZENKINS_WORKER_NAME` | the machine name (`Environment.MachineName`) | Registration name; also selects the persisted credential on later starts. |
-| `ZENKINS_WORKER_TAGS` | empty | Comma-separated tags a run's `RequiredTags` must cover. |
+| `ZENKINS_WORKER_TAGS` | empty | Comma-separated tags; a run's `RequiredTags` are claimable only by a worker whose own tags cover all of them. |
 | `ZENKINS_WORKER_CONCURRENCY` | `1` | Runs executed simultaneously (advertised to the Server as `MaxConcurrency`). |
 | `ZENKINS_DATA_DIR` | `~/.zenkins` | Where the token store lives (mount a secret volume here if you prefer). |
 | `ZENKINS_WORK_ROOT` | `work` beside the binary | Root of the per-run work directories. |
 | `ZENKINS_GIT_DEPTH` | `0` (full clone) | Shallow-clone depth. Webhook runs are pinned to the pushed commit — a depth that excludes it fails the run honestly; see [`docs/development.md`](development.md) §4. |
 | `ZENKINS_GIT_KNOWN_HOSTS` | unset (accept-new) | Pin an SSH `known_hosts` file and make unknown host keys a hard failure. |
 | `ZENKINS_GIT_TIMEOUT_SECONDS` | `300` | Budget of one git invocation. |
+
+Tags and required tags: the trigger accepts a run's required tags when every tag is declared by at
+least one registered worker, but a run is claimed only by a single worker whose own tags cover all
+of them — `linux,cuda` does not run across a `linux`-only and a `cuda`-only worker. A set split
+across workers is therefore accepted and waits in the queue until a worker carrying the full set
+registers (register one, or retag a machine via `ZENKINS_WORKER_TAGS` and restart); it is never
+mis-executed and never fails for lack of a worker.
 
 No Worker service template ships: run it under your own service manager (launchd agent, systemd
 user unit, Task Scheduler) if you want it supervised — the same pin-the-working-directory and
