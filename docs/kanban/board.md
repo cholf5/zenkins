@@ -11,8 +11,8 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [Q-007](issues/q-007-cross-platform-verification.md) | Cross-platform verification on real Windows and Linux machines | P1 | L | — | I-003 |
 | [Q-008](issues/q-008-postgresql-published-form.md) | PostgreSQL in published form: real instance, migrations, full build | P1 | M | — | I-003, D-006 |
+| [F-018](issues/f-018-project-git-credential-assignment.md) | Project git credential assignment, and a real clone served by the server | P1 | M | — | F-012, F-013, D-003 |
 
 ## Done
 
@@ -54,3 +54,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [I-004](issues/i-004-native-aot.md) | NativeAOT: the Worker publishes AOT, the Server gets a recorded verdict | P2 | 2026-11-14 |
 | [DOC-003](issues/doc-003-install-guide-upgrade-notes.md) | Install guide and upgrade notes | P2 | 2026-11-14 |
 | [D-006](issues/d-006-secrets-page-polish.md) | Secrets page polish: creator column and pipeline references | P2 | 2026-11-14 |
+| [Q-007](issues/q-007-cross-platform-verification.md) | Cross-platform verification on real Windows and Linux machines | P1 | 2026-11-14 |
