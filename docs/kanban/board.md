@@ -11,7 +11,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [D-006](issues/d-006-secrets-page-polish.md) | Secrets page polish: creator column and pipeline references | P2 | S | — | none |
+| — | *(v1.0 batch complete)* | — | — | — | — |
 
 ## Done
 
@@ -52,3 +52,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [I-003](issues/i-003-release-packaging.md) | Self-contained publish and OS service packaging (Windows Service / systemd / launchd) | P1 | 2026-11-14 |
 | [I-004](issues/i-004-native-aot.md) | NativeAOT: the Worker publishes AOT, the Server gets a recorded verdict | P2 | 2026-11-14 |
 | [DOC-003](issues/doc-003-install-guide-upgrade-notes.md) | Install guide and upgrade notes | P2 | 2026-11-14 |
+| [D-006](issues/d-006-secrets-page-polish.md) | Secrets page polish: creator column and pipeline references | P2 | 2026-11-14 |
