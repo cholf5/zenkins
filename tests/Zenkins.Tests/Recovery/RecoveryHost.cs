@@ -106,7 +106,9 @@ internal class RecoveryHost : MilestoneHost
     /// tokens are single-use, so a second worker cannot reuse the first one's. Unlike the milestone
     /// one-worker-per-host start, a recovery host may hold several workers over its lifetime.
     /// </summary>
-    public new async Task<RecoveryWorker> StartWorkerAsync(string? name = null)
+    public new async Task<RecoveryWorker> StartWorkerAsync(
+        string? name = null,
+        IReadOnlyDictionary<string, string?>? extraEnvironment = null)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var workerName = name ?? $"recovery-{Guid.NewGuid():N}".ToLowerInvariant();
@@ -148,6 +150,22 @@ internal class RecoveryHost : MilestoneHost
         startInfo.Environment["ZENKINS_CLAIM_SECONDS"] = "1";
         startInfo.Environment["ZENKINS_DATA_DIR"] = dataDirectory;
         startInfo.Environment["ZENKINS_WORK_ROOT"] = workRoot;
+
+        // Card F-018's seam (whatever a future test needs: an isolated HOME, a certificate authority).
+        if (extraEnvironment is not null)
+        {
+            foreach (var (variable, value) in extraEnvironment)
+            {
+                if (value is null)
+                {
+                    startInfo.Environment.Remove(variable);
+                }
+                else
+                {
+                    startInfo.Environment[variable] = value;
+                }
+            }
+        }
 
         var worker = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"The Worker process '{workerName}' could not be started.");

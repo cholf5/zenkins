@@ -470,7 +470,15 @@ internal class MilestoneHost : IDisposable
     }
 
     /// <summary>Starts the real worker against this host (one worker per host; started late by one test).</summary>
-    public async Task StartWorkerAsync(string? name = null)
+    /// <param name="name">The worker's registered name.</param>
+    /// <param name="extraEnvironment">
+    /// Extra variables for the worker process (card F-018 uses this to pin an isolated <c>HOME</c> and the
+    /// fixture's certificate authority). They are applied last, so a test can never accidentally undo the
+    /// configuration the harness needs.
+    /// </param>
+    public async Task StartWorkerAsync(
+        string? name = null,
+        IReadOnlyDictionary<string, string?>? extraEnvironment = null)
     {
         Assert.Empty(_workers);
         var startInfo = new ProcessStartInfo
@@ -497,6 +505,21 @@ internal class MilestoneHost : IDisposable
         startInfo.Environment["ZENKINS_CLAIM_SECONDS"] = "1";
         startInfo.Environment["ZENKINS_DATA_DIR"] = WorkerDataDirectory;
         startInfo.Environment["ZENKINS_WORK_ROOT"] = WorkRoot;
+
+        if (extraEnvironment is not null)
+        {
+            foreach (var (variable, value) in extraEnvironment)
+            {
+                if (value is null)
+                {
+                    startInfo.Environment.Remove(variable);
+                }
+                else
+                {
+                    startInfo.Environment[variable] = value;
+                }
+            }
+        }
 
         var worker = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The Worker process could not be started.");
@@ -598,8 +621,15 @@ internal class MilestoneHost : IDisposable
     // Product surfaces: accounts, projects, runs, secrets, webhooks
     // -------------------------------------------------------------------------------------------
 
-    /// <summary>Creates a project through the real project form; returns its id.</summary>
-    public async Task<Guid> CreateProjectAsync(string name, string defaultBranch = "main")
+    /// <summary>
+    /// Creates a project through the real project form; returns its id. <paramref name="repositoryUrl"/>
+    /// is the URL a person would paste (card F-018's proof uses a real <c>https://127.0.0.1</c> remote, so
+    /// the project is created the way an operator creates one - no seeded row).
+    /// </summary>
+    public async Task<Guid> CreateProjectAsync(
+        string name,
+        string defaultBranch = "main",
+        string repositoryUrl = "https://example.test/milestone.git")
     {
         var response = await OrganizationTestHost.PostFormAsync(
             Owner,
@@ -608,7 +638,7 @@ internal class MilestoneHost : IDisposable
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["Name"] = name,
-                ["RepositoryUrl"] = "https://example.test/milestone.git",
+                ["RepositoryUrl"] = repositoryUrl,
                 ["DefaultBranch"] = defaultBranch,
                 ["PipelinePath"] = "pipeline.lua",
             });
@@ -661,6 +691,47 @@ internal class MilestoneHost : IDisposable
             $"/runs/{runId}",
             $"/runs/{runId}/cancel",
             new Dictionary<string, string>(StringComparer.Ordinal));
+
+    /// <summary>Creates an organization git credential through the project settings tab; returns its id.</summary>
+    public async Task<Guid> CreateGitCredentialAsync(Guid projectId, string name, string value)
+    {
+        var settingsPath = $"/projects/{projectId}/settings";
+        var response = await OrganizationTestHost.PostFormAsync(
+            Owner,
+            settingsPath,
+            "/git-credentials/create",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = name,
+                ["Kind"] = "HttpsToken",
+                ["Value"] = value,
+                ["UserName"] = "zenkins-bot",
+                ["ProjectId"] = projectId.ToString(),
+            });
+        Assert.True(
+            (int)response.StatusCode is 302 or 303,
+            $"Creating the Git credential failed with {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+
+        var list = await AuthTestHost.GetStringAsync(Owner, $"/projects/{projectId}/git-credentials");
+        using var document = JsonDocument.Parse(list);
+        return Assert.Single(document.RootElement.EnumerateArray()).GetProperty("id").GetGuid();
+    }
+
+    /// <summary>Attaches a credential through the settings tab's form (card F-018's write path).</summary>
+    public async Task AttachGitCredentialAsync(Guid projectId, Guid credentialId)
+    {
+        var response = await OrganizationTestHost.PostFormAsync(
+            Owner,
+            $"/projects/{projectId}/settings",
+            $"/projects/{projectId}/git-credential/attach",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["GitCredentialId"] = credentialId.ToString(),
+            });
+        Assert.True(
+            (int)response.StatusCode is 302 or 303,
+            $"Attaching the Git credential failed with {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+    }
 
     /// <summary>Creates an organization secret through the real secrets form.</summary>
     public async Task CreateSecretAsync(string name, string value)

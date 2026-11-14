@@ -32,6 +32,20 @@ public static class GitCredentialErrorCodes
     public const string UserNameInvalid = "user-name-invalid";
     public const string FieldInvalid = "field-invalid";
 
+    /// <summary>
+    /// An attach/detach answer (card F-018): the submitted credential id is not one of this
+    /// organization's credentials. Covers "does not exist" and "belongs to another organization"
+    /// with one code, so the surface is not an existence oracle.
+    /// </summary>
+    public const string CredentialNotFound = "credential-not-found";
+
+    /// <summary>
+    /// A delete that is still referenced by one or more projects (card F-018, mirroring card D-006's
+    /// reference awareness for secrets). The answer names them; deleting anyway needs the explicit
+    /// confirmation the page offers next to that sentence.
+    /// </summary>
+    public const string CredentialInUse = "credential-in-use";
+
     /// <summary>The field a code belongs to, or <see langword="null"/> for an unknown code.</summary>
     public static string? FieldFor(string? code) => code switch
     {
@@ -60,6 +74,12 @@ public static class GitCredentialErrorCodes
             + "starting with '-----BEGIN'.",
         UserNameTooLong => "The user name must be at most 200 characters.",
         UserNameInvalid => "The user name must not contain control characters or line breaks.",
+        CredentialNotFound =>
+            "That Git credential does not exist in this organization. Reload the page and choose one of "
+            + "the credentials listed there.",
+        CredentialInUse =>
+            "This Git credential is still assigned to at least one project. Detach it there first, or "
+            + "confirm the delete to remove it together with those assignments.",
         _ => null,
     };
 }

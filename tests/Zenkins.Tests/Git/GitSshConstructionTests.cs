@@ -20,10 +20,15 @@ public sealed class GitSshConstructionTests
         var command = WorkerGit.GitEnvironment.BuildSshCommand(
             "/tmp/run/temp/id",
             "/tmp/run/temp/known_hosts",
-            WorkerGit.GitEnvironment.DefaultHostKeyPolicy);
+            WorkerGit.GitEnvironment.DefaultHostKeyPolicy,
+            "/tmp/run/temp/ssh_config.hardened");
 
+        // Card F-018 added two options to the F-013 shape: -F names an ssh config of the run's own (so
+        // ~/.ssh/config cannot contribute an IdentityFile or a ProxyCommand) and IdentityAgent=none
+        // keeps the host's agent out of the exchange even when an -i key is supplied.
         Assert.Equal(
-            "ssh -i \"/tmp/run/temp/id\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "
+            "ssh -F \"/tmp/run/temp/ssh_config.hardened\" -i \"/tmp/run/temp/id\" -o IdentitiesOnly=yes "
+            + "-o IdentityAgent=none -o StrictHostKeyChecking=accept-new "
             + "-o UserKnownHostsFile=\"/tmp/run/temp/known_hosts\"",
             command);
 
@@ -31,8 +36,26 @@ public sealed class GitSshConstructionTests
         var pinned = WorkerGit.GitEnvironment.BuildSshCommand(
             "/tmp/run/temp/id",
             "/etc/zenkins/known_hosts",
-            WorkerGit.GitEnvironment.PinnedHostKeyPolicy);
+            WorkerGit.GitEnvironment.PinnedHostKeyPolicy,
+            "/tmp/run/temp/ssh_config.hardened");
         Assert.Contains("StrictHostKeyChecking=yes", pinned, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Without_a_credential_ssh_offers_no_identity_at_all()
+    {
+        // Card F-018: an SSH project with no assigned credential must not reach for the host's keys.
+        var command = WorkerGit.GitEnvironment.BuildNoIdentitySshCommand(
+            "/tmp/run/temp/known_hosts",
+            WorkerGit.GitEnvironment.DefaultHostKeyPolicy,
+            "/tmp/run/temp/ssh_config.hardened");
+
+        Assert.Equal(
+            "ssh -F \"/tmp/run/temp/ssh_config.hardened\" -o IdentitiesOnly=yes -o IdentityAgent=none "
+            + "-o BatchMode=yes -o StrictHostKeyChecking=accept-new "
+            + "-o UserKnownHostsFile=\"/tmp/run/temp/known_hosts\"",
+            command);
+        Assert.DoesNotContain("-i ", command, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -41,7 +64,8 @@ public sealed class GitSshConstructionTests
         var command = WorkerGit.GitEnvironment.BuildSshCommand(
             "/tmp/a b/id",
             "/tmp/a \"b\"/known_hosts",
-            WorkerGit.GitEnvironment.DefaultHostKeyPolicy);
+            WorkerGit.GitEnvironment.DefaultHostKeyPolicy,
+            "/tmp/a b/ssh_config.hardened");
 
         Assert.Contains("-i \"/tmp/a b/id\"", command, StringComparison.Ordinal);
         Assert.Contains("UserKnownHostsFile=\"/tmp/a \\\"b\\\"/known_hosts\"", command, StringComparison.Ordinal);
@@ -169,9 +193,16 @@ public sealed class GitSshConstructionTests
             .ToArray();
         Assert.NotEmpty(sshLines);
         var sshCommand = sshLines[0];
-        Assert.StartsWith("ssh -i \"", sshCommand, StringComparison.Ordinal);
+
+        // Card F-018's hardening is part of the command: -F pins an ssh config of the run's own (so
+        // ~/.ssh/config cannot add an IdentityFile) and IdentityAgent=none keeps any host agent out,
+        // while -i still names the delivered key.
+        Assert.StartsWith("ssh -F \"", sshCommand, StringComparison.Ordinal);
+        Assert.Contains("-i \"", sshCommand, StringComparison.Ordinal);
+        Assert.Contains("IdentityAgent=none", sshCommand, StringComparison.Ordinal);
         Assert.Contains("IdentitiesOnly=yes", sshCommand, StringComparison.Ordinal);
         Assert.Contains("StrictHostKeyChecking=accept-new", sshCommand, StringComparison.Ordinal);
+        Assert.Contains(work.HardeningPath, sshCommand, StringComparison.Ordinal);
         Assert.Contains(work.TempPath, sshCommand, StringComparison.Ordinal);
         Assert.Contains(WorkerGit.GitCredentialFiles.SshKeyFileName, sshCommand, StringComparison.Ordinal);
 

@@ -18,9 +18,10 @@ namespace Zenkins.Tests.ProjectUi;
 /// which is exactly the "the second run still authenticates" property at the fetch step every git
 /// clone passes through.
 /// <para>
-/// The project's <c>GitCredentialId</c> is seeded directly: no product surface assigns a credential
-/// to a project in v0.9 (F-013 left the reference column and the settings card manages the store),
-/// the same seam F-013's own endpoint tests use.
+/// The project's <c>GitCredentialId</c> is seeded directly here: this card's tests are about the store
+/// and the delivery, and the assignment surface arrived later (card F-018, whose own tests attach
+/// through the settings tab's form - see <c>GitCredentialAssignmentTests</c>), so seeding keeps this
+/// suite about what it was written for.
 /// </para>
 /// </summary>
 [Trait("Category", "ProjectUi")]
@@ -181,16 +182,23 @@ public sealed class ProjectUiCredentialTests
         Assert.True((int)created.StatusCode is 302 or 303, $"The create answered {(int)created.StatusCode}.");
         var credentialId = await ReadSingleCredentialIdAsync(owner, projectId);
 
-        // No product surface assigns a credential to a project in v0.9; seed the reference the way
-        // F-013's own tests do.
-        await host.InSystemScopeAsync(async context =>
+        // Attach through the product's own surface (card F-018): if the assignment route broke, this test
+        // must fail - a seeded column would have kept it green while every real run cloned anonymously.
+        using (var attached = await OrganizationTestHost.PostFormAsync(
+            owner,
+            settingsPath,
+            $"/projects/{projectId}/git-credential/attach",
+            new Dictionary<string, string> { ["GitCredentialId"] = credentialId.ToString() }))
+        {
+            Assert.True((int)attached.StatusCode is 302 or 303, $"The attach answered {(int)attached.StatusCode}.");
+        }
+
+        var assigned = await host.InSystemScopeAsync(async context =>
         {
             var projects = await context.SystemQueryAsync<Project>(candidate => candidate.Id == projectId);
-            Assert.NotEmpty(projects);
-            projects[0].GitCredentialId = credentialId;
-            await context.SaveChangesAsync();
-            return true;
+            return projects.Single().GitCredentialId;
         });
+        Assert.Equal(credentialId, assigned);
 
         var (workerToken, _) = await host.RegisterWorkerAsync(name: "settings-agent", maxConcurrency: 8);
         using var workerClient = host.Host.CreateClient();

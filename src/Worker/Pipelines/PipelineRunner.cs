@@ -254,6 +254,10 @@ public sealed class PipelineRunner
         //    a previous tree. The credential is registered with the run's redaction filter the instant it
         //    is known - before the first git command, and long before any step (F-015 extends F-013 here).
         string commit;
+
+        // Card F-018: whether the server delivered a credential for this run. The answer decides what the
+        // log says before the clone and which failure reason a rejection carries afterwards.
+        var credentialDelivered = false;
         try
         {
             var workspace = new GitWorkspace(new GitWorkspaceOptions
@@ -270,6 +274,18 @@ public sealed class PipelineRunner
 
             var credential = await _credentialProvider(cancellationToken);
             _options.Redactor.Register(credential);
+            credentialDelivered = credential is not null;
+
+            // Card F-018: say which credential this clone has - or that it has none. The line names no
+            // credential (a name is not needed to diagnose this and would leak the store's contents into
+            // a log a Member can read) and never carries a value. It is what makes the run's log agree
+            // with the run page instead of leaving an anonymous clone unexplained.
+            Log(credentialDelivered
+                ? $"zenkins: cloning with the project's assigned {credential!.KindText} Git credential, "
+                    + "fetched from the server for this run."
+                : "zenkins: no Git credential is assigned to this project, so this clone runs without one; "
+                    + "a credential stored on this worker host is not used.");
+
             var clone = await workspace.CloneAsync(
                 _options.RepositoryUrl,
                 _options.Branch,
@@ -306,7 +322,7 @@ public sealed class PipelineRunner
                 return PipelineRunOutcome.Cancellation();
             }
 
-            return PipelineRunOutcome.Failed(Classify(failure.Kind));
+            return PipelineRunOutcome.Failed(Classify(failure.Kind, credentialDelivered));
         }
 
         Log($"zenkins: checked out {_options.Branch} at {commit}.");
@@ -751,14 +767,21 @@ public sealed class PipelineRunner
         return accepted;
     }
 
-    /// <summary>Maps F-013's failure classification onto the closed run-failure vocabulary.</summary>
-    private static string Classify(GitFailureKind kind) => kind switch
+    /// <summary>
+    /// Maps a git failure onto the closed <see cref="PipelineFailureReasons"/> vocabulary. Card F-018
+    /// splits one case out: a rejected authentication with <b>no credential delivered</b> is
+    /// <see cref="PipelineFailureReasons.GitCredentialNotAssigned"/>, so the run page can say "nothing is
+    /// assigned" instead of implying a credential the project does not have was refused.
+    /// </summary>
+    private static string Classify(GitFailureKind kind, bool credentialDelivered) => kind switch
     {
         GitFailureKind.GitUnavailable => PipelineFailureReasons.GitUnavailable,
         GitFailureKind.NonEmptyTarget => PipelineFailureReasons.GitNonEmptyTarget,
         GitFailureKind.PathEscape => PipelineFailureReasons.GitPathEscape,
         GitFailureKind.InvalidUrl => PipelineFailureReasons.GitInvalidUrl,
         GitFailureKind.BranchNotFound => PipelineFailureReasons.GitBranchNotFound,
+        GitFailureKind.AuthenticationRejected when !credentialDelivered =>
+            PipelineFailureReasons.GitCredentialNotAssigned,
         GitFailureKind.AuthenticationRejected => PipelineFailureReasons.GitAuthRejected,
         GitFailureKind.Unreachable => PipelineFailureReasons.GitUnreachable,
         GitFailureKind.Timeout => PipelineFailureReasons.GitTimeout,

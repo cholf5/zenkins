@@ -75,6 +75,13 @@ public sealed record RunTriggerResult(
 /// <param name="GitBranch">The branch the run built (snapshot at trigger time).</param>
 /// <param name="GitCommit">The commit the worker resolved, once it reported one.</param>
 /// <param name="Pipeline">The frozen spec, when the definition was reported; null before that.</param>
+/// <param name="GitCredentialAssigned">
+/// Whether the run's project had a Git credential assigned when the page was read (card F-018).
+/// <see langword="null"/> when the project could not be read (a foreign or deleted row), so the page
+/// says "unknown" rather than claiming a credential was missing. The value is a configuration fact -
+/// never material - and it is what lets the page explain a <c>git-auth-rejected</c> failure instead of
+/// showing the bare code.
+/// </param>
 public sealed record RunView(
     Guid Id,
     Guid ProjectId,
@@ -95,7 +102,8 @@ public sealed record RunView(
     DateTimeOffset UpdatedAt,
     int? TimeoutSeconds = null,
     DateTimeOffset? DeadlineAt = null,
-    IReadOnlyList<RunStepView>? Steps = null)
+    IReadOnlyList<RunStepView>? Steps = null,
+    bool? GitCredentialAssigned = null)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -1945,6 +1953,26 @@ public sealed class RunService(
             .ToListAsync(cancellationToken);
         var stepsByRun = stepRows.ToLookup(step => step.RunId);
 
+        // F-018: whether each run's project has a Git credential assigned, in one batched read. The
+        // run page needs it to say "no credential was assigned" instead of leaving a failed clone
+        // unexplained; the tenant filter keeps another organization's project out of the dictionary.
+        //
+        // "Assigned" means the credential row really resolves, not merely that the column is set: the
+        // foreign key makes a dangling reference impossible, and this condition keeps the run page's
+        // wording honest even against a database that predates the constraint. A project whose reference
+        // does not resolve reads as "no credential", which is what its runs actually got.
+        var projectIds = runs.Select(run => run.ProjectId).Distinct().ToArray();
+        var credentialAssigned = await context.Projects
+            .Where(project => projectIds.Contains(project.Id))
+            .Select(project => new
+            {
+                project.Id,
+                Assigned = project.GitCredentialId != null
+                    && context.GitCredentials.Any(
+                        credential => credential.Id == project.GitCredentialId.Value),
+            })
+            .ToDictionaryAsync(row => row.Id, row => row.Assigned, cancellationToken);
+
         return runs.Select(run =>
         {
             var pipeline = ReadPipeline(run.PipelineSpecJson);
@@ -1972,7 +2000,8 @@ public sealed class RunService(
                 run.UpdatedAt,
                 run.TimeoutSeconds,
                 run.DeadlineAt,
-                BuildStepViews(pipeline, [.. stepsByRun[run.Id]]));
+                BuildStepViews(pipeline, [.. stepsByRun[run.Id]]),
+                credentialAssigned.TryGetValue(run.ProjectId, out var assigned) ? assigned : null);
         }).ToList();
     }
 

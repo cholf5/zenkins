@@ -243,6 +243,95 @@
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
+                    @* Card F-018: the assignment itself. Until this card the column existed and nothing
+                       wrote it, so every project cloned with whatever credential the worker host held.
+                       The block states the current assignment (which credential, by whom, when) or that
+                       there is none - and "none" is a product statement, not an omission: a run then
+                       clones without a credential instead of borrowing the host's. *@
+                    <div id="credential-assignment"
+                         class="bb:mb-6 bb:rounded-md bb:border bb:border-input bb:p-3">
+                        @if (_assignment is { } assignment)
+                        {
+                            <p class="bb:text-sm bb:font-medium">Attached to this project</p>
+                            <dl id="credential-assignment-current"
+                                class="bb:mt-2 bb:grid bb:grid-cols-1 bb:gap-3 bb:text-sm bb:sm:grid-cols-4">
+                                <div>
+                                    <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credential</dt>
+                                    <dd id="credential-assignment-name" class="bb:break-all">@assignment.Name</dd>
+                                </div>
+                                <div>
+                                    <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Kind</dt>
+                                    <dd>@assignment.Kind</dd>
+                                </div>
+                                <div>
+                                    <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Attached by</dt>
+                                    <dd id="credential-assignment-by" class="bb:break-all">@(assignment.AssignedBy ?? "Not recorded")</dd>
+                                </div>
+                                <div>
+                                    <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Attached</dt>
+                                    <dd id="credential-assignment-at">@FormatAssignedAt(assignment)</dd>
+                                </div>
+                            </dl>
+                            <p class="bb:mt-2 bb:text-xs bb:text-muted-foreground">
+                                Runs of this project fetch this credential from the server at clone time;
+                                the worker never uses a credential stored on its own host.
+                            </p>
+                            <form method="post"
+                                  action="@($"/projects/{_project.Id}/git-credential/detach")"
+                                  data-zenkins-antiforgery
+                                  class="bb:mt-3">
+                                <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Detach credential</BbButton>
+                            </form>
+                        }
+                        else
+                        {
+                            <p id="credential-assignment-none" class="bb:text-sm">
+                                <span class="bb:font-medium">No credential is attached to this project.</span>
+                                Its runs clone without one and will <span class="bb:font-medium">not</span>
+                                fall back to a credential stored on the worker host, so a private
+                                repository fails until a credential is attached here.
+                            </p>
+                            @if (_project.GitCredentialId is not null)
+                            {
+                                @* The column names a row the organization no longer has. Say so rather
+                                   than rendering an empty assignment as if none were configured. *@
+                                <p id="credential-assignment-missing" role="alert"
+                                   class="bb:mt-2 bb:text-sm bb:text-destructive">
+                                    This project still points at a credential that no longer exists.
+                                    Its runs fail until a credential is attached again.
+                                </p>
+                            }
+
+                            @if (_credentials.Count == 0)
+                            {
+                                <p class="bb:mt-3 bb:text-xs bb:text-muted-foreground">
+                                    Create a credential below first, then attach it here.
+                                </p>
+                            }
+                            else
+                            {
+                                <form method="post"
+                                      action="@($"/projects/{_project.Id}/git-credential/attach")"
+                                      data-zenkins-antiforgery
+                                      class="bb:mt-3 bb:flex bb:flex-wrap bb:items-end bb:gap-2">
+                                    <div class="bb:flex-1">
+                                        <label for="credential-assignment-select"
+                                               class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Attach a credential</label>
+                                        <select id="credential-assignment-select"
+                                                name="GitCredentialId"
+                                                class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                                            @foreach (var credential in _credentials)
+                                            {
+                                                <option value="@credential.Id">@credential.Name (@credential.Kind)</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Attach</BbButton>
+                                </form>
+                            }
+                        }
+                    </div>
+
                     <form method="post" action="/git-credentials/create" data-zenkins-antiforgery>
                         <div class="bb:space-y-4">
                             <input type="hidden" name="ProjectId" value="@_project.Id" />
@@ -319,6 +408,7 @@
                                         <th class="bb:py-2 bb:pr-4 bb:font-medium">Created</th>
                                         <th class="bb:py-2 bb:pr-4 bb:font-medium">Rotated</th>
                                         <th class="bb:py-2 bb:pr-4 bb:font-medium">Updated</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Used by</th>
                                         <th class="bb:py-2 bb:font-medium">Manage</th>
                                     </tr>
                                 </thead>
@@ -335,6 +425,16 @@
                                                     : "Never")
                                             </td>
                                             <td class="bb:py-3 bb:pr-4">@credential.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                            <td class="bb:py-3 bb:pr-4" data-credential-used-by="@credential.Id">
+                                                @if (UsedBy(credential) is { Count: > 0 } users)
+                                                {
+                                                    <span class="bb:break-all">@string.Join(", ", users.Select(project => project.Name))</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="bb:text-muted-foreground">No project</span>
+                                                }
+                                            </td>
                                             <td class="bb:py-3">
                                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                                                     <form method="post" action="/git-credentials/@credential.Id/rotate" data-zenkins-antiforgery class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
@@ -373,8 +473,25 @@
                                                         <summary class="bb:cursor-pointer bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive">
                                                             Delete…
                                                         </summary>
-                                                        <form method="post" action="/git-credentials/@credential.Id/delete" data-zenkins-antiforgery class="bb:mt-2 bb:flex bb:items-center bb:gap-2">
+                                                        <form method="post" action="/git-credentials/@credential.Id/delete" data-zenkins-antiforgery class="bb:mt-2 bb:flex bb:flex-col bb:items-start bb:gap-1">
                                                             <input type="hidden" name="ProjectId" value="@_project.Id" />
+                                                            <input type="hidden" name="Name" value="@credential.Name" />
+                                                            <input type="hidden" name="ConfirmCredentialId" value="@credential.Id" />
+                                                            @* Card F-018, the D-006 shape: a credential projects still
+                                                               clone with is not deleted by a plain request. The
+                                                               referencing projects are named here, and the delete only
+                                                               goes through with the explicit confirmation. *@
+                                                            @if (UsedBy(credential) is { Count: > 0 } referencing)
+                                                            {
+                                                                <span class="bb:text-xs bb:text-destructive">
+                                                                    Still used by @UsedByLabel(referencing). Deleting it anyway leaves
+                                                                    those projects with no credential.
+                                                                </span>
+                                                                <label class="bb:flex bb:items-center bb:gap-1 bb:text-xs">
+                                                                    <input type="checkbox" name="ConfirmReferenced" value="true" />
+                                                                    Delete anyway
+                                                                </label>
+                                                            }
                                                             <span class="bb:text-xs bb:text-muted-foreground">
                                                                 Delete @credential.Name permanently?
                                                             </span>
@@ -428,6 +545,13 @@
     private IReadOnlyList<WebhookView> _webhooks = [];
     private IReadOnlyList<GitCredentialListItem> _credentials = [];
 
+    /// <summary>Card F-018: the project's current assignment (which credential, by whom, when), or null.</summary>
+    private GitCredentialAssignmentView? _assignment;
+
+    /// <summary>Card F-018: per credential, the projects that clone with it (the delete's reference list).</summary>
+    private IReadOnlyDictionary<Guid, IReadOnlyList<GitCredentialReferencingProject>> _usedByProjects =
+        new Dictionary<Guid, IReadOnlyList<GitCredentialReferencingProject>>();
+
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
 
@@ -453,6 +577,11 @@
         GitCredentialEndpoints.NoticeCreated => "The Git credential was created.",
         GitCredentialEndpoints.NoticeRotated => "The Git credential was rotated; the previous value is no longer stored.",
         GitCredentialEndpoints.NoticeDeleted => "The Git credential was deleted.",
+        // F-018's assignment outcomes.
+        GitCredentialEndpoints.NoticeAttached =>
+            "The credential is attached. Runs of this project now clone with it, fetched from the server.",
+        GitCredentialEndpoints.NoticeDetached =>
+            "The credential is detached. Runs of this project now clone without one.",
         _ => null,
     };
 
@@ -518,9 +647,33 @@
             if (credentials.Status == GitCredentialMutationStatus.Success)
             {
                 _credentials = credentials.Items;
+                _assignment = credentials.Assignment;
+                _usedByProjects = credentials.UsedByProjects
+                    ?? new Dictionary<Guid, IReadOnlyList<GitCredentialReferencingProject>>();
             }
         }
     }
+
+    /// <summary>Card F-018: the projects that clone with <paramref name="credential"/> (empty when none).</summary>
+    private IReadOnlyList<GitCredentialReferencingProject> UsedBy(GitCredentialListItem credential) =>
+        _usedByProjects.TryGetValue(credential.Id, out var projects) ? projects : [];
+
+    /// <summary>The referencing projects as prose: names, or "N projects" past a readable handful.</summary>
+    private static string UsedByLabel(IReadOnlyList<GitCredentialReferencingProject> projects)
+    {
+        const int shown = 5;
+        var names = string.Join(", ", projects.Take(shown).Select(project => project.Name));
+        return projects.Count > shown ? $"{names} and {projects.Count - shown} more project(s)" : names;
+    }
+
+    /// <summary>
+    /// When the assignment was made, in the page's UTC format - or the honest "not recorded" for an
+    /// assignment that predates the attribution columns (a database seeded before F-018).
+    /// </summary>
+    private static string FormatAssignedAt(GitCredentialAssignmentView assignment) =>
+        assignment.AssignedAt is { } assignedAt
+            ? assignedAt.ToString("yyyy-MM-dd HH:mm") + " UTC"
+            : "Not recorded";
 
     /// <summary>
     /// A real 404 for a foreign or missing id. The status-code-pages middleware must not re-execute

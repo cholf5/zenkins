@@ -356,11 +356,15 @@ public sealed class GitWorkspace
         GitCredentialFiles carrier,
         GitCredentialMaterial? credential)
     {
+        // Card F-018: every composition starts from GitEnvironment.Base, which cuts off the host's
+        // credential sources (global/system config, credential helpers, ask-pass programs, ssh agent
+        // and ~/.ssh/config). The empty config files live in the run's hardening/ directory.
+        var hardeningDirectory = _options.Work.HardeningPath;
         Dictionary<string, string?> environment;
         switch (url.Transport)
         {
             case GitTransport.Http when credential is { Kind: GitCredentialKind.HttpsToken }:
-                environment = GitEnvironment.ForHttpsToken(carrier);
+                environment = GitEnvironment.ForHttpsToken(carrier, hardeningDirectory);
                 break;
 
             case GitTransport.Http when credential is { Kind: GitCredentialKind.SshKey }:
@@ -370,7 +374,11 @@ public sealed class GitWorkspace
                     GitFailureKind.Credential);
 
             case GitTransport.Http:
-                environment = GitEnvironment.Base();
+                // No credential assigned and an http(s) remote: the clone runs anonymously. The base
+                // environment already dropped every helper, so the host's stored token cannot answer
+                // the remote's challenge - which is what makes the run page's "no credential assigned"
+                // statement true rather than an assumption.
+                environment = GitEnvironment.Base(hardeningDirectory);
                 break;
 
             case GitTransport.Ssh when credential is { Kind: GitCredentialKind.SshKey }:
@@ -379,7 +387,8 @@ public sealed class GitWorkspace
                     KnownHostsFile(),
                     _options.KnownHostsPath is null
                         ? GitEnvironment.DefaultHostKeyPolicy
-                        : GitEnvironment.PinnedHostKeyPolicy);
+                        : GitEnvironment.PinnedHostKeyPolicy,
+                    hardeningDirectory);
                 break;
 
             case GitTransport.Ssh when credential is { Kind: GitCredentialKind.HttpsToken }:
@@ -388,8 +397,19 @@ public sealed class GitWorkspace
                     + "use an http(s) URL or store an SSH key.",
                     GitFailureKind.Credential);
 
+            case GitTransport.Ssh:
+                // No credential assigned and an ssh remote: offer no identity at all, so a key that
+                // happens to sit in the worker's ~/.ssh is not used.
+                environment = GitEnvironment.ForSshWithoutCredential(
+                    KnownHostsFile(),
+                    _options.KnownHostsPath is null
+                        ? GitEnvironment.DefaultHostKeyPolicy
+                        : GitEnvironment.PinnedHostKeyPolicy,
+                    hardeningDirectory);
+                break;
+
             default:
-                environment = GitEnvironment.Base();
+                environment = GitEnvironment.Base(hardeningDirectory);
                 break;
         }
 
@@ -655,7 +675,7 @@ public sealed class GitWorkspace
     /// </summary>
     private Dictionary<string, string?> LocalEnvironment()
     {
-        var environment = GitEnvironment.Base();
+        var environment = GitEnvironment.Base(_options.Work.HardeningPath);
         foreach (var (name, value) in _options.EnvironmentOverrides)
         {
             environment[name] = value;

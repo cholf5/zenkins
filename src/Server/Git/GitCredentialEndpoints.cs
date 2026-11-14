@@ -30,6 +30,14 @@ namespace Zenkins.Server.Git;
 /// authenticates and selects the tenant. A failure is one bodyless 404 - cross-tenant, foreign-run and
 /// unknown-run are indistinguishable, and the server log carries one neutral line for all of them.
 /// </para>
+/// <para>
+/// <b>Card F-018 adds the assignment routes</b> (<c>/projects/{id}/git-credential/attach</c> and
+/// <c>.../detach</c>): Owner-only, form-bound (so <c>UseAntiforgery</c> validates them), and answered with
+/// PRG back to the settings tab. A foreign or unknown project id or credential id is a <b>404</b>, the same
+/// answer the settings list gives - never a 403 that would confirm an id exists. The read that accompanies
+/// them (the list) also carries the project's current assignment and, per credential, the projects that
+/// clone with it.
+/// </para>
 /// </summary>
 public static class GitCredentialEndpoints
 {
@@ -44,6 +52,14 @@ public static class GitCredentialEndpoints
 
     /// <summary>The settings tab the PRG redirects land on (card D-003).</summary>
     public const string SettingsPath = "/projects/{0}/settings";
+
+    /// <summary>
+    /// The two assignment routes card F-018 adds: attach one of the organization's credentials to the
+    /// project, and detach it. Both are Owner-only, both resolve the project through the tenant filter,
+    /// and both answer PRG back to the settings tab that hosts their forms.
+    /// </summary>
+    public const string AttachPath = "/projects/{projectId:guid}/git-credential/attach";
+    public const string DetachPath = "/projects/{projectId:guid}/git-credential/detach";
 
     /// <summary>The worker fetch route template.</summary>
     public const string WorkerFetchPath = "/api/workers/runs/{runId:guid}/git-credential";
@@ -62,6 +78,12 @@ public static class GitCredentialEndpoints
         // mutations; the service resolves the project through the tenant filter, so a foreign
         // project id is a 404 for everyone.
         endpoints.MapGet(ProjectListPath, ListForProjectAsync).RequireAuthorization();
+
+        // Card F-018: the assignment itself. Form-bound for the same reason every other mutation is -
+        // UseAntiforgery validates the token on a form post - and the route (never a form field) is the
+        // authoritative project.
+        endpoints.MapPost(AttachPath, AttachAsync).RequireAuthorization();
+        endpoints.MapPost(DetachPath, DetachAsync).RequireAuthorization();
 
         endpoints.MapGet(WorkerFetchPath, FetchMaterialAsync);
         return endpoints;
@@ -132,11 +154,90 @@ public static class GitCredentialEndpoints
             return Results.Unauthorized();
         }
 
-        var result = await credentials.DeleteAsync(userId, credentialId, httpContext.RequestAborted);
+        var result = await credentials.DeleteAsync(
+            userId,
+            credentialId,
+            ConfirmRequested(form?.ConfirmReferenced)
+                && ConfirmsCredential(form?.ConfirmCredentialId, credentialId),
+            httpContext.RequestAborted);
         return result.Status switch
         {
             GitCredentialMutationStatus.Success => SuccessOutcome(result, form?.ProjectId, NoticeDeleted),
             GitCredentialMutationStatus.Forbidden => Forbidden(result),
+
+            // Card F-018: a delete that would strand the projects cloning with this credential is
+            // refused, and the refusal names them - on the settings tab when the form came from there,
+            // as the D-006-shaped answer (409 + the names) otherwise.
+            GitCredentialMutationStatus.Referenced =>
+                ReferencedOutcome(result, form?.ProjectId, form?.Name),
+            _ => Results.NotFound(),
+        };
+    }
+
+    /// <summary>
+    /// Card F-018: attach a credential to the project. The credential id is the only input; the
+    /// service resolves both it and the project through the tenant filter, so a foreign or missing id
+    /// is one refusal that confirms nothing.
+    /// </summary>
+    private static async Task<IResult> AttachAsync(
+        Guid projectId,
+        [FromForm] AttachGitCredentialForm form,
+        HttpContext httpContext,
+        GitCredentialService credentials)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!Guid.TryParse(form?.GitCredentialId, out var credentialId))
+        {
+            // A missing/malformed id never becomes a 500, never reaches the database, and is the same
+            // 404 a missing credential gets (F-013's contract for this surface).
+            return Results.NotFound();
+        }
+
+        var result = await credentials.AssignToProjectAsync(
+            userId,
+            projectId,
+            credentialId,
+            httpContext.RequestAborted);
+        return result.Status switch
+        {
+            GitCredentialMutationStatus.Success => ChangesOutcome(projectId, NoticeAttached),
+            GitCredentialMutationStatus.Forbidden => Forbidden(result),
+
+            // Missing credential, foreign credential, missing project, foreign project: one 404, exactly
+            // like the list route above. A redirect would have suggested the id was meaningful.
+            _ => Results.NotFound(),
+        };
+    }
+
+    /// <summary>Card F-018: remove the project's assignment. Detaching nothing is a success.</summary>
+    private static async Task<IResult> DetachAsync(
+        Guid projectId,
+        [FromForm] DetachGitCredentialForm form,
+        HttpContext httpContext,
+        GitCredentialService credentials)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await credentials.DetachFromProjectAsync(
+            userId,
+            projectId,
+            httpContext.RequestAborted);
+        return result.Status switch
+        {
+            GitCredentialMutationStatus.Success => ChangesOutcome(projectId, NoticeDetached),
+            GitCredentialMutationStatus.Forbidden => Forbidden(result),
+
+            // Only a missing or foreign project can answer NotFound here; there is nothing to say about
+            // it that would not confirm whether the id exists.
             _ => Results.NotFound(),
         };
     }
@@ -201,6 +302,10 @@ public static class GitCredentialEndpoints
     public const string NoticeRotated = "credential-rotated";
     public const string NoticeDeleted = "credential-deleted";
 
+    /// <summary>Card F-018's two assignment notices (attach and detach).</summary>
+    public const string NoticeAttached = "credential-attached";
+    public const string NoticeDetached = "credential-detached";
+
     /// <summary>
     /// The query keys of the PRG redirect: the field error code and the two non-secret echo fields.
     /// The submitted <em>value</em> never travels in a query (query strings are logged), the same
@@ -255,6 +360,56 @@ public static class GitCredentialEndpoints
     /// <summary>Whether the form named its project (the settings tab's hidden field).</summary>
     private static bool TryReadProjectId(string? projectIdentifier, out Guid projectId) =>
         Guid.TryParse(projectIdentifier, out projectId);
+
+    /// <summary>
+    /// A successful attach/detach redirects back to the settings tab it came from (the form always names
+    /// its project, because the route it posted to names it too).
+    /// </summary>
+    private static IResult ChangesOutcome(Guid projectId, string notice) =>
+        Results.Redirect($"/projects/{projectId}/settings?notice={notice}");
+
+    /// <summary>
+    /// A delete refused because the credential is still assigned (card F-018): PRG back to the settings
+    /// tab with the D-006 code when the form came from there, a 409 naming the projects otherwise.
+    /// </summary>
+    private static IResult ReferencedOutcome(
+        GitCredentialMutationResult result,
+        string? projectId,
+        string? submittedName)
+    {
+        if (TryReadProjectId(projectId, out var projectIdentifier))
+        {
+            var query = QueryString.Create(new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                [ErrorQueryKey] = GitCredentialErrorCodes.CredentialInUse,
+                [NameQueryKey] = submittedName,
+            });
+            return Results.Redirect($"/projects/{projectIdentifier}/settings{query}");
+        }
+
+        return Results.Json(
+            new GitCredentialReferencedResponse(
+                GitCredentialErrorCodes.CredentialInUse,
+                GitCredentialErrorCodes.MessageFor(GitCredentialErrorCodes.CredentialInUse),
+                result.ReferencingProjects ?? []),
+            statusCode: StatusCodes.Status409Conflict);
+    }
+
+    /// <summary>
+    /// Whether the delete carries the confirmation a referenced credential needs (card F-018): the
+    /// operator ticked the page's visible box <b>and</b> the form named the credential it is deleting.
+    /// Both are required, so a stray or replayed post cannot delete a credential by accident: the id must
+    /// match the route, which only the rendered page echoes.
+    /// </summary>
+    private static bool ConfirmRequested(string? value) =>
+        value is not null
+        && (value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("on", StringComparison.OrdinalIgnoreCase)
+            || value == "1");
+
+    /// <summary>Whether the confirmation names exactly the credential the route addresses.</summary>
+    private static bool ConfirmsCredential(string? submitted, Guid credentialId) =>
+        Guid.TryParse(submitted, out var parsed) && parsed == credentialId;
 
     /// <summary>
     /// The stand-in for a form that bound null (a POST carrying no field the model knows): empty
@@ -316,9 +471,40 @@ public static class GitCredentialEndpoints
 
     /// <summary>
     /// The delete form carries the settings tab's return address (and nothing else: the parameter
-    /// makes the POST form-bound, so antiforgery still validates it).
+    /// makes the POST form-bound, so antiforgery still validates it). Card F-018 adds the confirmation
+    /// a referenced credential's delete requires.
     /// </summary>
     public sealed class DeleteGitCredentialForm
+    {
+        public string? ProjectId { get; set; }
+
+        /// <summary>Set by the page's "delete anyway" checkbox; absent means the plain request.</summary>
+        public string? ConfirmReferenced { get; set; }
+
+        /// <summary>
+        /// The credential id the page echoes into the confirmation. Required together with
+        /// <see cref="ConfirmReferenced"/>, so a confirmation always names what it deletes.
+        /// </summary>
+        public string? ConfirmCredentialId { get; set; }
+
+        /// <summary>The non-secret echo of the credential's name (the PRG error names it).</summary>
+        public string? Name { get; set; }
+    }
+
+    /// <summary>Card F-018's attach form: which of the organization's credentials to assign.</summary>
+    public sealed class AttachGitCredentialForm
+    {
+        public string? GitCredentialId { get; set; }
+
+        /// <summary>The settings tab's return address; the route names the project authoritatively.</summary>
+        public string? ProjectId { get; set; }
+    }
+
+    /// <summary>
+    /// Card F-018's detach form. Empty on purpose: it exists so the POST is form-bound (and therefore
+    /// covered by <c>UseAntiforgery</c>), and the route names the project.
+    /// </summary>
+    public sealed class DetachGitCredentialForm
     {
         public string? ProjectId { get; set; }
     }
@@ -328,4 +514,14 @@ public static class GitCredentialEndpoints
 
     /// <summary>The validation answer: which field, which stable code, and the operator's message.</summary>
     public sealed record GitCredentialErrorResponse(string Field, string Code, string? Message);
+
+    /// <summary>
+    /// The 409 answer of a delete refused because the credential is still assigned (card F-018): the
+    /// stable code, the operator's message and the projects that would lose their credential. Names
+    /// only - a project name is not material.
+    /// </summary>
+    public sealed record GitCredentialReferencedResponse(
+        string Code,
+        string? Message,
+        IReadOnlyList<string> Projects);
 }

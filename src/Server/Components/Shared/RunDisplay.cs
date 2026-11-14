@@ -1,5 +1,6 @@
 using BlazorBlueprint.Components;
 using Zenkins.Server.Data.Entities;
+using Zenkins.Shared.Pipelines;
 
 namespace Zenkins.Server.Components.Shared;
 
@@ -58,5 +59,78 @@ public static class RunDisplay
         return endedAt is { } end
             ? FormatDuration(end - start)
             : $"{FormatDuration(nowUtc - start)} (running)";
+    }
+
+    /// <summary>
+    /// A run's <c>FailureReason</c> in words (card F-018). The stored value is a closed code
+    /// (<see cref="Zenkins.Shared.Pipelines.PipelineFailureReasons"/>); a page that only printed the code
+    /// left an operator staring at <c>git-auth-rejected</c> with no next step, which is exactly what this
+    /// card fixes.
+    /// <para>
+    /// <b>The credential answer is the point.</b> A rejected credential reads differently depending on
+    /// whether the project had one assigned: with none, the sentence says so and says a credential on the
+    /// worker host is not used; with one, it points at rotation. <paramref name="gitCredentialAssigned"/> is
+    /// <see langword="null"/> when the project could not be read, and the sentence then stays general
+    /// instead of guessing.
+    /// </para>
+    /// <para>
+    /// <b>A code without a sentence returns the empty string, deliberately.</b> The run page always shows the
+    /// stored code next to this text (that is the closed-vocabulary contract), and the page renders the
+    /// explanation row only when there is one - so an untranslated reason reads as its code, never as a
+    /// blank claim. Adding a sentence here is a presentation change; it can never hide a reason.
+    /// </para>
+    /// </summary>
+    public static string FailureReasonText(string? reason, bool? gitCredentialAssigned)
+    {
+        if (string.IsNullOrEmpty(reason))
+        {
+            return string.Empty;
+        }
+
+        return reason switch
+        {
+            PipelineFailureReasons.GitAuthRejected when gitCredentialAssigned == false =>
+                "The remote asked for credentials, and no Git credential is assigned to this project. "
+                + "Attach one on the project's settings tab - a credential stored on the worker host is "
+                + "not used.",
+            PipelineFailureReasons.GitCredentialNotAssigned =>
+                "The repository needs a credential and none is assigned to this project, so the worker did "
+                + "not authenticate (it never borrows a credential from the worker host). Attach one on the "
+                + "project's settings tab and run again.",
+            PipelineFailureReasons.GitAuthRejected =>
+                "The remote rejected the project's Git credential. If it expired or was revoked, rotate "
+                + "it on the project's settings tab.",
+            PipelineFailureReasons.GitCredential =>
+                "The project's Git credential could not be used (its kind does not match the repository "
+                + "URL, or the value is unusable). Check it on the project's settings tab.",
+            PipelineFailureReasons.GitUnavailable =>
+                "The worker could not run git. Install git on the worker host and try again.",
+            PipelineFailureReasons.GitInvalidUrl =>
+                "The repository URL is not one git can clone (it is malformed, or it embeds credentials).",
+            PipelineFailureReasons.GitBranchNotFound =>
+                "The branch this run builds does not exist on the remote.",
+            PipelineFailureReasons.GitUnreachable =>
+                "The worker could not reach the repository (DNS, connection or TLS). If the host uses a "
+                + "private certificate authority, install it on the worker host.",
+            PipelineFailureReasons.GitTimeout =>
+                "A git command exceeded its budget and was stopped.",
+            PipelineFailureReasons.GitNonEmptyTarget =>
+                "The run's work directory was not empty, so the clone refused to overwrite it.",
+            PipelineFailureReasons.GitPathEscape =>
+                "A path would have left the run's work directory, so the operation was refused.",
+            PipelineFailureReasons.GitFailed =>
+                "So git reported a failure; the run log carries the detail.",
+            PipelineFailureReasons.PipelineMissing =>
+                "The pipeline file this project names does not exist in the checked-out commit.",
+            PipelineFailureReasons.PipelineSyntax =>
+                "The pipeline script did not compile; the log carries the line and column.",
+            PipelineFailureReasons.PipelineInvalid =>
+                "The pipeline script declared a pipeline the server refused; the log names the field.",
+            PipelineFailureReasons.PipelineTimeout =>
+                "The pipeline's definition phase ran past the run's deadline and was abandoned.",
+            PipelineFailureReasons.StepFailed =>
+                "A step exited non-zero, so the run failed.",
+            _ => string.Empty,
+        };
     }
 }

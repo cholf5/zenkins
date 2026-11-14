@@ -59,6 +59,16 @@
                         <dt class="bb:text-muted-foreground">Reason</dt>
                         <dd id="run-failure-reason" class="bb:break-all">@(_run.FailureReason ?? "-")</dd>
                     </div>
+                    @* F-018: the code above is the recorded value; this line is what it means. A rejected
+                       or missing credential is explained here in words, instead of leaving the operator
+                       with a bare git-auth-rejected. *@
+                    @if (FailureExplanation is { Length: > 0 } explanation)
+                    {
+                        <div class="bb:flex bb:gap-2">
+                            <dt class="bb:text-muted-foreground">What happened</dt>
+                            <dd id="run-failure-explanation">@explanation</dd>
+                        </div>
+                    }
                     <div class="bb:flex bb:gap-2">
                         <dt class="bb:text-muted-foreground">Exit code</dt>
                         <dd id="run-failure-exit-code">@(_run.ExitCode?.ToString() ?? "-")</dd>
@@ -94,6 +104,28 @@
                     <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Git commit</dt>
                         <dd id="run-git-commit" class="bb:break-all">@(_run.GitCommit ?? "-")</dd>
+                    </div>
+                    @* F-018: which credential the clone had, never the material. "No credential assigned"
+                       is a fact the owner needs (a private repository cannot clone without one, and the
+                       worker does not borrow the host's), and it explains the failure above. *@
+                    <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Git credential</dt>
+                        <dd id="run-git-credential">
+                            @switch (_run.GitCredentialAssigned)
+                            {
+                                case true:
+                                    <span>The project's assigned credential; fetched by the worker for this run.</span>
+                                    break;
+                                case false:
+                                    <span class="bb:text-muted-foreground">
+                                        No credential is assigned to this project, so this run cloned without one.
+                                    </span>
+                                    break;
+                                default:
+                                    <span class="bb:text-muted-foreground">Unknown (the project could not be read).</span>
+                                    break;
+                            }
+                        </dd>
                     </div>
                 </dl>
 
@@ -351,6 +383,15 @@
             _artifacts = await ArtifactsService.GetRunArtifactsAsync(RunId);
         }
     }
+
+    /// <summary>
+    /// F-018: the run's failure reason in words (empty for a reason a page cannot translate). The
+    /// credential question is answered from the project's current assignment, so a rejection reads as
+    /// "no credential is assigned" when that is the reason a clone could not authenticate.
+    /// </summary>
+    private string FailureExplanation => _run is null
+        ? string.Empty
+        : RunDisplay.FailureReasonText(_run.FailureReason, _run.GitCredentialAssigned);
 
     /// <summary>The per-run timeout display: the override in minutes, or the server default.</summary>
     private static string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds

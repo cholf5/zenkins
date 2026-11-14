@@ -67,5 +67,27 @@ public static class GitCredentialModelConfiguration
         {
             entity.Property(run => run.GitCommit).HasMaxLength(GitCommitValidation.MaxLength);
         });
+
+        // Card F-018: the assignment's audit trail lives on the project (a nullable timestamp and the
+        // acting user's id). Kept here with the credential model instead of growing
+        // OnModelCreating's project block, and bounded like every other user-id column.
+        //
+        // The reference is enforced by the database: `Projects.GitCredentialId` is a real foreign key
+        // with ON DELETE SET NULL. A confirmed credential delete therefore clears every referencing
+        // project **in the database**, so the read-then-write window a service-side clear would leave
+        // (an attach committing between the reference read and the delete) cannot produce a project
+        // pointing at a row that no longer exists - the failure mode that degrades to a silent anonymous
+        // clone. A concurrent attach that loses the race instead hits the constraint and is refused.
+        modelBuilder.Entity<Project>(entity =>
+        {
+            entity.Property(project => project.GitCredentialAssignedByUserId).HasMaxLength(MaxUserIdLength);
+
+            entity.HasOne<GitCredential>().WithMany()
+                .HasForeignKey(project => project.GitCredentialId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
     }
+
+    /// <summary>The user-id column width the identity tables use (450, the identity key's length).</summary>
+    private const int MaxUserIdLength = 450;
 }

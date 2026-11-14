@@ -74,6 +74,13 @@ internal static class GitCli
         ["HOME"] = directory.HomePath,
         ["GIT_CONFIG_GLOBAL"] = directory.GlobalConfigPath,
         ["GIT_CONFIG_NOSYSTEM"] = "1",
+        // Card F-018: a developer's ssh agent must not decide what a fixture git command measures, so
+        // the socket is emptied here (the product empties it too, so this is never a conflicting value).
+        // GIT_ASKPASS, GIT_SSH_COMMAND and GIT_CONFIG_COUNT are deliberately **not** set here: the worker
+        // owns all three - the ask-pass helper, the pinned identity and the helper-list reset are exactly
+        // what the credential tests measure, and a fixture that pre-set them would replace the product's
+        // plumbing (these values are also passed as the product's environment overrides, which win).
+        ["SSH_AUTH_SOCK"] = string.Empty,
         ["GIT_AUTHOR_NAME"] = AuthorName,
         ["GIT_AUTHOR_EMAIL"] = AuthorEmail,
         ["GIT_COMMITTER_NAME"] = AuthorName,
@@ -81,7 +88,17 @@ internal static class GitCli
         ["GIT_TERMINAL_PROMPT"] = "0",
     };
 
-    /// <summary>Runs git and returns (exit code, stdout, stderr). Never throws for a non-zero exit.</summary>
+    /// <summary>
+    /// Runs git and returns (exit code, stdout, stderr). Never throws for a non-zero exit.
+    /// <para>
+    /// <b>No test can reach this machine's own credential stores.</b> Unless the caller says otherwise, the
+    /// system git configuration is switched off (<c>GIT_CONFIG_NOSYSTEM=1</c>) and the ask-pass program and
+    /// ssh agent are emptied, so a fixture command never consults a login keychain or an agent - and never
+    /// asks the developer for permission to. Card F-018's proof runs on credentials the tests write
+    /// themselves, in scratch directories; a test that needs its own value passes it in
+    /// <paramref name="environment"/> and that value wins.
+    /// </para>
+    /// </summary>
     public static (int ExitCode, string StdOut, string StdErr) Run(
         string workingDirectory,
         IReadOnlyDictionary<string, string?> environment,
@@ -98,6 +115,11 @@ internal static class GitCli
         {
             startInfo.ArgumentList.Add(argument);
         }
+
+        // Hermetic by default: a fixture git must never be able to touch the operator's credentials.
+        startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        startInfo.Environment["GIT_ASKPASS"] = string.Empty;
+        startInfo.Environment["SSH_AUTH_SOCK"] = string.Empty;
 
         foreach (var (name, value) in environment)
         {
@@ -405,6 +427,15 @@ internal sealed class RecordingGitShim : IDisposable
             $"printf 'ASKPASS:%s\\n' \"${{GIT_ASKPASS-}}\" >> '{logPath}'",
             $"printf 'SSH:%s\\n' \"${{GIT_SSH_COMMAND-}}\" >> '{logPath}'",
             $"printf 'PROMPT:%s\\n' \"${{GIT_TERMINAL_PROMPT-}}\" >> '{logPath}'",
+            // Card F-018's hardening, as the git child really receives it: the operator's config files
+            // are out of reach, the helper list is reset, no agent socket and no ask-pass program.
+            $"printf 'GLOBAL:%s\\n' \"${{GIT_CONFIG_GLOBAL-}}\" >> '{logPath}'",
+            $"printf 'NOSYSTEM:%s\\n' \"${{GIT_CONFIG_NOSYSTEM-}}\" >> '{logPath}'",
+            $"printf 'CONFIGCOUNT:%s\\n' \"${{GIT_CONFIG_COUNT-}}\" >> '{logPath}'",
+            $"printf 'HELPERKEY:%s\\n' \"${{GIT_CONFIG_KEY_0-}}\" >> '{logPath}'",
+            $"printf 'HELPERVALUE:%s\\n' \"${{GIT_CONFIG_VALUE_0-}}\" >> '{logPath}'",
+            $"printf 'AUTHSOCK:%s\\n' \"${{SSH_AUTH_SOCK-}}\" >> '{logPath}'",
+            $"printf 'HOME:%s\\n' \"${{HOME-}}\" >> '{logPath}'",
             $"printf '%s\\n' '-----' >> '{logPath}'",
             $"exec '{realGitPath}' \"$@\"",
             string.Empty);

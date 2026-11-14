@@ -33,6 +33,14 @@ public static class PipelineFailureReasons
     /// <summary>The remote refused the project's credential.</summary>
     public const string GitAuthRejected = "git-auth-rejected";
 
+    /// <summary>
+    /// The clone needed a credential and the project has <b>none assigned</b> (card F-018). A distinct
+    /// reason rather than a bare <c>git-auth-rejected</c>: the fix is an Owner attaching a credential on
+    /// the project's settings tab, not rotating one, and the page can say exactly that. The worker
+    /// reports it only when the server delivered no material for the run.
+    /// </summary>
+    public const string GitCredentialNotAssigned = "git-credential-not-assigned";
+
     /// <summary>The remote could not be reached (DNS, connection, TLS).</summary>
     public const string GitUnreachable = "git-unreachable";
 
@@ -78,6 +86,7 @@ public static class PipelineFailureReasons
         GitInvalidUrl,
         GitBranchNotFound,
         GitAuthRejected,
+        GitCredentialNotAssigned,
         GitUnreachable,
         GitTimeout,
         GitCredential,

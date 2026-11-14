@@ -22,6 +22,13 @@ public enum GitCredentialMutationStatus
 
     /// <summary>One or more fields failed validation; nothing was written.</summary>
     InvalidInput = 3,
+
+    /// <summary>
+    /// The credential is still assigned to one or more projects and the caller did not confirm the
+    /// delete (card F-018). <see cref="GitCredentialMutationResult.ReferencingProjects"/> names them,
+    /// so the operator can detach first - or confirm the delete knowingly.
+    /// </summary>
+    Referenced = 4,
 }
 
 /// <summary>One field-level validation failure; the endpoint maps the code back to its field.</summary>
@@ -35,7 +42,8 @@ public sealed record GitCredentialMutationResult(
     GitCredentialMutationStatus Status,
     Guid? GitCredentialId = null,
     string? Message = null,
-    IReadOnlyList<GitCredentialFieldError>? FieldErrors = null)
+    IReadOnlyList<GitCredentialFieldError>? FieldErrors = null,
+    IReadOnlyList<string>? ReferencingProjects = null)
 {
     public static GitCredentialMutationResult Success(Guid credentialId) =>
         new(GitCredentialMutationStatus.Success, credentialId);
@@ -47,6 +55,17 @@ public sealed record GitCredentialMutationResult(
 
     public static GitCredentialMutationResult Invalid(params GitCredentialFieldError[] errors) =>
         new(GitCredentialMutationStatus.InvalidInput, FieldErrors: errors);
+
+    /// <summary>A delete refused because projects still clone with this credential (names, no material).</summary>
+    public static GitCredentialMutationResult Referenced(
+        Guid credentialId,
+        IReadOnlyList<string> projectNames) =>
+        new(
+            GitCredentialMutationStatus.Referenced,
+            credentialId,
+            $"The credential is still assigned to {projectNames.Count} project(s): "
+            + string.Join(", ", projectNames) + ".",
+            ReferencingProjects: projectNames);
 }
 
 /// <summary>
@@ -63,23 +82,57 @@ public sealed record GitCredentialListItem(
     DateTimeOffset? RotatedAt);
 
 /// <summary>
+/// One project that clones with a credential (card F-018): the id to link to and the name a person
+/// recognises. Nothing here is credential material - it is the project side of the reference.
+/// </summary>
+public sealed record GitCredentialReferencingProject(Guid ProjectId, string Name);
+
+/// <summary>
+/// A project's current assignment, as the settings tab states it (card F-018): which credential, by
+/// whom and when. <see cref="AssignedBy"/> is the acting user's e-mail, resolved for display; it is
+/// <see langword="null"/> for an assignment made before the attribution columns existed, which the
+/// page renders honestly rather than guessing a person.
+/// </summary>
+public sealed record GitCredentialAssignmentView(
+    Guid CredentialId,
+    string Name,
+    string Kind,
+    DateTimeOffset? AssignedAt,
+    string? AssignedBy);
+
+/// <summary>
 /// The answer of listing a project's credentials: the rows for an Owner, or the reason there are
 /// none. A record (not a nullable list) because "not allowed to read" and "no credentials yet" must
 /// not be confusable - the same shape <see cref="Zenkins.Server.Secrets.SecretListResult"/> uses.
+/// <para>
+/// Card F-018 adds the two facts the settings tab needs to <em>assign</em> one: the project's current
+/// <see cref="Assignment"/> (or <see langword="null"/>, meaning no credential is assigned and the
+/// project's runs clone without one) and, per credential, the projects that clone with it - the
+/// reference list a delete must be honest about.
+/// </para>
 /// </summary>
 public sealed record GitCredentialListResult(
     GitCredentialMutationStatus Status,
     IReadOnlyList<GitCredentialListItem> Items,
-    string? Message = null)
+    string? Message = null,
+    GitCredentialAssignmentView? Assignment = null,
+    IReadOnlyDictionary<Guid, IReadOnlyList<GitCredentialReferencingProject>>? UsedByProjects = null)
 {
-    public static GitCredentialListResult Success(IReadOnlyList<GitCredentialListItem> items) =>
-        new(GitCredentialMutationStatus.Success, items);
+    public static GitCredentialListResult Success(
+        IReadOnlyList<GitCredentialListItem> items,
+        GitCredentialAssignmentView? assignment = null,
+        IReadOnlyDictionary<Guid, IReadOnlyList<GitCredentialReferencingProject>>? usedByProjects = null) =>
+        new(GitCredentialMutationStatus.Success, items, Assignment: assignment, UsedByProjects: usedByProjects);
 
     public static GitCredentialListResult NotFound() =>
         new(GitCredentialMutationStatus.NotFound, []);
 
     public static GitCredentialListResult Forbidden(string message) =>
         new(GitCredentialMutationStatus.Forbidden, [], message);
+
+    /// <summary>The projects that clone with <paramref name="credentialId"/>; empty when it is unused.</summary>
+    public IReadOnlyList<GitCredentialReferencingProject> UsedBy(Guid credentialId) =>
+        UsedByProjects is { } map && map.TryGetValue(credentialId, out var projects) ? projects : [];
 }
 
 /// <summary>Outcome of a worker's credential fetch.</summary>
@@ -129,6 +182,15 @@ public sealed record GitCredentialFetchResult(
 /// <b>Ownership.</b> Only an Owner manages credentials, checked before the row lookup and before
 /// validation (a Member's write is always 403, whatever it posts). Hiding a control is not the
 /// enforcement.
+/// </para>
+/// <para>
+/// <b>The assignment (card F-018).</b> <see cref="AssignToProjectAsync"/> and
+/// <see cref="DetachFromProjectAsync"/> are the only writers of <see cref="Project.GitCredentialId"/>:
+/// Owner-only, both ids resolved through the tenant filter, idempotent, and audited (which credential,
+/// which project, by whom, when) in the log and on the project row. A delete of a credential that is
+/// still assigned is refused until the caller confirms it with the referencing projects in hand, and a
+/// confirmed delete lets the database's foreign key (<c>ON DELETE SET NULL</c>) clear those references, so
+/// no project - not even one attached concurrently - is left pointing at a row that is gone.
 /// </para>
 /// <para>
 /// <b>The one decrypt path.</b> <see cref="FetchMaterialForRunAsync"/> authenticates a worker token,
@@ -263,10 +325,21 @@ public sealed class GitCredentialService(
         return GitCredentialMutationResult.Success(credential.Id);
     }
 
-    /// <summary>Hard-deletes a credential. Owner-only; a missing or foreign id is a 404 for an Owner.</summary>
+    /// <summary>
+    /// Hard-deletes a credential. Owner-only; a missing or foreign id is a 404 for an Owner.
+    /// <para>
+    /// <b>Reference-aware (card F-018, mirroring D-006 for secrets).</b> A credential that projects
+    /// still clone with is never deleted by a plain request: the answer is
+    /// <see cref="GitCredentialMutationStatus.Referenced"/> with the projects' names, so the operator
+    /// sees what would break - a run of those projects would start failing with no credential. They
+    /// can detach the credential there, or repeat the delete with
+    /// <paramref name="confirmReferenced"/> after reading that sentence.
+    /// </para>
+    /// </summary>
     public async Task<GitCredentialMutationResult> DeleteAsync(
         string actingUserId,
         Guid credentialId,
+        bool confirmReferenced = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
@@ -292,16 +365,202 @@ public sealed class GitCredentialService(
             return GitCredentialMutationResult.NotFound();
         }
 
+        // The reference read runs inside the same tenant filter, so a foreign project can neither block
+        // this delete nor be named by it. It is a projection on purpose: the rows stay untracked, so the
+        // database - not EF's client-side fix-up - is the only thing that clears them.
+        var referencingProjects = await context.Projects
+            .AsNoTracking()
+            .Where(project => project.GitCredentialId == credentialId)
+            .Select(project => new { project.Id, project.Name })
+            .ToListAsync(cancellationToken);
+        if (referencingProjects.Count > 0 && !confirmReferenced)
+        {
+            var names = referencingProjects
+                .Select(project => project.Name)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            logger.LogInformation(
+                "Git credential delete deferred: still assigned. OrganizationId={OrganizationId} GitCredentialId={GitCredentialId} ProjectCount={ProjectCount} ByUserId={UserId}",
+                activeOrganizationId,
+                credential.Id,
+                names.Length,
+                actingUserId);
+            return GitCredentialMutationResult.Referenced(credential.Id, names);
+        }
+
+        // A confirmed delete leaves the assignments to the database: `Projects.GitCredentialId` is a
+        // foreign key with ON DELETE SET NULL, so every project that referenced this credential has its
+        // reference cleared *by the constraint* - including one an attach committed after this read. A
+        // service-side loop over `referencingProjects` could not promise that (the attach would slip into
+        // the gap), and a project pointing at a deleted row is exactly the silent anonymous clone this
+        // card exists to remove.
         context.GitCredentials.Remove(credential);
         await context.SaveChangesAsync(cancellationToken);
 
+        foreach (var project in referencingProjects)
+        {
+            logger.LogInformation(
+                "Git credential assignment cleared by the credential delete (database constraint). OrganizationId={OrganizationId} ProjectId={ProjectId} GitCredentialId={GitCredentialId} ByUserId={UserId}",
+                activeOrganizationId,
+                project.Id,
+                credential.Id,
+                actingUserId);
+        }
+
         logger.LogInformation(
-            "Git credential deleted. OrganizationId={OrganizationId} GitCredentialId={GitCredentialId} Name={Name} ByUserId={UserId}",
+            "Git credential deleted. OrganizationId={OrganizationId} GitCredentialId={GitCredentialId} Name={Name} ByUserId={UserId} ReferencedProjectCount={ReferencedProjectCount}",
             activeOrganizationId,
             credential.Id,
             credential.Name,
+            actingUserId,
+            referencingProjects.Count);
+        return GitCredentialMutationResult.Success(credential.Id);
+    }
+
+    /// <summary>
+    /// Assigns one of the organization's credentials to a project (card F-018's write path): the only
+    /// place <see cref="Project.GitCredentialId"/> is ever set.
+    /// <para>
+    /// <b>Owner-only, tenant-scoped, not an oracle.</b> Both ids are resolved through the
+    /// tenant-filtered context, so another organization's project or credential is the same
+    /// <see cref="GitCredentialMutationStatus.NotFound"/> as a missing one - never a 403 that would
+    /// confirm the id exists.
+    /// </para>
+    /// <para>
+    /// <b>Idempotent.</b> Re-attaching the credential that is already assigned writes nothing and
+    /// keeps the original attribution: the audit trail answers "who made this assignment", not "who
+    /// last pressed the button".
+    /// </para>
+    /// </summary>
+    public async Task<GitCredentialMutationResult> AssignToProjectAsync(
+        string actingUserId,
+        Guid projectId,
+        Guid credentialId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return GitCredentialMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to change.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
+        {
+            return GitCredentialMutationResult.Forbidden(
+                "Only an organization Owner can change a project's Git credential.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        var credential = await context.GitCredentials.SingleOrDefaultAsync(
+            candidate => candidate.Id == credentialId,
+            cancellationToken);
+        if (project is null || credential is null)
+        {
+            // Missing project, missing credential, another tenant's project, another tenant's
+            // credential: one answer, so there is nothing here to probe with.
+            return GitCredentialMutationResult.NotFound();
+        }
+
+        if (project.GitCredentialId == credential.Id)
+        {
+            return GitCredentialMutationResult.Success(credential.Id);
+        }
+
+        var previousCredentialId = project.GitCredentialId;
+        project.GitCredentialId = credential.Id;
+        project.GitCredentialAssignedAt = DateTimeOffset.UtcNow;
+        project.GitCredentialAssignedByUserId = actingUserId;
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (DatabaseErrors.IsForeignKeyViolation(exception))
+        {
+            // The credential was deleted by a concurrent confirmed delete between the read above and this
+            // write. The constraint refused it, which is the correct answer: the same 404 a missing id
+            // gets, and the project keeps the assignment it had. Writing NULL here instead would have
+            // looked like success while silently un-assigning the project.
+            logger.LogInformation(
+                "Git credential assignment refused: the credential no longer exists. OrganizationId={OrganizationId} ProjectId={ProjectId} GitCredentialId={GitCredentialId} ByUserId={UserId}",
+                activeOrganizationId,
+                project.Id,
+                credential.Id,
+                actingUserId);
+            return GitCredentialMutationResult.NotFound();
+        }
+
+        // Which credential, for which project, by whom, and what it replaced: card F-018's audit line.
+        // The name and the id are metadata; no value and no ciphertext is ever logged.
+        logger.LogInformation(
+            "Git credential assigned to project. OrganizationId={OrganizationId} ProjectId={ProjectId} GitCredentialId={GitCredentialId} GitCredentialName={GitCredentialName} PreviousGitCredentialId={PreviousGitCredentialId} ByUserId={UserId}",
+            activeOrganizationId,
+            project.Id,
+            credential.Id,
+            credential.Name,
+            previousCredentialId,
             actingUserId);
         return GitCredentialMutationResult.Success(credential.Id);
+    }
+
+    /// <summary>
+    /// Removes a project's credential assignment (card F-018), clearing the attribution with it.
+    /// Owner-only; a missing or foreign project is a 404. Detaching a project that has no assignment
+    /// is a success and writes nothing - the second half of the card's idempotency requirement.
+    /// </summary>
+    public async Task<GitCredentialMutationResult> DetachFromProjectAsync(
+        string actingUserId,
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return GitCredentialMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to change.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsOwnerAsync(context, actingUserId, cancellationToken))
+        {
+            return GitCredentialMutationResult.Forbidden(
+                "Only an organization Owner can change a project's Git credential.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return GitCredentialMutationResult.NotFound();
+        }
+
+        if (project.GitCredentialId is null)
+        {
+            return GitCredentialMutationResult.Success(project.Id);
+        }
+
+        var previousCredentialId = project.GitCredentialId;
+        project.GitCredentialId = null;
+        project.GitCredentialAssignedAt = null;
+        project.GitCredentialAssignedByUserId = null;
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Git credential detached from project. OrganizationId={OrganizationId} ProjectId={ProjectId} PreviousGitCredentialId={PreviousGitCredentialId} ByUserId={UserId}",
+            activeOrganizationId,
+            project.Id,
+            previousCredentialId,
+            actingUserId);
+        return GitCredentialMutationResult.Success(project.Id);
     }
 
     /// <summary>
@@ -350,10 +609,70 @@ public sealed class GitCredentialService(
             .Where(credential => credential.OrganizationId == activeOrganizationId.Value)
             .ToListAsync(cancellationToken);
 
+        // Card F-018: the assignment (with its attribution) and, per credential, the projects that
+        // clone with it. Both reads go through the tenant filter, so a foreign project can neither be
+        // named nor counted here.
+        var assignment = project.GitCredentialId is { } assignedId
+            ? await ReadAssignmentAsync(context, project, assignedId, cancellationToken)
+            : null;
+
+        var referencingProjects = await context.Projects
+            .Where(candidate => candidate.GitCredentialId != null)
+            .Select(candidate => new { candidate.Id, candidate.Name, CredentialId = candidate.GitCredentialId!.Value })
+            .ToListAsync(cancellationToken);
+        var usedByProjects = referencingProjects
+            .GroupBy(candidate => candidate.CredentialId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<GitCredentialReferencingProject>)
+                    [.. group
+                        .OrderBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(candidate => new GitCredentialReferencingProject(candidate.Id, candidate.Name))]);
+
         return GitCredentialListResult.Success(
             [.. credentials
                 .OrderBy(credential => credential.Name, StringComparer.Ordinal)
-                .Select(ToListItem)]);
+                .Select(ToListItem)],
+            assignment,
+            usedByProjects);
+    }
+
+    /// <summary>
+    /// The current assignment as the page states it, resolving the acting user's e-mail for display.
+    /// Returns <see langword="null"/> when the referenced credential no longer exists (a row deleted
+    /// outside the product's own reference-aware delete), so the page can say the assignment is broken
+    /// instead of rendering an empty name.
+    /// </summary>
+    private static async Task<GitCredentialAssignmentView?> ReadAssignmentAsync(
+        ZenkinsDbContext context,
+        Project project,
+        Guid credentialId,
+        CancellationToken cancellationToken)
+    {
+        var credential = await context.GitCredentials
+            .Where(candidate => candidate.Id == credentialId)
+            .Select(candidate => new { candidate.Id, candidate.Name, candidate.Kind })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (credential is null)
+        {
+            return null;
+        }
+
+        string? assignedBy = null;
+        if (project.GitCredentialAssignedByUserId is { Length: > 0 } userId)
+        {
+            assignedBy = await context.Users
+                .Where(user => user.Id == userId)
+                .Select(user => user.Email)
+                .SingleOrDefaultAsync(cancellationToken);
+        }
+
+        return new GitCredentialAssignmentView(
+            credential.Id,
+            credential.Name,
+            credential.Kind,
+            project.GitCredentialAssignedAt,
+            assignedBy);
     }
 
     /// <summary>

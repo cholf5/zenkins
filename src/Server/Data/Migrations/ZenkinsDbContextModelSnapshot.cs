@@ -485,6 +485,13 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<DateTimeOffset?>("GitCredentialAssignedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("GitCredentialAssignedByUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
                     b.Property<Guid?>("GitCredentialId")
                         .HasColumnType("uuid");
 
@@ -510,6 +517,8 @@ namespace Zenkins.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("GitCredentialId");
 
                     b.HasIndex("OrganizationId", "Name")
                         .IsUnique();
@@ -992,6 +1001,11 @@ namespace Zenkins.Server.Data.Migrations
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Project", b =>
                 {
+                    b.HasOne("Zenkins.Server.Data.Entities.GitCredential", null)
+                        .WithMany()
+                        .HasForeignKey("GitCredentialId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
                         .WithMany()
                         .HasForeignKey("OrganizationId")

@@ -83,12 +83,27 @@ public sealed class WorkDirectoryService
 }
 
 /// <summary>The prepared trio of one run. Paths are absolute.</summary>
+/// <param name="RunId">The run this tree belongs to.</param>
+/// <param name="RootPath">The run's own directory (<c>work/{run-id}</c>).</param>
+/// <param name="RepositoryPath">The checkout (<c>repository/</c>), kept after the run.</param>
+/// <param name="ArtifactsPath">Published artifacts (<c>artifacts/</c>), kept after the run.</param>
+/// <param name="TempPath">Scratch space (<c>temp/</c>): credential carrier files, known-hosts, logs,
+/// deleted after the run when the worker is configured to clean up.</param>
 public sealed record RunWorkDirectory(
     Guid RunId,
     string RootPath,
     string RepositoryPath,
     string ArtifactsPath,
-    string TempPath);
+    string TempPath)
+{
+    /// <summary>
+    /// The run's git/ssh hardening directory (card F-018): the empty <c>gitconfig</c> and
+    /// <c>ssh_config</c> files every git child is pointed at. Deliberately beside <c>temp/</c> rather
+    /// than inside it - it holds no credential and no output, and <c>temp/</c>'s emptiness after a
+    /// run is a property the credential-secrecy tests rely on.
+    /// </summary>
+    public string HardeningPath => Path.Combine(RootPath, "hardening");
+}
 
 /// <summary>A refused or failed work-directory operation; always safe to log verbatim.</summary>
 public sealed class WorkDirectoryException(string message) : Exception(message);

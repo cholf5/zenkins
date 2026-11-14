@@ -22,10 +22,25 @@ public sealed class Project : ITenantOwned
     public string PipelinePath { get; set; } = "pipeline.lua";
 
     /// <summary>
-    /// Reference to the Git credential used to clone this repository. The credential itself is a
-    /// later card's entity (<c>Secret</c>/<c>GitCredential</c>), so this stays an opaque nullable id.
+    /// Reference to the Git credential this project's runs clone with (card F-018 writes it). The
+    /// credential is a <see cref="GitCredential"/> row of the same organization; <see langword="null"/>
+    /// means <b>no credential is assigned</b>, and a run then clones without one instead of borrowing
+    /// whatever credential the worker host happens to hold.
     /// </summary>
     public Guid? GitCredentialId { get; set; }
+
+    /// <summary>
+    /// When the current assignment was made (card F-018's audit trail). Cleared on detach, so a
+    /// non-null value always describes <see cref="GitCredentialId"/> - never a previous credential.
+    /// </summary>
+    public DateTimeOffset? GitCredentialAssignedAt { get; set; }
+
+    /// <summary>
+    /// Who made the current assignment: the acting user's id, resolved to an e-mail for display.
+    /// Like <c>GitCredential.CreatedByUserId</c> it carries no foreign key, so deleting an account
+    /// never rewrites a project's history.
+    /// </summary>
+    public string? GitCredentialAssignedByUserId { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

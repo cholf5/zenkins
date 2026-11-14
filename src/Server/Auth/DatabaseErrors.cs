@@ -6,7 +6,7 @@ namespace Zenkins.Server.Auth;
 
 /// <summary>
 /// Classifies database constraint failures without leaking provider details into the callers that
-/// need a friendly outcome. Only the "unique violation" case is recognised; every other
+/// need a friendly outcome. Unique and foreign-key violations are recognised; every other
 /// <see cref="DbUpdateException"/> stays an error.
 /// </summary>
 internal static class DatabaseErrors
@@ -31,5 +31,26 @@ internal static class DatabaseErrors
 
         return isUnique
             && (tableName is null || message.Contains(tableName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is a foreign-key violation (card F-018). Used where a write
+    /// names a row another request may delete concurrently - the database, not a pre-flight query, is
+    /// the authority on whether the referenced row still exists.
+    /// </summary>
+    public static bool IsForeignKeyViolation(DbUpdateException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        var message = exception.InnerException?.Message ?? exception.Message;
+        return exception.InnerException switch
+        {
+            // SQLITE_CONSTRAINT_FOREIGNKEY (extended code); the primary code is the generic 19.
+            SqliteException sqlite => sqlite.SqliteExtendedErrorCode == 787
+                || message.Contains("FOREIGN KEY constraint failed", StringComparison.OrdinalIgnoreCase),
+            PostgresException postgres => postgres.SqlState == PostgresErrorCodes.ForeignKeyViolation,
+            _ => message.Contains("FOREIGN KEY", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("violates foreign key constraint", StringComparison.OrdinalIgnoreCase),
+        };
     }
 }

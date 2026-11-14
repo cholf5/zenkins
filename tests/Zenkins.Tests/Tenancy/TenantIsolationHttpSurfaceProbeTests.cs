@@ -268,6 +268,71 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
         Assert.DoesNotContain(TwoOrgsFixture.GitCredentialBId.ToString(), body, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Card F-018's write path at the tenant boundary: the attach and detach routes resolve both the
+    /// project and the credential through the tenant filter, so another organization's ids are one
+    /// bodyless 404 - never a 403 that would confirm they exist, and never a write. The Member half is
+    /// refused before the lookup with a 403 (the F-012/F-013 stance).
+    /// </summary>
+    [Fact]
+    public async Task Git_credential_assignment_cannot_reach_another_tenants_project_or_credential()
+    {
+        using var host = new TenantProbeHostFixture();
+        using var alice = await TenantIsolationAuditProbes.SignInAsync(
+            host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
+
+        // 1. Org B's credential id against Org A's project: a 404, and nothing is written.
+        using (var foreignCredential = await OrganizationTestHost.PostFormAsync(
+            alice,
+            $"/projects/{TwoOrgsFixture.ProjectAId}/settings",
+            $"/projects/{TwoOrgsFixture.ProjectAId}/git-credential/attach",
+            new Dictionary<string, string> { ["GitCredentialId"] = TwoOrgsFixture.GitCredentialBId.ToString() }))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreignCredential.StatusCode);
+        }
+
+        // 2. Org B's project as the target (with Org A's credential, and on detach): the same 404.
+        using (var foreignProject = await OrganizationTestHost.PostFormAsync(
+            alice,
+            $"/projects/{TwoOrgsFixture.ProjectAId}/settings",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/git-credential/attach",
+            new Dictionary<string, string> { ["GitCredentialId"] = TwoOrgsFixture.GitCredentialAId.ToString() }))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreignProject.StatusCode);
+        }
+
+        using (var foreignDetach = await OrganizationTestHost.PostFormAsync(
+            alice,
+            $"/projects/{TwoOrgsFixture.ProjectAId}/settings",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/git-credential/detach",
+            new Dictionary<string, string>()))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreignDetach.StatusCode);
+        }
+
+        // Both projects are exactly as the fixture seeded them (no credential assigned).
+        var projects = await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<Project>(
+            host, project => project.Id == TwoOrgsFixture.ProjectAId || project.Id == TwoOrgsFixture.ProjectBId);
+        Assert.Equal(2, projects.Count);
+        Assert.All(projects, project => Assert.Null(project.GitCredentialId));
+
+        // 3. Org A's ordinary Member is refused before any lookup (403, no write).
+        using var bob = await TenantIsolationAuditProbes.SignInAsync(
+            host, TenantIsolationProbeAssertions.OrgAMemberEmail);
+        using (var memberAttach = await OrganizationTestHost.PostFormAsync(
+            bob,
+            $"/projects/{TwoOrgsFixture.ProjectAId}/settings",
+            $"/projects/{TwoOrgsFixture.ProjectAId}/git-credential/attach",
+            new Dictionary<string, string> { ["GitCredentialId"] = TwoOrgsFixture.GitCredentialAId.ToString() }))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, memberAttach.StatusCode);
+        }
+
+        var afterMember = await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<Project>(
+            host, project => project.Id == TwoOrgsFixture.ProjectAId);
+        Assert.Null(Assert.Single(afterMember).GitCredentialId);
+    }
+
     [Fact]
     public async Task Worker_management_cannot_reach_another_tenants_worker_or_token()
     {

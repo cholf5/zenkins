@@ -277,13 +277,13 @@ public sealed class TenantIsolationGitCredentialDeliveryProbeTests
         var betaCredentialId = await TenantIsolationAuditProbes.CreateGitCredentialAsync(
             carol, "BETA_LIVE_TOKEN", "HttpsToken", BetaCredentialValue);
 
-        // v0.1 has no product surface that attaches a credential to a project (the delivery
-        // resolves the run's project's credential), so the reference is seeded the same way the
-        // product's own tests seed it - through the system scope, on the fixture's database.
+        // Card F-018 gave the product the surface that attaches a credential, so the audit uses it:
+        // each organization's Owner attaches their own organization's credential through the settings
+        // tab's form (the delivery then resolves the run's project's credential).
         await TenantIsolationAuditProbes.AttachProjectCredentialAsync(
-            host, TwoOrgsFixture.ProjectAId, alphaCredentialId);
+            alice, TwoOrgsFixture.ProjectAId, alphaCredentialId);
         await TenantIsolationAuditProbes.AttachProjectCredentialAsync(
-            host, TwoOrgsFixture.ProjectBId, betaCredentialId);
+            carol, TwoOrgsFixture.ProjectBId, betaCredentialId);
 
         var (_, alphaToken) = await TenantIsolationWorkerApiProbes.RegisterAlphaWorkerAsync(host);
         var (_, betaToken) = await TenantIsolationWorkerApiProbes.RegisterBetaWorkerAsync(host);

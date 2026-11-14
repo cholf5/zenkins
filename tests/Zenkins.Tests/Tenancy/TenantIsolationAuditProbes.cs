@@ -122,21 +122,27 @@ public static class TenantIsolationAuditProbes
     }
 
     /// <summary>
-    /// Points a project's <c>GitCredentialId</c> at a credential of the same organization. v0.1 has
-    /// no product surface for this yet (the project form does not carry the field - see
-    /// ProjectUiCredentialTests), so the audit seeds the reference through the system scope, the
-    /// same way the product's own tests do. The credential itself is always created through the
-    /// real Owner form.
+    /// Attaches a credential to a project <b>through the product's own form</b> (card F-018). Until F-018
+    /// there was no such surface and this helper seeded the column through the system scope; the audit
+    /// now exercises the route a person uses, so "the assignment is tenant-scoped" is a statement about
+    /// the shipped code rather than about a test shortcut.
     /// </summary>
     public static async Task AttachProjectCredentialAsync(
-        TenantProbeHostFixture host, Guid projectId, Guid credentialId)
+        HttpClient ownerClient,
+        Guid projectId,
+        Guid credentialId)
     {
-        using var scope = host.Data.SystemDataScope.BeginScope();
-        await using var context = host.Data.CreateContext();
-        var project = (await context.SystemQueryAsync<Project>(
-            candidate => candidate.Id == projectId)).Single();
-        project.GitCredentialId = credentialId;
-        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        var response = await OrganizationTestHost.PostFormAsync(
+            ownerClient,
+            $"/projects/{projectId}/settings",
+            $"/projects/{projectId}/git-credential/attach",
+            new Dictionary<string, string> { ["GitCredentialId"] = credentialId.ToString() });
+        if ((int)response.StatusCode is not (302 or 303))
+        {
+            throw new InvalidOperationException(
+                $"Attaching credential '{credentialId}' to project '{projectId}' failed with "
+                + $"{(int)response.StatusCode}.");
+        }
     }
 
     /// <summary>Rotates a webhook's secret through the Owner form; returns the one-time plaintext.</summary>
