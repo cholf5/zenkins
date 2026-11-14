@@ -11,7 +11,8 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| — | *(v1.0 batch complete)* | — | — | — | — |
+| [Q-007](issues/q-007-cross-platform-verification.md) | Cross-platform verification on real Windows and Linux machines | P1 | L | — | I-003 |
+| [Q-008](issues/q-008-postgresql-published-form.md) | PostgreSQL in published form: real instance, migrations, full build | P1 | M | — | I-003, D-006 |
 
 ## Done
 
