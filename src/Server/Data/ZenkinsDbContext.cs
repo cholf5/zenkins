@@ -781,6 +781,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
 
             entity.Property(secret => secret.CreatedByUserId).IsRequired().HasMaxLength(450);
 
+            // D-006: who last rotated it. Nullable because a secret created before this column (or never
+            // rotated) has no answer - the page says "not recorded" rather than inventing a name.
+            entity.Property(secret => secret.RotatedByUserId).HasMaxLength(450);
+
             // The guard, not a pre-flight query: two concurrent creates cannot both pass an
             // "is the name free" check. SecretService translates the violation into a field error.
             entity.HasIndex(secret => new { secret.OrganizationId, secret.Name }).IsUnique();

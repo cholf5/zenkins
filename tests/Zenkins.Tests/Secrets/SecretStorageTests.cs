@@ -45,8 +45,10 @@ public sealed class SecretStorageTests
     [Fact]
     public void The_entity_stores_no_plaintext_and_no_value_hash()
     {
-        // The AC's "only CreatedAt/UpdatedAt/RotatedAt/CreatedByUserId" is a property of the model: a
-        // later card cannot add a convenience Plaintext/ValueHash column without failing this.
+        // F-012's AC is a property of the model: only ciphertext plus timestamps plus audit ids - a later card
+        // cannot add a convenience Plaintext/ValueHash column without failing this. D-006 added one audit id
+        // (who last rotated the secret), which is an identity, never a value: the forbidden-name guard below
+        // still covers it.
         var forbidden = new[] { "Value", "Plaintext", "Secret", "PlaintextHash", "ValueHash", "Hash" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -57,7 +59,7 @@ public sealed class SecretStorageTests
             new[]
             {
                 "Ciphertext", "CreatedAt", "CreatedByUserId", "Id", "Name", "OrganizationId",
-                "RotatedAt", "UpdatedAt",
+                "RotatedAt", "RotatedByUserId", "UpdatedAt",
             },
             properties.OrderBy(name => name, StringComparer.Ordinal).ToArray());
     }
@@ -83,6 +85,9 @@ public sealed class SecretStorageTests
         var rotated = Assert.IsType<Secret>(await host.ReadSecretByIdAsync(created.Id));
         Assert.NotEqual(before, rotated.Ciphertext);
         Assert.NotNull(rotated.RotatedAt);
+
+        // D-006: the rotation is attributed to the member who performed it (an id, never the value).
+        Assert.Equal(await host.ReadUserIdAsync(SecretsTestHost.OwnerEmail), rotated.RotatedByUserId);
         Assert.Equal("rotation-replacement-6dd2", await host.ReadDecryptedValueAsync(organizationId, Name));
 
         // The pre-rotation blob is gone from the store: no row carries it any more, so "decrypt the old

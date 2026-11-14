@@ -29,16 +29,25 @@ public enum SecretMutationStatus
 public sealed record SecretFieldError(string Field, string Code);
 
 /// <summary>
-/// A secret as the page displays it: name and timestamps only. The record deliberately has no value
-/// or ciphertext member, so a component cannot accidentally render one.
+/// A secret as the page displays it: name, timestamps, attribution and - for the names only - which
+/// recorded definitions reference it. The record deliberately has no value or ciphertext member, so a
+/// component cannot accidentally render one.
 /// </summary>
+/// <param name="CreatedByDisplay">The creator's display name, or the user id when the account is gone.</param>
+/// <param name="RotatedByDisplay">The last rotator's display name, null when no rotation is recorded.</param>
 public sealed record SecretView(
     Guid Id,
     string Name,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset? RotatedAt,
-    string CreatedByUserId);
+    string CreatedByUserId,
+    string CreatedByDisplay,
+    string? CreatedByEmail,
+    string? RotatedByUserId,
+    string? RotatedByDisplay,
+    string? RotatedByEmail,
+    SecretUsage Usage);
 
 /// <summary>The raw form values, before trimming and validation.</summary>
 public sealed record SecretInput(string? Name, string? Value);
@@ -147,11 +156,31 @@ public sealed class SecretService(
         }
 
         var secrets = await context.Secrets.ToListAsync(cancellationToken);
+        var ordered = secrets
+            .OrderBy(secret => secret.Name, StringComparer.Ordinal)
+            .ToArray();
+
+        // D-006: the creator/rotator display names come from one bounded lookup keyed by the ids just read,
+        // and the reference answer from the recorded definitions of this tenant (no repository, no code).
+        var userIds = ordered
+            .SelectMany(secret => new[] { secret.CreatedByUserId, secret.RotatedByUserId })
+            .Where(userId => !string.IsNullOrEmpty(userId))
+            .Select(userId => userId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var users = userIds.Length == 0
+            ? new Dictionary<string, User>(StringComparer.Ordinal)
+            : await context.Users
+                .Where(user => userIds.Contains(user.Id))
+                .ToDictionaryAsync(user => user.Id, cancellationToken);
+
+        var usage = await SecretReferenceIndex.ReadAsync(
+            context,
+            [.. ordered.Select(secret => secret.Name)],
+            cancellationToken);
+
         return SecretListResult.Success(
-            secrets
-                .OrderBy(secret => secret.Name, StringComparer.Ordinal)
-                .Select(ToView)
-                .ToArray());
+            [.. ordered.Select(secret => ToView(secret, users, usage))]);
     }
 
     /// <summary>Creates a secret in the active organization. Owner-only.</summary>
@@ -257,6 +286,10 @@ public sealed class SecretService(
         // stay the data layer's.
         secret.Ciphertext = protector.Protect(value);
         secret.RotatedAt = DateTimeOffset.UtcNow;
+
+        // D-006: rotation attribution is recorded so the page can say who last rotated it. Still write-only:
+        // this is an identity, never the value.
+        secret.RotatedByUserId = actingUserId;
         await context.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(
@@ -376,11 +409,38 @@ public sealed class SecretService(
             member => member.UserId == actingUserId && member.Role == OrganizationRole.Owner,
             cancellationToken);
 
-    private static SecretView ToView(Secret secret) => new(
-        secret.Id,
-        secret.Name,
-        secret.CreatedAt,
-        secret.UpdatedAt,
-        secret.RotatedAt,
-        secret.CreatedByUserId);
+    private static SecretView ToView(
+        Secret secret,
+        IReadOnlyDictionary<string, User> users,
+        IReadOnlyDictionary<string, SecretUsage> usage)
+    {
+        users.TryGetValue(secret.CreatedByUserId, out var creator);
+        var rotator = secret.RotatedByUserId is { } rotatedBy
+            && users.TryGetValue(rotatedBy, out var rotatedByUser)
+                ? rotatedByUser
+                : null;
+
+        var references = usage.TryGetValue(secret.Name, out var found) ? found : SecretUsage.None;
+
+        return new SecretView(
+            secret.Id,
+            secret.Name,
+            secret.CreatedAt,
+            secret.UpdatedAt,
+            secret.RotatedAt,
+            secret.CreatedByUserId,
+            Display(creator, secret.CreatedByUserId),
+            creator?.Email,
+            secret.RotatedByUserId,
+            secret.RotatedByUserId is null ? null : Display(rotator, secret.RotatedByUserId),
+            rotator?.Email,
+            references);
+    }
+
+    /// <summary>
+    /// A person's display name for an audit id: the account's user name, its email, or - when the account
+    /// is gone - the raw id, so the page never renders an empty attribution it cannot explain.
+    /// </summary>
+    private static string Display(User? user, string userId) =>
+        user?.UserName is { Length: > 0 } userName ? userName : user?.Email ?? userId;
 }

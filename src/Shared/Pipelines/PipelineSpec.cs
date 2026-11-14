@@ -19,13 +19,28 @@ namespace Zenkins.Shared.Pipelines;
 /// agree on: the schema version, the pipeline name, the step list and the fields F-015/F-017 will
 /// start honouring (<c>env</c>, <c>continueOnError</c>, <c>triggers</c>).
 /// </para>
+/// <para>
+/// <b>Secret references are recorded here (card D-006).</b> The frozen spec is the only description of a
+/// run that outlives the repository, so the secret names a definition references are captured into
+/// <see cref="SecretReferences"/> at definition time - where the <c>secret()</c> calls happen - instead of
+/// being re-derived by parsing code later. The field is <b>tri-state on purpose</b>:
+/// <list type="bullet">
+/// <item><see langword="null"/> - the spec was frozen before capture existed, so what it references is
+/// <b>unknown</b>; the page says exactly that instead of pretending zero (TC-003);</item>
+/// <item>an empty array - capture ran and the pipeline references no secret, which is what makes a
+/// delete safe to offer;</item>
+/// <item>a non-empty array - the names, never their values (F-012's invariant).</item>
+/// </list>
+/// The names are recorded only: no value, no ciphertext and no hash is ever part of a spec.
+/// </para>
 /// </summary>
 public sealed record PipelineSpec(
     int Version,
     string Name,
     PipelineStep[] Steps,
     SortedDictionary<string, string>? Env = null,
-    PipelineTriggers? Triggers = null);
+    PipelineTriggers? Triggers = null,
+    string[]? SecretReferences = null);
 
 /// <summary>
 /// One step of a frozen spec. Exactly one of <see cref="Run"/> / <see cref="Shell"/> is set, and its
@@ -137,6 +152,9 @@ public static class PipelineSpecSchema
     /// <summary>An upper bound on a pipeline or step name (mirrors the 200-character name rule).</summary>
     public const int MaxNameLength = 200;
 
+    /// <summary>An upper bound on a secret name (mirrors <c>SecretValidation.MaxNameLength</c>).</summary>
+    public const int MaxSecretNameLength = 64;
+
     /// <summary>
     /// An upper bound on the artifacts one step may publish (card F-016). An artifact is a declared
     /// build product, not a filesystem listing: a step publishing dozens of them is a pipeline mistake.
@@ -148,6 +166,75 @@ public static class PipelineSpecSchema
     /// the cap exists because the column is <c>text</c> and the page renders it.
     /// </summary>
     public const int MaxJsonBytes = 256 * 1024;
+
+    /// <summary>
+    /// Whether <paramref name="name"/> has the <b>shape</b> a reference target must have: an
+    /// environment-variable-shaped name. Deliberately no length bound - this is the predicate
+    /// <c>env("NAME")</c>, <c>secret("NAME")</c> and the <c>${env:…}</c>/<c>${secret:…}</c> scanner have always
+    /// used, and D-006 left that behaviour untouched.
+    /// </summary>
+    public static bool IsReferenceNameShape(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < name.Length; i++)
+        {
+            var character = name[i];
+            var isLetter = character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_';
+            var isDigit = character is >= '0' and <= '9';
+
+            // A name is environment-variable shaped: a letter or underscore first, then letters,
+            // digits and underscores.
+            if (!isLetter && !(i > 0 && isDigit))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is a name a <b>stored secret</b> could have (card D-006): the
+    /// reference shape <b>and</b> the 64-character bound <c>SecretValidation</c> enforces. Only the recorded
+    /// reference list uses this; <c>env()</c> keeps the unbounded shape rule, so a long environment variable
+    /// name stays as legal as it was before this card.
+    /// </summary>
+    public static bool IsSecretReferenceName(string? name) =>
+        name is not null && name.Length <= MaxSecretNameLength && IsReferenceNameShape(name);
+
+    /// <summary>
+    /// The recorded reference list, <b>normalised rather than refused</b> (card D-006): duplicates collapse,
+    /// and an entry no stored secret could ever have (a bad shape, or over the name bound) is dropped. Dirty
+    /// metadata must never fail a whole run - the definition already produced a valid step list, and the
+    /// reference list is advisory metadata about names, not a value channel.
+    /// <para>
+    /// <see langword="null"/> stays <see langword="null"/>, because that is the answer "this spec predates
+    /// capture" - it must never be rewritten into "captured, nothing" (TC-003).
+    /// </para>
+    /// </summary>
+    public static string[]? NormalizeSecretReferences(string[]? secretReferences)
+    {
+        if (secretReferences is null)
+        {
+            return null;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var names = new List<string>(secretReferences.Length);
+        foreach (var name in secretReferences)
+        {
+            if (IsSecretReferenceName(name) && seen.Add(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        return [.. names];
+    }
 }
 
 /// <summary>
@@ -283,7 +370,14 @@ public static class PipelineSpecJson
             }
         }
 
-        spec = parsed;
+        // D-006: the recorded secret references are names only. They are normalised, never refused: a bad
+        // entry must not turn a valid definition into an unreadable spec (see NormalizeSecretReferences).
+        // Null stays null - that is "recorded before capture", i.e. unknown, and it must stay optional.
+        var secretReferences = PipelineSpecSchema.NormalizeSecretReferences(parsed.SecretReferences);
+
+        spec = secretReferences is null
+            ? parsed
+            : parsed with { SecretReferences = secretReferences };
         return true;
     }
 

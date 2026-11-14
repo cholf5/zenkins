@@ -57,6 +57,14 @@ public sealed class Secret : ITenantOwned
     /// </summary>
     public required string CreatedByUserId { get; set; }
 
+    /// <summary>
+    /// The Identity user id of the Owner who last rotated the secret (card D-006), or <see langword="null"/>.
+    /// Null means two different things and the page tells them apart by <see cref="RotatedAt"/>: a secret
+    /// that was never rotated, or one rotated before this column existed ("not recorded"). No foreign key
+    /// for the same reason as <see cref="CreatedByUserId"/>: attribution must survive account deletion.
+    /// </summary>
+    public string? RotatedByUserId { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

@@ -474,6 +474,16 @@ validates it, serialises it, and executes the steps **in C#**:
 - Imperative orchestration (`step("x", function() ... end)` with `run()` inside) is a later
   capability, not a v0.3 one; the host-call protocol (§5.2) is built now precisely so it can land
   without re-architecting.
+- **The frozen spec records which secret names the definition referenced** (card D-006): the sandbox
+  sees every `secret("NAME")` call, and every `${secret:NAME}` marker that ends up in a step's argv or
+  in a pipeline/step `env` value is collected too, because those are exactly what the C# executor
+  substitutes. The result is `secretReferences` on the frozen record — **names only, never a value** —
+  which is what lets the Server answer "which pipelines use this secret" without reading a
+  repository or parsing a script. The field is absent from specs frozen before it existed, and absent
+  means *unknown*, not *none*: the Secrets page says "recorded before capture" rather than pretending
+  a zero it cannot prove. Dirty entries (a duplicate, an over-long name, a name no stored secret could
+  have) are dropped by the reader instead of failing the run — the list is advisory metadata about
+  names, not part of what executes.
 
 ### 6.2 Error contract
 

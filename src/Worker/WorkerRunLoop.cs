@@ -379,8 +379,12 @@ public sealed class WorkerRunLoop(
 
         // The pipeline layer's own dependencies: the run's log sink (the prelude's print/log), F-013's
         // git layer (credential per run, clone into repository/) and the definition report.
+        // D-006: one capture per run's definition phase - the runtime records the secret() calls into it and
+        // the runner drains it into the frozen spec, so nothing leaks into the next run.
+        var secretReferences = new SecretReferenceCapture();
         var definitions = new PipelineDefinitionRunner(
-            PipelineDefinitionRunner.CreateRuntime(PipelineRunner.CreateLogSink(Emit)));
+            PipelineDefinitionRunner.CreateRuntime(PipelineRunner.CreateLogSink(Emit), secretReferences),
+            secretReferences);
         var runner = new PipelineRunner(
             new PipelineRunOptions
             {

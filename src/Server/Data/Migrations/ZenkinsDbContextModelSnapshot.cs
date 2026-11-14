@@ -546,6 +546,10 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<DateTimeOffset?>("RotatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("RotatedByUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 

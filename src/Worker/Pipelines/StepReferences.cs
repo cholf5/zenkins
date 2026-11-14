@@ -1,4 +1,5 @@
 using System.Text;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Worker.Git;
 
 namespace Zenkins.Worker.Pipelines;
@@ -42,29 +43,54 @@ public static class StepReference
     /// <summary>
     /// Whether <paramref name="name"/> is a valid reference target: an environment-variable-shaped name,
     /// which is also what <c>SecretValidation</c> accepts for a stored secret.
+    /// <para>
+    /// <b>Shape only, no length bound - deliberately unchanged.</b> The 64-character bound belongs to the
+    /// <em>recorded</em> secret reference list (<see cref="PipelineSpecSchema.IsSecretReferenceName"/>), because a
+    /// stored secret cannot be longer; <c>env()</c> and the <c>${env:…}</c> scanner keep the shape rule they have
+    /// always had, so a long environment variable name stays legal (card D-006 does not change F-015).
+    /// </para>
     /// </summary>
-    public static bool IsValidName(string? name)
+    public static bool IsValidName(string? name) => PipelineSpecSchema.IsReferenceNameShape(name);
+
+    /// <summary>
+    /// The secret names a value references, in order of first appearance (card D-006 uses it to record what
+    /// a frozen spec can resolve; the resolver uses it to fetch). Shape only: a name no stored secret could
+    /// have is filtered where the record is built, not here - the resolver's behaviour is unchanged.
+    /// </summary>
+    public static IReadOnlyList<string> SecretNamesIn(string? value)
     {
-        if (string.IsNullOrEmpty(name))
+        if (value is null || !value.Contains(SecretPrefix, StringComparison.Ordinal))
         {
-            return false;
+            return [];
         }
 
-        for (var i = 0; i < name.Length; i++)
+        var names = new List<string>();
+        var position = 0;
+        while (position < value.Length)
         {
-            var character = name[i];
-            var isLetter = character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_';
-            var isDigit = character is >= '0' and <= '9';
-
-            // A name is environment-variable shaped: a letter or underscore first, then letters,
-            // digits and underscores.
-            if (!isLetter && !(i > 0 && isDigit))
+            var (kind, nameStart) = Match(value, position);
+            if (kind is null)
             {
-                return false;
+                position++;
+                continue;
             }
+
+            var end = value.IndexOf(Terminator, nameStart);
+            if (end < 0)
+            {
+                break;
+            }
+
+            var name = value[nameStart..end];
+            if (kind == SecretPrefix && IsValidName(name))
+            {
+                names.Add(name);
+            }
+
+            position = end + 1;
         }
 
-        return true;
+        return names;
     }
 
     /// <summary>Whether <paramref name="value"/> contains at least one reference.</summary>
@@ -72,6 +98,26 @@ public static class StepReference
         value is not null
         && (value.Contains(SecretPrefix, StringComparison.Ordinal)
             || value.Contains(EnvironmentPrefix, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Whether a reference starts at <paramref name="position"/> and where its name starts. The one
+    /// scanner both the resolver and <see cref="SecretNamesIn"/> use, so "what a value references" and
+    /// "what the executor substitutes" cannot drift apart.
+    /// </summary>
+    internal static (string? Prefix, int NameStart) Match(string value, int position)
+    {
+        if (string.CompareOrdinal(value, position, SecretPrefix, 0, SecretPrefix.Length) == 0)
+        {
+            return (SecretPrefix, position + SecretPrefix.Length);
+        }
+
+        if (string.CompareOrdinal(value, position, EnvironmentPrefix, 0, EnvironmentPrefix.Length) == 0)
+        {
+            return (EnvironmentPrefix, position + EnvironmentPrefix.Length);
+        }
+
+        return (null, position);
+    }
 }
 
 /// <summary>
@@ -202,7 +248,7 @@ public sealed class StepValueResolver(GitLogFilter redactor, IRunSecretSource se
         var position = 0;
         while (position < value.Length)
         {
-            var (kind, nameStart) = Match(value, position);
+            var (kind, nameStart) = StepReference.Match(value, position);
             if (kind is null)
             {
                 builder.Append(value[position]);
@@ -282,47 +328,5 @@ public sealed class StepValueResolver(GitLogFilter redactor, IRunSecretSource se
     /// <summary>
     /// The well-formed secret names a value references (in order of first appearance).
     /// </summary>
-    private static IEnumerable<string> SecretNames(string value)
-    {
-        var position = 0;
-        while (position < value.Length)
-        {
-            var (kind, nameStart) = Match(value, position);
-            if (kind is null)
-            {
-                position++;
-                continue;
-            }
-
-            var end = value.IndexOf(StepReference.Terminator, nameStart);
-            if (end < 0)
-            {
-                yield break;
-            }
-
-            var name = value[nameStart..end];
-            if (kind == StepReference.SecretPrefix && StepReference.IsValidName(name))
-            {
-                yield return name;
-            }
-
-            position = end + 1;
-        }
-    }
-
-    /// <summary>Whether a reference starts at <paramref name="position"/> and where its name starts.</summary>
-    private static (string? Prefix, int NameStart) Match(string value, int position)
-    {
-        if (string.CompareOrdinal(value, position, StepReference.SecretPrefix, 0, StepReference.SecretPrefix.Length) == 0)
-        {
-            return (StepReference.SecretPrefix, position + StepReference.SecretPrefix.Length);
-        }
-
-        if (string.CompareOrdinal(value, position, StepReference.EnvironmentPrefix, 0, StepReference.EnvironmentPrefix.Length) == 0)
-        {
-            return (StepReference.EnvironmentPrefix, position + StepReference.EnvironmentPrefix.Length);
-        }
-
-        return (null, position);
-    }
+    private static IEnumerable<string> SecretNames(string value) => StepReference.SecretNamesIn(value);
 }
