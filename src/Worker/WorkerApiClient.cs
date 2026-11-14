@@ -732,6 +732,21 @@ public sealed record WorkerArtifactErrorResponse(string Error, string Message);
 [JsonSerializable(typeof(ArtifactFinalizeResponse))]
 [JsonSerializable(typeof(WorkerArtifactErrorResponse))]
 [JsonSerializable(typeof(WorkerCancelRequest))]
+// I-004: the SignalR log-stream payload (F-008). The JSON hub protocol serializes hub-method
+// arguments through PayloadSerializerOptions; under NativeAOT the reflection resolver is
+// unavailable (and the package suppresses the resulting IL2026/IL3050 internally), so
+// LogStreamClient points that options instance at this context. The wire shape is unchanged:
+// the protocol's default settings are mirrored (camelCase, case-insensitive reads) and the
+// context's JsonSourceGenerationOptions names LogLineMessage's properties camelCase as well.
+[JsonSerializable(typeof(Zenkins.Shared.LogStreaming.LogLineMessage))]
+[JsonSerializable(typeof(System.Collections.Generic.List<Zenkins.Shared.LogStreaming.LogLineMessage>))]
+[JsonSerializable(typeof(Zenkins.Shared.LogStreaming.LogLineMessage[]))]
+[JsonSerializable(typeof(System.Collections.Generic.IReadOnlyList<Zenkins.Shared.LogStreaming.LogLineMessage>))]
+// The SignalR hub-protocol primitives (AppendLinesAsync's runId, cancelRun's (runId, reason)
+// arguments): registered explicitly so the TC-002 missing-registration assertion covers the
+// whole payload surface, not only the composite types.
+[JsonSerializable(typeof(Guid))]
+[JsonSerializable(typeof(string))]
 internal sealed partial class WorkerJsonContext : System.Text.Json.Serialization.JsonSerializerContext
 {
 }

@@ -3,6 +3,32 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <RootNamespace>Zenkins.Worker</RootNamespace>
+    <!--
+      I-004: the Worker is the NativeAOT artifact. The property lives here (not only on the
+      publish command line) so the AOT/trim/single-file analyzers run on every `dotnet build`
+      and warnings-as-errors fails the build at the analyzer level - TC-002's gate. The JIT
+      publish matrix (I-003) keeps its behaviour by passing -p:PublishAot=false explicitly;
+      the publish script's Worker AOT variant and the PublishAot test suite produce the AOT
+      variant.
+    -->
+    <PublishAot>true</PublishAot>
+    <!--
+      I-004, written justification for the only NoWarn in the solution (the card allows one
+      with the reason at the site). MoonSharp.Interpreter 2.0.0 - pinned exactly, docs/lua-runtime.md
+      §1/§8 - is an unannotated netstandard1.6 assembly whose 2.x line is unmaintained, so its
+      trim/AOT warnings (all 22 of them, observed verbatim during the I-004 publish) cannot be
+      fixed at source. Every warned member sits in the CLR-bridge interop layer
+      (MoonSharp.Interpreter.Interop.*) and its Compatibility.Frameworks reflection helpers:
+      code the Worker's composition provably never reaches, because no CoreModules.Dynamic/Clr
+      module is composed and no UserData.RegisterType/RegisterAssembly exists in production
+      (docs/lua-runtime.md §3.2; host functions are delegate CallbackFunctions, not registered
+      CLR types). IL2104/IL3053 are the single-warn aggregates for exactly that assembly; the
+      reachable engine surface is proven live by the PublishAot smoke (a real pipeline.lua with
+      host functions and secret() executing under AOT) and by the sandbox conformance fixtures.
+      If a future change composes a bridge module or registers user data, the smoke fails
+      deterministically instead of warning here.
+    -->
+    <NoWarn>$(NoWarn);IL2104;IL3053</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,6 +39,19 @@
     <!-- F-011: the Lua engine. Behind ILuaRuntime (src/Worker/Lua) so no MoonSharp type appears in
          the pipeline contracts; the pin and its rationale live in Directory.Packages.props. -->
     <PackageReference Include="MoonSharp" />
+    <!--
+      I-004: MoonSharp is a rooted reflection library under NativeAOT. Its standard library is
+      registered at Script construction by reflecting over the CoreLib module types (static methods
+      carrying MoonSharpModuleMethodAttribute, wired with MethodInfo.CreateDelegate) - a surface the
+      trimmer cannot see as used. Without the root, ilc drops that metadata and every stdlib function
+      (type, pcall, pairs, string.*, math.*, os.*) is nil at runtime: measured on osx-arm64, the
+      prelude then dies at its first type() call and every run fails pipeline-invalid. Rooting the
+      assembly keeps the metadata and the interpreter's behaviour is byte-for-byte the JIT's (the
+      PublishAot suite runs the same pipeline.lua under both modes and compares every step outcome;
+      docs/lua-runtime.md §8.1 records the probe). The assembly has 0 transitive dependencies and no
+      IsTrimmable marker, so this roots exactly one small interpreter and nothing else.
+    -->
+    <TrimmerRootAssembly Include="MoonSharp.Interpreter" />
   </ItemGroup>
 
   <ItemGroup>

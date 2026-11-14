@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
 using Zenkins.Shared.LogStreaming;
 
 namespace Zenkins.Worker;
@@ -107,6 +108,26 @@ public sealed class LogStreamClient(
                 {
                     options.AccessTokenProvider = () => Task.FromResult<string?>(workerToken);
                     configureConnection?.Invoke(options);
+                })
+                .AddJsonProtocol(options =>
+                {
+                    // I-004: the JSON hub protocol serializes hub-method arguments through
+                    // PayloadSerializerOptions, whose default resolver is reflection-based (the
+                    // package suppresses the resulting IL2026/IL3050 internally, so the gap
+                    // would only surface as a runtime failure in a published AOT binary - the
+                    // first AppendLinesAsync/cancelRun exchange). Replace the options with the
+                    // protocol's own default settings (camelCase naming, case-insensitive
+                    // reads, MaxDepth 64) resolved through the worker's source-generated
+                    // context: every payload type on this wire (LogLineMessage in its list
+                    // shapes, plus the Guid/string primitives) has compile-time metadata, and
+                    // the bytes on the wire are exactly what the JIT worker sent.
+                    options.PayloadSerializerOptions = new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                        PropertyNameCaseInsensitive = true,
+                        MaxDepth = 64,
+                        TypeInfoResolver = WorkerJsonContext.Default,
+                    };
                 })
                 .Build();
 

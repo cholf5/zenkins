@@ -29,11 +29,13 @@ public enum GitTransport
 /// the account name, not a secret; it stays in <see cref="Describe"/> so failures are diagnosable.
 /// </para>
 /// </summary>
-public sealed class GitUrl
+public sealed partial class GitUrl
 {
-    private static readonly Regex ScpLikePattern = new(
-        "^(?<user>[A-Za-z0-9._-]+)@(?<host>[A-Za-z0-9._-]+):(?<path>.+)$",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    // I-004: source-generated regex. RegexOptions.Compiled is a JIT codegen path that does not
+    // survive NativeAOT; [GeneratedRegex] emits the scanner as compile-time source, so the
+    // same pattern stays available under AOT with identical matching behaviour.
+    [GeneratedRegex("^(?<user>[A-Za-z0-9._-]+)@(?<host>[A-Za-z0-9._-]+):(?<path>.+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex ScpLikePattern();
 
     private GitUrl(string cloneUrl, string scheme, GitTransport transport, string host, string? userName)
     {
@@ -79,7 +81,7 @@ public sealed class GitUrl
             return ParseAbsolute(trimmed, uri);
         }
 
-        if (ScpLikePattern.Match(trimmed) is { Success: true } scp)
+        if (ScpLikePattern().Match(trimmed) is { Success: true } scp)
         {
             return new GitUrl(
                 trimmed,

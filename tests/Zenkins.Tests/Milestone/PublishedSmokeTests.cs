@@ -330,7 +330,9 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
     /// </summary>
     public sealed class PublishedArtifacts : IAsyncLifetime
     {
-        private static readonly SemaphoreSlim PublishLock = new(1, 1);
+        // Shared with PublishedAotSmokeTests (I-004): two publishes of the same project must not
+        // race inside one obj/ tree, whichever fixture gets there first in a combined run.
+        internal static readonly SemaphoreSlim PublishLock = new(1, 1);
         private string _root = string.Empty;
 
         public static string ServerAppHostFileName =>
@@ -364,26 +366,31 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
             var repositoryRoot = MilestoneHost.FindRepositoryRoot();
             var dotnet = MilestoneHost.ResolveDotnetPath();
 
-            // The publish matrix's local-RID row, executed by the suite itself: self-contained JIT,
-            // no trimming, no AOT - and PublishSingleFile only for the Worker's one-exe variant.
+            // The publish matrix's local-RID row, executed by the suite itself: self-contained JIT.
+            // I-004: the Worker csproj carries PublishAot=true (its analyzer surface), so the JIT
+            // rows pass it off explicitly - the I-003 publish semantics (JIT folder + single-file,
+            // CoreCLR runtime present) must not drift with that default.
             await PublishAsync(
                 dotnet,
                 repositoryRoot,
                 Path.Combine("src", "Server", "Zenkins.Server.csproj"),
                 ServerPublishDir,
-                singleFile: false);
+                singleFile: false,
+                aot: false);
             await PublishAsync(
                 dotnet,
                 repositoryRoot,
                 Path.Combine("src", "Worker", "Zenkins.Worker.csproj"),
                 WorkerPublishDir,
-                singleFile: false);
+                singleFile: false,
+                aot: false);
             await PublishAsync(
                 dotnet,
                 repositoryRoot,
                 Path.Combine("src", "Worker", "Zenkins.Worker.csproj"),
                 WorkerSingleFilePublishDir,
-                singleFile: true);
+                singleFile: true,
+                aot: false);
 
             ServerAppHostPath = AssertAppHost(ServerPublishDir, ServerAppHostFileName);
             WorkerAppHostPath = AssertAppHost(WorkerPublishDir, WorkerAppHostFileName);
@@ -412,12 +419,13 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
             string repositoryRoot,
             string projectPath,
             string outputDir,
-            bool singleFile)
+            bool singleFile,
+            bool aot)
         {
             var rid = RuntimeInformation.RuntimeIdentifier;
 
             // Two publishes of the same project must not race inside one obj/ tree.
-            await PublishLock.WaitAsync(TestContext.Current.CancellationToken);
+            await PublishedArtifacts.PublishLock.WaitAsync(TestContext.Current.CancellationToken);
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -443,6 +451,13 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
                     startInfo.ArgumentList.Add("-p:IncludeNativeLibrariesForSelfExtract=true");
                 }
 
+                if (!aot)
+                {
+                    // I-004: the Worker project defaults to PublishAot; the JIT smoke pins it off
+                    // (see the InitializeAsync comment).
+                    startInfo.ArgumentList.Add("-p:PublishAot=false");
+                }
+
                 startInfo.ArgumentList.Add("-o");
                 startInfo.ArgumentList.Add(outputDir);
 
@@ -458,7 +473,7 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
             }
             finally
             {
-                PublishLock.Release();
+                PublishedArtifacts.PublishLock.Release();
             }
         }
 

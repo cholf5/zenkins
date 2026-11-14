@@ -3,6 +3,13 @@
   <!--
     Contracts and platform-agnostic abstractions shared by Server and Worker.
     Must NOT reference Microsoft.AspNetCore.* — see docs/kanban/issues/i-001-solution-scaffold.md.
+
+    I-004: the Worker is published NativeAOT, so every type here must survive trimming and AOT
+    analysis. IsAotCompatible turns on the trim/AOT/single-file analyzers for this project on
+    every build; the Worker carries PublishAot for the same surface on its own compilation.
   -->
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
 
 </Project>

@@ -42,6 +42,11 @@ Why not the alternatives:
 2. We hit an interpreter defect we cannot route around → either upgrade to a 3.0 build (its
    upstream is actively fixed; the 2.x line has not changed since 2016-10) or carry a patch.
 3. A security advisory lands against 2.0 with no workaround → same as 2, plus a re-read of §3.
+4. The engine must stay a pure interpreter without a CLR registration surface: production code
+   registers host functions as delegate `CallbackFunction`s only (§3.2) and the worker roots the
+   assembly's reflection metadata under NativeAOT (§8.1). Any change that needs
+   `UserData.RegisterType`/`RegisterAssembly` in production re-opens this decision — against the
+   engine alternative as well as against the Worker's AOT verdict (`docs/native-aot.md`).
 
 ## 2. Measured evidence
 
@@ -559,7 +564,56 @@ validates it, serialises it, and executes the steps **in C#**:
      package — no `MoonSharp.Debugger`/`MoonSharp.REPL` console, no VS Code extension.
   That file is part of the card that adds the dependency (F-011), not a later chore.
 
-## 9. Conformance fixtures — the engine-switch gate
+### 8.1 MoonSharp under NativeAOT (I-004)
+
+**Verified on** the same machine as the header note, 2026-11-14, by publishing the Worker and a
+scratch probe console app with `PublishAot=true` for `osx-arm64` (SDK 10.0.403, ilc 10.0.14). The
+decision-level summary lives in [`native-aot.md`](native-aot.md); this section records what the
+probe measured, engine-side.
+
+The interpreter itself is pure C# with no runtime codegen — but the standard library is
+**registered by reflection**: `ModuleRegister.RegisterModuleType` walks each `CoreLib` module
+type's static methods (found via `Type.GetMethods`), keeps those carrying
+`MoonSharpModuleMethodAttribute`, and wires them with `MethodInfo.CreateDelegate`. That surface is
+invisible to the AOT trimmer's flow analysis, so **without an explicit root, ilc drops the member
+metadata of the module types** and `RegisterCoreModules` registers nothing:
+
+| Probe (same source, JIT vs AOT) | JIT | AOT without a root | AOT with the root |
+|---|---|---|---|
+| `typeof(BasicModule)` named as a compile-time constant, `GetMethods(Public \| Static \| Instance \| DeclaredOnly)` | 8 | 8 — kept only because the probe itself reflects on that constant | 8 |
+| The same query when the module types flow through an array (what `RegisterCoreModules` actually does behind its generic `typeof(T)`) — measured for all 12 `CoreLib` module types | all declared methods (e.g. BasicModule 8, StringModule 19 static) | **empty, for every module type** | all declared methods |
+| Runtime globals the probe kept via its own constant (`type`, `error`, `tostring`, `tonumber`, `select`) | function | function — only that one module survived | function |
+| Runtime globals registered by every other module (`pcall`, `ipairs`, `pairs`, `unpack`, `string.rep`, `table.insert`, `math.floor`, `os.time`) | function | **nil** | function |
+| `for n in pairs(_G)` / `package.loaded` | works | `attempt to call a nil value` (`pairs` is nil) | works |
+| Mini pipeline through the prelude shape (`pipeline{}`, `require_table`) | `ok:probe:1` | fails at the first `type()` call | `ok:probe:1` |
+
+The worker hit exactly this: with an unrooted publish, every run failed `pipeline-invalid` at
+`prelude.lua:(16,2-32): attempt to call a nil value` — the first `type()` call — with no build
+warning pointing at the cause. The fix is one line in `Zenkins.Worker.csproj`:
+`<TrimmerRootAssembly Include="MoonSharp.Interpreter" />` (justification written at the site).
+After rooting, the dual-mode proof ran: the same `pipeline.lua` executed by the JIT worker and the
+AOT worker against published Servers produced identical step outcomes, log lines (one wall-clock
+duration masked) and artifact bytes (`docs/native-aot.md` §3).
+
+What still warns: 22 trim/AOT member warnings inside `MoonSharp.Interpreter.Interop.*` (the CLR
+bridge: `UserDataRegistries`, `TableConversions`, descriptor classes) and
+`Compatibility.Frameworks.*` — code the worker's composition provably never reaches (no
+`CoreModules.Dynamic`/`Clr` module, no `UserData` registration, §3.2). They aggregate as
+`IL2104`/`IL3053` for the assembly and are suppressed by the one justified `NoWarn` pair in the
+Worker csproj; the reachable surface is pinned by the PublishAot suite and the sandbox fixtures.
+The trim warnings are part of §1's switch trigger 4 — re-examine the root and the suppression pair
+if MoonSharp ever ships annotations.
+
+Consequences for the engine contract:
+
+- **Production must never grow a `UserData` surface.** The reflection the trimmer cannot see is
+  bounded by the root + the fixture suite; a new `RegisterType` call would compile clean and break
+  (or silently misbehave) only inside a published AOT binary.
+- **The §9 fixtures run unchanged under AOT** — the interpreter's behaviour (syntax errors, error
+  positions, coroutine driving, the drive protocol) is identical; only the *registration* needed
+  the root.
+- The probe described here is a scratch console app (like Appendix A), not part of the repository;
+  the durable guards are `WorkerAotGuardTests` and `PublishedAotSmokeTests`.
 
 These are the behaviours any engine must reproduce, written as assertions with the exact observed
 output. (Rows marked *pinned defect* are today's documented behaviour and are *not* a requirement on
@@ -617,6 +671,11 @@ for the registry, §E for the drive protocol, §F for frame propagation, §G for
    interruption mechanism we rely on.
 7. **`os.date` uses the worker's local time zone.** Correct for build logs, but a source of
    "different machines, different timestamps" reports; the run page shows UTC.
+8. **The standard library exists only because the worker roots the assembly's reflection metadata**
+   (§8.1). Under NativeAOT the module registration's reflection surface is invisible to the
+   trimmer; the `TrimmerRootAssembly` root is load-bearing, and removing it does not fail the
+   build — it fails every run, `pipeline-invalid`, at the prelude's first `type()` call. The
+   PublishAot suite is the guard that notices.
 
 ## Appendix A — the probe
 
