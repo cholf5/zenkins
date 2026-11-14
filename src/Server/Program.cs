@@ -134,6 +134,9 @@ builder.Services.AddBlazorBlueprintComponents(configureTheme: theme =>
     // the legacy `bb-theme` entry or the OS preference and seeds `bb-theme`, so ThemeService always
     // has a value to read. Letting it also consult the OS preference would let it disagree with the
     // server-rendered class when localStorage is unavailable (and then rewrite the cookie).
+    // Dark mode is the only dimension this flag governs: the accent, base gray scale and radius
+    // picked in the theme switcher (D-007) live in the same `bb-theme` entry and are replayed onto
+    // <html> before the first paint by the package's theme-init.js, loaded from App.razor.
     theme.DetectSystemPreference = false;
 });
 

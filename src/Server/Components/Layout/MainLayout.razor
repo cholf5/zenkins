@@ -104,7 +104,13 @@
             </TitleContent>
 
             <Actions>
-                <BbDarkModeToggle />
+                @* D-007: the multi-theme picker — dark/light, base gray scale, primary accent and
+                   radius, persisted to bb-theme localStorage by ThemeService and replayed before
+                   the first paint by theme-init.js (see App.razor). Ghost + square TriggerClass so
+                   the trigger lines up with the icon-only user menu next to it. *@
+                <BbThemeSwitcher Variant="ButtonVariant.Ghost"
+                                 TriggerClass="bb:h-9 bb:w-9 bb:p-0"
+                                 AdditionalAttributes="@(new Dictionary<string, object> { ["aria-label"] = "Customize theme" })" />
                 <BbDropdownMenu>
                     <BbDropdownMenuTrigger AsChild>
                         <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Icon" aria-label="@UserMenuLabel">
