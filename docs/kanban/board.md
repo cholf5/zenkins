@@ -11,7 +11,11 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| — | *(no open cards)* | — | — | — | — |
+| [B-001](issues/b-001-dashboard-org-switch-sweep-flake.md) | Dashboard org-switch flake: seeded Running run swept Lost before the page reads it (D-002-B2) | P1 | S | — | — |
+| [Q-009](issues/q-009-ssh-clone-real-sshd.md) | SSH clone verified against a real sshd — the keyless-sshd fixture (F-018 follow-up) | P1 | M | — | — |
+| [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | — | B-001, Q-009 |
+| [B-002](issues/b-002-maxconcurrency-check-then-act.md) | maxConcurrency slot check is check-then-act; a token-holding client can exceed the cap (Q-005 hardening) | P2 | M | — | scheduled after the v1.0 tag |
+| [Q-010](issues/q-010-tag-validation-asymmetry.md) | Tag validation asymmetry: the trigger accepts a union no single worker can cover (Q-005 hardening) | P2 | S | — | scheduled after the v1.0 tag |
 
 ## Done
 

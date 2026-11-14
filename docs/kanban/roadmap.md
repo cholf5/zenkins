@@ -104,6 +104,31 @@ Candidate tasks:
   targets. → `I-004`
 - Install guide and upgrade notes. → `DOC-003` (blocked by `I-003`)
 
+PRD §10's seven scenarios now have real-machine evidence (Q-002/Q-004/Q-005/Q-006/Q-007/Q-008 and
+F-018's credential proof). Three cards remain between here and the tag, in the user's ledger order —
+the two pre-tag gates first, the release work as the closing gate:
+
+- The captured D-002-B2 Dashboard flake (seeded `Running` run swept `Lost` by the startup sweep), so
+  CI is trustworthy from day one. → `B-001`
+- SSH clone against a real sshd — the keyless-sshd fixture F-018 recorded as its follow-up, because
+  the tag must not go out while the SSH half of the credential story has no verdict. → `Q-009`
+- Release engineering: version, tag, CHANGELOG, `verify.sh`, CI — the gate that lets the repository
+  back a "v1.0" claim. → `P-001` (depends on `B-001` + `Q-009`)
+
+### v1.0.1 — Post-release hardening
+
+Goal:
+- Close the seams the v1.0 verification cards recorded but deliberately deferred, so the release
+  ships with them known (CHANGELOG known-issues entries via `P-001`) rather than silent.
+
+Candidate tasks:
+- The `maxConcurrency` slot check is check-then-act; a token-holding client can exceed the cap. → `B-002`
+- Tag validation asymmetry: the trigger accepts a union no single worker can cover — decide
+  tighten-vs-document and align both sides. → `Q-010`
+- Q-006's "Documented invariants" section is adjudicated prose outside machine validation (recorded
+  in that card's development log); turn the invariants into machine-checked assertions. No card yet
+  — open one when this becomes near-term work.
+
 ## Parking Lot
 
 Future ideas that are not yet committed:
