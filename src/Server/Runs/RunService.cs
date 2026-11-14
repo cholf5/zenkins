@@ -283,6 +283,9 @@ public sealed record RunStepResult(
 /// whose single-statement compare-and-set wins (<see cref="ZenkinsDbContext.TryLeaseBuildRunAsync"/>,
 /// the guarded <c>ExecuteUpdate</c>) is returned. The UPDATE's WHERE restates the eligibility, so
 /// two concurrent claims can never both win the same run under either provider's write locking.
+/// The claim's whole unit of work - the worker-row lock, the concurrency-slot count and the
+/// compare-and-set - runs in one transaction (B-002): the lock serializes a worker's own racing
+/// claims, so the slot check cannot be passed twice before either lease commits.
 /// </para>
 /// <para>
 /// <b>State transitions.</b> Only <see cref="BuildRunStateMachine"/> (through this service) changes
@@ -679,6 +682,14 @@ public sealed class RunService(
     /// FIFO by creation. No eligible run - or every lease lost to a concurrent claim - is a
     /// 204-shaped <see cref="RunClaimResult.NoRun"/>: a worker polls again and never learns why
     /// it got nothing.
+    /// <para>
+    /// <b>The cap is part of the claim (B-002).</b> The slot count and the lease run inside one
+    /// transaction that opens by locking the caller's own worker row
+    /// (<see cref="ZenkinsDbContext.LockWorkerForClaimAsync"/>), so concurrent claims of one
+    /// worker serialize instead of interleaving the count with the lease - the enforced
+    /// <c>MaxConcurrency</c> is the data layer's, not the client's good behaviour. The lease
+    /// compare-and-set keeps its F-006 semantics unchanged.
+    /// </para>
     /// </summary>
     public async Task<RunClaimResult> ClaimAsync(
         string? plaintextToken,
@@ -697,14 +708,36 @@ public sealed class RunService(
 
         // 2. Eligibility of the worker itself: Online, not disabled (card D-005: the disabled flag is
         //    a server fact enforced here, so a worker cannot bypass it by ignoring the page - a
-        //    disabled worker's claim gets the same not-assigned answer as any other rejection), and a
-        //    free concurrency slot. Runs already in flight are untouched: nothing below blocks the
-        //    accepted/completed reports of a running run.
+        //    disabled worker's claim gets the same not-assigned answer as any other rejection).
+        //    Runs already in flight are untouched: nothing below blocks the accepted/completed
+        //    reports of a running run.
         var worker = await context.Workers.AsNoTracking().SingleOrDefaultAsync(
             candidate => candidate.Id == workerToken.WorkerId,
             cancellationToken);
         if (worker is null || worker.Status != WorkerStatus.Online || worker.IsDisabled)
         {
+            return RunClaimResult.NoRun();
+        }
+
+        // 3. B-002: the concurrency cap and the lease are ONE unit of work. The slot check used to
+        //    be check-then-act - count in one statement, lease in another - so two racing claims of
+        //    one valid worker token could both pass the count before either lease committed and
+        //    admit more running runs than the worker's reported MaxConcurrency. The claim therefore
+        //    runs in one transaction, opened by locking the worker's own row:
+        //    - LockWorkerForClaimAsync takes the provider's row lock (PostgreSQL) or the database's
+        //      single write lock (SQLite) and holds it to commit, so two claims of one worker
+        //      serialize here instead of interleaving count and lease;
+        //    - inside the lock the count below can only ever be raised by this claim itself (a
+        //      requeue, cancel or completion only releases slots), so count + one lease cannot
+        //      cross the cap;
+        //    - the compare-and-set itself is unchanged: the same guarded statement leases the same
+        //      candidate exactly once, with the same lease semantics (F-006 untouched).
+        //    The early returns below dispose the transaction - the lock writes nothing.
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var locked = await context.LockWorkerForClaimAsync(worker.Id, cancellationToken);
+        if (locked == 0)
+        {
+            // The worker row is gone (deleted between the read and the lock): nothing to admit.
             return RunClaimResult.NoRun();
         }
 
@@ -719,7 +752,7 @@ public sealed class RunService(
             return RunClaimResult.NoRun();
         }
 
-        // 3. The candidate queue: Queued and unleased (never leased, or requeued by the sweeper),
+        // 4. The candidate queue: Queued and unleased (never leased, or requeued by the sweeper),
         //    FIFO by creation. Ordered in memory - a small list per tenant, and SQLite cannot
         //    ORDER BY DateTimeOffset columns. An expired lease is NOT claimable here: the lease
         //    sweeper is the single authority on expiry, and SQLite cannot compare DateTimeOffset
@@ -737,7 +770,7 @@ public sealed class RunService(
             .Take(MaxClaimCandidates)
             .ToArray();
 
-        // 4. Compare-and-set loop: the first candidate whose single-statement lease wins is the
+        // 5. Compare-and-set loop: the first candidate whose single-statement lease wins is the
         //    answer. A lost race means another claim took exactly that run - move to the next.
         var leaseExpiresAt = now.AddSeconds(options.LeaseSeconds);
         foreach (var candidate in candidates)
@@ -750,6 +783,11 @@ public sealed class RunService(
                 cancellationToken);
             if (leased == 1)
             {
+                // The slot was reserved and the run leased inside one transaction: commit is what
+                // makes both visible together, and it releases the worker-row lock for the next
+                // claim.
+                await transaction.CommitAsync(cancellationToken);
+
                 logger.LogInformation(
                     "Run leased. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} LeaseExpiresAt={LeaseExpiresAt}",
                     workerToken.OrganizationId,

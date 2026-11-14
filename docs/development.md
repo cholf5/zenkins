@@ -17,7 +17,8 @@ loop (`dotnet run` from a clone).
 > the OpenSSH-server prerequisite of §1 for that suite only. P-001 stamped the product version (the
 > one `Version` property in `Directory.Build.props`, surfaced by the binaries' version flag and the
 > shell footer's version line) and re-verified the whole gate through `scripts/verify.sh` on
-> 2026-11-15, when the fast suite grew the version-agreement fact. Every command in the POSIX
+> 2026-11-15, when the fast suite grew the version-agreement fact. B-002 added the claim-cap
+> regression on 2026-11-15 and the §2 counts were re-verified then (fast 1046, all six 1065). Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -159,7 +160,7 @@ dotnet test -c Release --filter "Category=GitSshd"                              
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd` | `dotnet build -c Release` | ~2½ min on the reference machine (1045 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd` | `dotnet build -c Release` | ~2½ min on the reference machine (1046 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (8 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -168,7 +169,7 @@ dotnet test -c Release --filter "Category=GitSshd"                              
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all six** (1064 at the time of writing) but
+filter runs **all six** (1065 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

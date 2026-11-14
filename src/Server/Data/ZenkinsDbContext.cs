@@ -179,12 +179,36 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     }
 
     /// <summary>
-    /// F-006: atomic compare-and-set lease of one queued run (the claim endpoint). This is the one
-    /// guarded <c>ExecuteUpdate</c> on a tenant-owned entity outside a system scope (see the class
-    /// doc's bypass discipline): the SET is fixed here - never caller-supplied - and the WHERE is
-    /// the tenant query filter (which applies to <c>ExecuteUpdate</c>) plus the compare-and-set
-    /// conditions that make a concurrent double-claim impossible: the run must still be
-    /// <c>Queued</c> and still unleased.
+    /// B-002: locks the claimant's own worker row for the duration of one claim - the write is a
+    /// deliberate no-op (the column is set to its own value, so nothing changes) whose entire
+    /// purpose is the lock itself. PostgreSQL takes the row's write lock until the caller commits;
+    /// SQLite serializes database writes outright. Two concurrent claims of the same worker
+    /// therefore serialize here instead of interleaving the slot count with the lease
+    /// (check-then-act, the window B-002 closes), while claims of different workers never wait on
+    /// each other beyond the brief transaction. A second guarded <c>ExecuteUpdate</c> on a
+    /// tenant-owned entity outside a system scope (the lease CAS in
+    /// <see cref="TryLeaseBuildRunAsync"/> is the other one; see the class doc's bypass
+    /// discipline): the SET is fixed, never caller-supplied, and the WHERE carries the tenant
+    /// query filter.
+    /// </summary>
+    /// <returns>1 when the worker row was locked, 0 when it no longer exists.</returns>
+    public Task<int> LockWorkerForClaimAsync(
+        Guid workerId,
+        CancellationToken cancellationToken = default) =>
+        Workers
+            .Where(worker => worker.Id == workerId)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(worker => worker.UpdatedAt, worker => worker.UpdatedAt),
+                cancellationToken);
+
+    /// <summary>
+    /// F-006: atomic compare-and-set lease of one queued run (the claim endpoint). This is one of
+    /// the two guarded <c>ExecuteUpdate</c> calls on a tenant-owned entity outside a system scope
+    /// (the other is <see cref="LockWorkerForClaimAsync"/>; see the class doc's bypass
+    /// discipline): the SET is fixed here - never caller-supplied - and the WHERE is the tenant
+    /// query filter (which applies to <c>ExecuteUpdate</c>) plus the compare-and-set conditions
+    /// that make a concurrent double-claim impossible: the run must still be <c>Queued</c> and
+    /// still unleased.
     /// <para>
     /// One UPDATE statement is atomic under both providers' write locking: PostgreSQL re-evaluates
     /// the predicate after granting the row lock (READ COMMITTED), which is the equivalent of the

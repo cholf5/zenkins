@@ -41,7 +41,7 @@ PostgreSQL, no Docker anywhere in the product. Everything below shipped across t
 |---|---|
 | 1. Single-organization build (run, logs, artifact) | Q-002's milestone harness: a real Server process, a real Worker, a real git repository, a real webhook delivery, a real artifact download. |
 | 2. Cross-platform builds through worker tags | Q-005 in-suite; Q-007 TC-003 on real Windows and Linux workers (tag filter discriminated with a 14 s queued-while-idle window). |
-| 3. Multi-worker parallelism without double assignment | Q-005's concurrency scenarios; the claim is a single-statement compare-and-set with a lease (B-002 below records the one seam it leaves open). |
+| 3. Multi-worker parallelism without double assignment | Q-005's concurrency scenarios; the claim is a single-statement compare-and-set with a lease (B-002 below records the one seam it left open — the check-then-act cap, closed after the tag). |
 | 4. `git push` triggers the pipeline | Q-002/F-017: signature-verified delivery, branch filter, replay protection, the run pinned to the pushed commit. |
 | 5. Two organizations cannot see each other | Q-006's audit: a machine-enforced surface inventory (64 HTTP surfaces, both hubs, the stores) with id-swap probes and byte-level store isolation. |
 | 6. Recovery from crashes | Q-004: a queued run survives a server restart; a killed worker's run becomes `Lost` with the offline reason, its late report refused, a restarted worker claims new work. |
@@ -62,12 +62,16 @@ runs the same gate on Linux, Windows and macOS for every push and pull request, 
 **Known issues** — recorded, not silent. Each entry names its card; the card updates or removes its
 entry when it lands.
 
-- **B-002 — `maxConcurrency` enforcement is check-then-act.** The slot check sits outside the
-  claim's atomic compare-and-set, so a hostile-but-authenticated client holding a valid worker
-  token can race the claim endpoint and hold more running runs than the `maxConcurrency` it
-  reported. Real worker processes are structurally bounded (claim loops of at most one run each),
-  and executed-once holds (Q-005) — the consequence is over-admission beyond the reported cap, not
-  double execution. Scheduled for v1.0.1 (card B-002); this entry goes with that card.
+- **B-002 — `maxConcurrency` enforcement was check-then-act; closed by card B-002.** At release
+  time the slot check sat outside the claim's atomic compare-and-set, so a hostile-but-
+  authenticated client holding a valid worker token could race the claim endpoint and hold more
+  running runs than the `maxConcurrency` it reported (real worker processes were structurally
+  bounded — claim loops of at most one run each — and executed-once held, Q-005; the consequence
+  was over-admission beyond the reported cap, never double execution). Fixed after the `v1.0` tag,
+  2026-11-15: the claim now takes the slot count and the lease inside one transaction serialized on
+  the worker's own row, under both providers — pinned by the `ConcurrencyClaimCapTests` regression
+  (red before the fix, three consecutive runs admitting 4 of 8 racing claims past a cap of 1) and a
+  real-PostgreSQL claim-burst probe (evidence on card B-002). Ships with the next release.
 - **Q-010 — tag validation is asymmetric between the trigger and the claim.** Trigger-side
   validation checks the union of all workers' tags while claiming requires one worker to cover all
   required tags, so a run whose tags split across two workers passes the form and then starves
