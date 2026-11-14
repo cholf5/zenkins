@@ -183,11 +183,11 @@ public sealed class DashboardWorkerLivenessTests : IClassFixture<DashboardPageFi
         // Offline or have no heartbeat, so the startup sweep does nothing).
         using var client = await _host.SignInAsync("alice@example.test");
 
-        // An Online worker whose heartbeat went stale (well past the sweeper's threshold) with a
-        // run still executing on it.
+        // An Online worker whose heartbeat went stale (half an hour, far past the ten-minute
+        // threshold the fixture configures) with a run still executing on it.
         var workerId = await DashboardSeed.AddWorkerAsync(
             _host.Data, TwoOrgsFixture.OrgAId, "liveness-agent", WorkerStatus.Online,
-            DateTimeOffset.UtcNow.AddSeconds(-30), CancellationToken);
+            DateTimeOffset.UtcNow.AddMinutes(-30), CancellationToken);
         var runningRunId = await DashboardSeed.AddRunAsync(
             _host.Data, TwoOrgsFixture.OrgAId, TwoOrgsFixture.ProjectAId, BuildRunStatus.Running,
             startedAt: DateTimeOffset.UtcNow.AddMinutes(-5), workerId: workerId, cancellationToken: CancellationToken);

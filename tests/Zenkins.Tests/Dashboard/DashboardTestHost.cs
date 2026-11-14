@@ -277,9 +277,15 @@ public sealed class DashboardPageFixture : IDisposable
                 {
                     [WorkerMonitorOptions.MonitorIntervalSecondsConfigurationKey] = "3600",
 
-                    // The liveness test seeds a stale heartbeat and drives the sweep itself; a
-                    // 1 s threshold makes "stale" unambiguous for the seeded rows.
-                    [WorkerMonitorOptions.OfflineAfterSecondsConfigurationKey] = "1",
+                    // Coherent with the seeding (card B-001): the page tests seed fresh-heartbeat
+                    // workers before the first client boots the host, and the monitor sweeps once at
+                    // startup (before its first hourly tick), so the threshold must comfortably
+                    // exceed the seed-to-read window - at 1 s, any boot slow enough to land outside
+                    // it flips a seeded worker Offline and sweeps its Running run Lost behind the
+                    // page's back. Ten minutes leaves that window orders of magnitude of margin, and
+                    // the sweep stays real: the liveness test seeds its worker half an hour stale
+                    // and drives the real sweep itself.
+                    [WorkerMonitorOptions.OfflineAfterSecondsConfigurationKey] = "600",
                 }));
 
             builder.ConfigureTestServices(services =>
