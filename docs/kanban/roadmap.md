@@ -86,7 +86,8 @@ Candidate tasks:
   → `D-004`
 - Workers page: OS, arch, tags, status, current runs, concurrency, last heartbeat. → `D-005`
 - Secrets page. → `F-012` shipped the minimal Owner-only page (list, create, rotate, delete, no reveal);
-  the remaining polish (creator column, "which pipelines reference this name") is parked, not lost.
+  the remaining polish (creator column, "which pipelines reference this name") has its own card:
+  `D-006`.
 
 ### v1.0 — Stable release (Phase 6)
 
@@ -94,11 +95,14 @@ Goal:
 - Pass all seven acceptance scenarios in PRD §10 on Windows, Linux, and macOS.
 
 Candidate tasks:
-- Multi-worker concurrency and no-double-assignment tests.
+- Multi-worker concurrency and no-double-assignment tests. → `Q-005`
 - Worker disconnect recovery, Server restart recovery. → `Q-004`
-- Cross-tenant isolation audit (data, logs, artifacts, git credentials).
-- Self-contained publish + Windows Service / systemd / launchd packaging.
-- Install guide and upgrade notes.
+- Cross-tenant isolation audit (data, logs, artifacts, git credentials). → `Q-006`
+- Self-contained publish + Windows Service / systemd / launchd packaging. → `I-003`
+- Native AOT: the Worker ships a `PublishAot` artifact (MoonSharp proof included); the Server stays
+  JIT with the verdict recorded, because Blazor Server + EF Core + Identity are not .NET 10 AOT
+  targets. → `I-004`
+- Install guide and upgrade notes. → `DOC-003` (blocked by `I-003`)
 
 ## Parking Lot
 
