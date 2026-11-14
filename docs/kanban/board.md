@@ -12,7 +12,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
-| [B-002](issues/b-002-maxconcurrency-check-then-act.md) | maxConcurrency slot check is check-then-act; a token-holding client can exceed the cap (Q-005 hardening) | P2 | M | — | scheduled after the v1.0 tag |
 | [Q-010](issues/q-010-tag-validation-asymmetry.md) | Tag validation asymmetry: the trigger accepts a union no single worker can cover (Q-005 hardening) | P2 | S | — | scheduled after the v1.0 tag |
 | [Q-011](issues/q-011-pipelines-test-temp-leak.md) | Pipelines tests leak per-run temp roots — Dispose swallows only IOException (found by P-001) | P3 | S | — | — |
 
@@ -62,3 +61,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-019](issues/f-019-form-binding-500-and-stack-leak.md) | A form post with no bindable fields returns 500 and a stack instead of a validation error | P2 | 2026-11-14 |
 | [B-001](issues/b-001-dashboard-org-switch-sweep-flake.md) | Dashboard org-switch flake: seeded Running run swept Lost before the page reads it (D-002-B2) | P1 | 2026-11-15 |
 | [Q-009](issues/q-009-ssh-clone-real-sshd.md) | SSH clone verified against a real sshd — the keyless-sshd fixture (F-018 follow-up) | P1 | 2026-11-15 |
+| [B-002](issues/b-002-maxconcurrency-check-then-act.md) | maxConcurrency slot check is check-then-act; a token-holding client can exceed the cap (Q-005 hardening) | P2 | 2026-11-15 |
