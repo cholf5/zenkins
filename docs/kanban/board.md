@@ -11,7 +11,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
-| [Q-006](issues/q-006-tenant-isolation-audit.md) | Cross-tenant isolation audit (data, logs, artifacts, credentials) | P1 | L | — | none |
 | [I-003](issues/i-003-release-packaging.md) | Self-contained publish and OS service packaging (Windows Service / systemd / launchd) | P1 | L | — | none |
 | [I-004](issues/i-004-native-aot.md) | NativeAOT: the Worker publishes AOT, the Server gets a recorded verdict | P2 | L | — | none (coordinates with I-003) |
 | [DOC-003](issues/doc-003-install-guide-upgrade-notes.md) | Install guide and upgrade notes | P2 | M | I-003 | I-003 |
@@ -52,3 +51,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [D-005](issues/d-005-workers-page.md) | Workers page: detail, current runs and safe controls | P2 | 2026-11-14 |
 | [Q-003](issues/q-003-v03-test-debt.md) | Close the v0.3 test debt recorded on accepted cards | P2 | 2026-11-14 |
 | [Q-005](issues/q-005-multi-worker-concurrency.md) | Multi-worker concurrency and tag assignment, end to end | P1 | 2026-11-14 |
+| [Q-006](issues/q-006-tenant-isolation-audit.md) | Cross-tenant isolation audit (data, logs, artifacts, credentials) | P1 | 2026-11-14 |
