@@ -13,6 +13,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 |---|---|---|---|---|---|
 | [Q-008](issues/q-008-postgresql-published-form.md) | PostgreSQL in published form: real instance, migrations, full build | P1 | M | — | I-003, D-006 |
 | [F-018](issues/f-018-project-git-credential-assignment.md) | Project git credential assignment, and a real clone served by the server | P1 | M | — | F-012, F-013, D-003 |
+| [F-019](issues/f-019-form-binding-500-and-stack-leak.md) | A form post with no bindable fields returns 500 and a stack instead of a validation error | P2 | S | — | none |
 
 ## Done
 
