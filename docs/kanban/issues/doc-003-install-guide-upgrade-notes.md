@@ -4,7 +4,7 @@ title: Install guide and upgrade notes
 type: docs
 priority: P2
 size: M
-status: todo
+status: done
 created: 2026-11-14
 updated: 2026-11-14
 blocked:
@@ -40,23 +40,23 @@ Decisions:
 
 ## Acceptance Criteria
 
-- [ ] Per-OS install guide covers prerequisites, artifact placement, service install/uninstall
+- [x] Per-OS install guide covers prerequisites, artifact placement, service install/uninstall
       (Windows Service / systemd / launchd as produced by I-003), configuration (database provider,
       paths, ports), and first-run Owner bootstrap.
-- [ ] A fresh-clone-to-production walkthrough exists: install → configure → bootstrap → first real
+- [x] A fresh-clone-to-production walkthrough exists: install → configure → bootstrap → first real
       build from a registered Worker, using only documented commands.
-- [ ] Upgrade notes cover: backup scope, how migrations apply, a stop → replace → start upgrade of the
+- [x] Upgrade notes cover: backup scope, how migrations apply, a stop → replace → start upgrade of the
       published Server with data intact, and rollback limits.
-- [ ] Uninstall removes services and binaries and states exactly what user data remains and where.
-- [ ] Every command in the guide was executed on at least one OS during this card; unexercised OS
+- [x] Uninstall removes services and binaries and states exactly what user data remains and where.
+- [x] Every command in the guide was executed on at least one OS during this card; unexercised OS
       steps are labelled rather than implied.
 
 ## Subtasks
 
-- [ ] Install guide skeleton per OS (mirroring I-003's matrix), then fill from real artifacts.
-- [ ] Worker quick-start for build machines.
-- [ ] Upgrade/rollback notes with a performed upgrade run.
-- [ ] Link from README and `docs/development.md`.
+- [x] Install guide skeleton per OS (mirroring I-003's matrix), then fill from real artifacts.
+- [x] Worker quick-start for build machines.
+- [x] Upgrade/rollback notes with a performed upgrade run.
+- [x] Link from README and `docs/development.md`.
 
 ## Dependencies
 
@@ -64,7 +64,7 @@ Decisions:
 
 ## Test Cases
 
-### TC-001: The guide works verbatim
+### TC-001: The guide works verbatim — PASS on macOS, labelled elsewhere
 
 Steps:
 1. On a machine (or clean container) without the repo and without the .NET SDK, follow the guide
@@ -74,7 +74,15 @@ Expected:
 - Every step succeeds with no undocumented manual fix; deviations found during writing are fixed in
   the product or the guide, not waved through.
 
-### TC-002: The upgrade path preserves data
+Result (observed 2026-11-14): PASS for the OS that could be exercised, with every other step labeled
+rather than implied. `docs/install.md` §12 carries the command log as delivered evidence: fourteen
+executed steps on macOS 26.5 (publish → tar transfer → launchd install → `status` → `curl` → App_Data
+inspection → log location → worker registration → worker first start → worker restart → first build →
+`kill -9` self-heal → upgrade drill → uninstall) plus a per-OS table of what was not executed. The
+same appendix pins the honest gaps: macOS boot-time start (`RunAtLoad`), cross-version upgrade, a
+PostgreSQL deployment, all of Linux, and all of Windows.
+
+### TC-002: The upgrade path preserves data — PASS (same-revision; cross-version recorded unexercised)
 
 Steps:
 1. Install version A per the guide; run a build; upgrade to version B per the upgrade notes.
@@ -82,21 +90,74 @@ Steps:
 Expected:
 - Database rows, artifacts and credentials survive; the guide's claims match observed behaviour.
 
+Result (observed 2026-11-14): PASS within the evidence that exists, and the guide now says exactly
+that much. The performed drill is stop → replace binaries (keeping `App_Data/`) → start on the same
+publish output — the same shape `Category=PublishSmoke` asserts — so what is proven is a same-revision
+rebuild preserving the database, the key ring and the artifact store. No vA → vB migration was ever
+exercised, and the guide states that in the upgrade section and the appendix instead of implying it;
+the mechanism that would carry it (startup migration via `Database__ApplyMigrationsOnStartup`) is
+documented with its multi-node caveat.
+
 ## Development Log
 
 ### 2026-11-14
 
 - Planned from roadmap v1.0. Blocked on I-003 by design: the guide documents I-003's packaging, so
   writing it earlier would produce fiction.
+- Implemented as `docs/install.md` (853 lines, 12 sections): the artifact matrix (including the three
+  things that do not exist — no `zenkins` CLI, no application `--port`, no Worker service template, no
+  single-file Server, no AOT Server); shared facts (paths resolve from `AppContext.BaseDirectory`,
+  never the content root or CWD; the key ring matters as much as the database); per-OS install with
+  macOS marked verified and Linux/Windows marked not executed; Worker quick-start (environment
+  variables only — the Worker takes zero command-line arguments); reverse-proxy configuration;
+  upgrades with backup scope, migration mechanics and a rollback boundary; uninstall with an explicit
+  per-OS residue list; troubleshooting; a one-page path; and the TC-001 command log appendix.
+- One product fix belongs to this card by PM ruling: `deploy/windows/install-server-service.ps1` now
+  writes `Database__ApplyMigrationsOnStartup=true` into the service's `Environment` alongside
+  `ASPNETCORE_URLS`. Without it a fresh Windows Service deployment (CWD `System32`, so the bundled
+  `appsettings.json` is never read, and `Production` defaults migrations off) fails its first
+  `/account/register` with `no such table: BootstrapMarkers`. The launchd plist and the systemd unit
+  already set the flag; the Windows script was the outlier.
+- Review round 1 (reconciliation) found three must-fix items, all documentation: uninstall never told
+  the operator to delete the binaries (the scripts only remove the service registration) nor listed
+  residue at per-file granularity; `ForwardedHeaders__KnownProxies` was documented as a JSON array,
+  which cannot work through the environment provider (the binder reads child keys —
+  `ForwardedHeaders__KnownProxies__0=...`, the shape `HostConfigurationTests` pins, or the proxy is
+  untrusted, `X-Forwarded-Proto` is dropped and the login cookie is not `Secure`); and the Windows
+  side had no runnable example at all — the only pipeline snippet was the POSIX `sh -c`, while steps
+  are argv vectors with no shell. Round 2 found one self-inflicted error: the Windows artifact step
+  claimed 17 bytes while `-NoNewline` writes 16 (the POSIX `echo` adds one LF). Final verification:
+  PASS.
+- Honest limits recorded in the card and the guide: Linux systemd and Windows Service are static
+  walkthroughs, not executions; PostgreSQL in published form is untested; cross-version upgrade is
+  unproven; macOS boot-time start is configured but not observed.
+- Verification (dev run + independent review runs): `dotnet build -c Release` → 0 warnings, run three
+  times across the rounds; fast suite `--filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot"`
+  → 1001 passed / 0 failed / 0 skipped (twice, the second after all edits). No code, test or script
+  behavior changed beyond the one approved ps1 line pair.
 
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
 |---|---|---|---|---|
+| — | — | No product defect was found by this card. One packaging gap had already been found by the DOC-003 preread and is fixed here: the Windows service script did not apply migrations on startup, so a fresh deployment's first registration failed with `no such table: BootstrapMarkers`. | Closed | `install-server-service.ps1` now writes `Database__ApplyMigrationsOnStartup=true` into the service `Environment` (PM-approved, one-line scope). |
 
 ## Verification
 
-- Related files: `docs/install.md` (or the structure DOC-001 chose), `docs/development.md` (link),
-  `README.md` (link), I-003's publish scripts and service definitions
-- How to run/verify: execute the guide verbatim per TC-001; no automated suite beyond that by design.
-- Results: not run (card not started).
+- Related files: `docs/install.md` (the guide, 853 lines); `README.md` and `docs/development.md`
+  (links and the deploy pointer); `deploy/windows/install-server-service.ps1` (the migration flag);
+  evidence sources: `scripts/publish.sh`, `deploy/macos/com.zenkins.server.plist` and
+  `install-launchd.sh`, `deploy/systemd/zenkins-server.service`, `docs/development.md` §2/§3/§6,
+  `docs/native-aot.md` §3/§7.
+- How to run/verify: execute the guide verbatim per TC-001 on the OS at hand; the appendix §12 is the
+  command log and the per-OS "not executed" table. No automated suite beyond `dotnet build -c Release`
+  and the fast suite (a documentation card changes no behavior).
+- Results (observed 2026-11-14): `dotnet build -c Release` 0 warnings / 0 errors (dev, and re-run by
+  the reviewer twice); fast suite 1001 passed / 0 failed / 0 skipped; macOS launchd steps as recorded
+  in §12 (install, `status`, `curl`, App_Data placement, `kill -9` self-heal, clean uninstall, upgrade
+  drill); Linux systemd, Windows Service and PostgreSQL-in-published-form remain recorded as
+  unexercised.
+- Known documentation debt left open (not this card's scope): `docs/development.md` §4 still describes
+  `DataProtection:KeysDirectory` and `Artifacts:RootPath` as relative to the content root, while the
+  code resolves them from `AppContext.BaseDirectory`; the guide states the correct behaviour inline,
+  and the stale table rows should be corrected in a future docs card.
