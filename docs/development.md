@@ -317,9 +317,9 @@ variables or user secrets, never in a committed file.
 | Key | Values | Default |
 |---|---|---|
 | `Database:Provider` | `Sqlite`, `Postgres` | `Sqlite` |
-| `ConnectionStrings:Default` | provider-specific connection string | `Data Source=<content root>/App_Data/zenkins.db` |
+| `ConnectionStrings:Default` | provider-specific connection string | `Data Source=<AppContext.BaseDirectory>/App_Data/zenkins.db` — the directory the binaries run from, never the working directory (I-003 path discipline) |
 | `Database:ApplyMigrationsOnStartup` | `true`, `false` | `true` in Development, `false` otherwise |
-| `DataProtection:KeysDirectory` | directory path, absolute or relative to the content root | `keys/` next to the SQLite database file (`App_Data/keys` for the default deployment); `App_Data/keys` under the content root for PostgreSQL |
+| `DataProtection:KeysDirectory` | directory path, absolute or relative to `AppContext.BaseDirectory` | `keys/` next to the SQLite database file (`App_Data/keys` beside the binaries for the default deployment); `App_Data/keys` under `AppContext.BaseDirectory` for PostgreSQL |
 
 The Data Protection key ring encrypts stored secrets and must be backed up with the database; see
 [Secrets key ring](#secrets-key-ring).
@@ -408,7 +408,7 @@ Run artifacts (PRD §3.7, card F-016) live in a local directory, not the databas
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Artifacts:RootPath` | `App_Data/artifacts` | Where the bytes live, relative to the content root (an absolute path wins). Layout: `{root}/{organizationId}/{runId}/{artifactId}/{relativePath}` - the database row stores only the id. **Back this up with `App_Data/zenkins.db`**: the file names embed the ids a restore needs, and the store is created and written at startup, so an unwritable root fails the process immediately (like the Data Protection key ring). |
+| `Artifacts:RootPath` | `App_Data/artifacts` | Where the bytes live, relative to `AppContext.BaseDirectory` — the directory the binaries run from (an absolute path wins). Layout: `{root}/{organizationId}/{runId}/{artifactId}/{relativePath}` - the database row stores only the id. **Back this up with `App_Data/zenkins.db`**: the file names embed the ids a restore needs, and the store is created and written at startup, so an unwritable root fails the process immediately (like the Data Protection key ring). |
 | `Artifacts:MaxFileBytes` | `536870912` (512 MB) | Largest single file. An upload over it fails the step and names the key. |
 | `Artifacts:MaxArtifactBytes` | `2147483648` (2 GB) | Largest total of one artifact. |
 | `Artifacts:MaxFiles` | `20000` | Most files one artifact may hold. |
@@ -748,10 +748,11 @@ the same ring mints the F-008 log-subscription tickets (`src/Server/LogStreaming
 losing it also invalidates live log streams.
 
 **Where it lives.** The ring is persisted next to the data it protects: `App_Data/keys/` for the
-default SQLite deployment (the database is `App_Data/zenkins.db`), and `App_Data/keys/` under the
-content root when `Database:Provider` is `Postgres` (a server database has no local file to sit next
-to). `DataProtection:KeysDirectory` pins another directory (absolute, or relative to the content
-root). `Program.cs` registers the ring with the application name `Zenkins`, resolves this path when
+default SQLite deployment (the database is `App_Data/zenkins.db`), and `App_Data/keys/` under
+`AppContext.BaseDirectory` when `Database:Provider` is `Postgres` (a server database has no local
+file to sit next to). `DataProtection:KeysDirectory` pins another directory (absolute, or relative
+to `AppContext.BaseDirectory`). `Program.cs` registers the ring with the application name `Zenkins`,
+resolves this path when
 the Data Protection options are materialised — after every configuration source, including container
 and test overrides — and asserts at startup that the directory is writable: a path that is not a
 writable directory fails startup with the resolved path in the message, instead of failing later at
