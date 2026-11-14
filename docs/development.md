@@ -360,15 +360,27 @@ dotnet tool install --global dotnet-ef --version 10.0.15   # only if `dotnet ef 
 the run command sets `ASPNETCORE_ENVIRONMENT=Development` explicitly. Use the profile
 (`dotnet run --project src/Server`) if you only want the local SQLite development setup.
 
-> **Status of this section:** on the machine where this guide was verified there is no PostgreSQL
-> server and no Docker, so the switch could not be completed end to end. The provider selection,
-> connection-string binding and migration path were exercised up to the connection attempt:
-> `dotnet ef database update --project src/Server` under `Database__Provider=Postgres` stops with
-> `Failed to connect to 127.0.0.1:5432`. The first command in a real environment that proves the
-> switch is that same `dotnet ef database update` exiting 0, followed by a successful first-run
-> registration against PostgreSQL. Installing a database server or Docker was deliberately avoided
-> (PRD §2.2 and §8.9: no Docker as an infrastructure dependency). The server-side setup commands
-> (`createdb`, role creation) were not run either.
+> **Status of this section (historical — see the superseding note below):** on the machine where this
+> guide was verified there is no PostgreSQL server and no Docker, so the switch could not be completed
+> end to end. The provider selection, connection-string binding and migration path were exercised up to
+> the connection attempt: `dotnet ef database update --project src/Server` under
+> `Database__Provider=Postgres` stops with `Failed to connect to 127.0.0.1:5432`. The first command in
+> a real environment that proves the switch is that same `dotnet ef database update` exiting 0,
+> followed by a successful first-run registration against PostgreSQL. Installing a database server or
+> Docker was deliberately avoided (PRD §2.2 and §8.9: no Docker as an infrastructure dependency). The
+> server-side setup commands (`createdb`, role creation) were not run either.
+
+> **Status of this section, superseded on 2026-11-14 (Q-008):** the switch above is now verified on a
+> **real PostgreSQL 16.15**, not only up to the connection attempt. A published Server configured
+> through environment variables alone applied all **16** migrations from an empty database at startup,
+> served login and the first-run Owner bootstrap, ran a real Worker pipeline to `Success` (the run,
+> step and log rows verified through `psql`; the `Artifacts` row read there too, with the downloaded
+> bytes compared by `sha256` against the row's manifest), and migrated a database created at the
+> previous migration forward **on PostgreSQL**: the new nullable attribution column appeared while
+> pre-upgrade rows kept their old values with a null attribution. Authentication was real
+> `scram-sha-256` over TCP with a password, not `trust`. Not exercised by that run: the `win-x64`
+> published artifact (no Windows host), Docker (not installed on the machine), an upgrade **across
+> product versions**, and the `local` / `replication` lines of `pg_hba.conf`, which stayed `trust`.
 
 ### Production database path
 
