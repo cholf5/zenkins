@@ -197,7 +197,12 @@ public sealed partial class PublishedAotSmokeTests : IClassFixture<PublishedAotS
                     $"the {mode} worker's run ended '{run.Status}' (reason: {run.FailureReason}); diagnostics:{Environment.NewLine}"
                     + host.FormatDiagnostics());
                 var steps = await host.ReadStepsAsync(runId);
-                var log = await host.ReadLogLinesAsync(runId);
+                // F-008's drain lands the log lines around the terminal report; the JIT/AOT
+                // comparison waits for the definition's last step line instead of reading once (a
+                // loaded macos runner recorded a 2-of-16 log for a green AOT run).
+                var log = await host.WaitForLogLinesAsync(
+                    runId,
+                    waited => waited.Any(line => line.Message.StartsWith("zenkins: step 3/3", StringComparison.Ordinal)));
                 var artifacts = await host.ReadArtifactsAsync(runId);
                 Assert.True(artifacts.Count == 1,
                     $"the {mode} worker's run produced {artifacts.Count} artifacts; diagnostics:{Environment.NewLine}"

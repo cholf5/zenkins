@@ -82,43 +82,25 @@ public sealed class WorkerRunProcessE2ETests
             var run1 = await TriggerRunAsync(owner, projectId, cancellationToken);
             var work1 = Path.Combine(workRoot, run1.ToString("D"));
 
-            // The temp stream files live from the run's pipeline start to the cleanup-before-report
-            // edge (~15s on this pipeline). On a loaded runner the test's own polling can be starved
-            // past that whole window - three red windows-runner runs, each with the run itself green
-            // (Success in ~17s, 9 persisted rows) - so the creations are observed through a
-            // FileSystemWatcher: the OS buffers the notifications, so no scheduling delay can skip
-            // them, and the wait completes at the test's next wake. The complete content and its
-            // order are asserted from the persisted database rows below, which do not expire.
-            Directory.CreateDirectory(workRoot);
-            var stdoutSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var stderrSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var tempWatcher = new FileSystemWatcher(workRoot, "*.log")
-            {
-                IncludeSubdirectories = true,
-                InternalBufferSize = 64 * 1024,
-            };
-            tempWatcher.Created += (_, args) =>
-            {
-                var name = Path.GetFileName(args.FullPath);
-                if (name == Zenkins.Worker.Pipelines.RunLogWriters.StdOutLogFileName)
-                {
-                    stdoutSeen.TrySetResult();
-                }
-                else if (name == Zenkins.Worker.Pipelines.RunLogWriters.StdErrorLogFileName)
-                {
-                    stderrSeen.TrySetResult();
-                }
-            };
-            tempWatcher.EnableRaisingEvents = true;
-
+            // Every wait below runs on a dedicated thread, not the thread pool: under the fast
+            // suite's full parallel load the pool's queue delays continuations by tens of seconds
+            // (recorded on windows and ubuntu - the run green in ~16s while neither a database poll
+            // nor a buffered FileSystemWatcher callback executed for minutes), while the OS
+            // schedules a sleeping thread directly. The temp stream files live from the run's
+            // pipeline start to the cleanup-before-report edge, so their creation is observed
+            // across that whole window; the complete content and its order are asserted from the
+            // persisted database rows below, which do not expire.
+            var stdoutPath = Path.Combine(work1, "temp", "stdout.log");
+            var stderrPath = Path.Combine(work1, "temp", "stderr.log");
             try
             {
                 await Task.WhenAll(
-                    WaitForRunStatusAsync(databasePath, run1, "Running", RunTerminalTimeout, cancellationToken),
-                    stdoutSeen.Task.WaitAsync(RunTerminalTimeout, cancellationToken),
-                    stderrSeen.Task.WaitAsync(RunTerminalTimeout, cancellationToken));
+                    PollOnDedicatedThreadAsync(
+                        () => ReadRunStatusSync(databasePath, run1) == "Running", RunTerminalTimeout),
+                    PollOnDedicatedThreadAsync(() => File.Exists(stdoutPath), RunTerminalTimeout),
+                    PollOnDedicatedThreadAsync(() => File.Exists(stderrPath), RunTerminalTimeout));
             }
-            catch (Exception failure) when (failure is TimeoutException or InvalidOperationException)
+            catch (TimeoutException failure)
             {
                 // The temp files are created eagerly with the run's execution (RunLogWriters), so a
                 // missing file means the worker never reached its pipeline - the state that matters
@@ -310,6 +292,63 @@ public sealed class WorkerRunProcessE2ETests
         }
 
         throw new TimeoutException($"Run {runId} never reached {expectedStatus} within the timeout.");
+    }
+
+    /// <summary>
+    /// Polls a condition on a dedicated thread until it holds or the timeout fires. Under a loaded
+    /// runner the thread pool's queue can delay Task.Delay continuations past any observation
+    /// window, while the OS schedules a sleeping thread directly - which is what makes this the
+    /// reliable shape for observations that must not miss a short-lived state.
+    /// </summary>
+    private static Task PollOnDedicatedThreadAsync(Func<bool> predicate, TimeSpan timeout)
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var deadline = DateTime.UtcNow + timeout;
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (predicate())
+                    {
+                        completed.SetResult();
+                        return;
+                    }
+
+                    Thread.Sleep(250);
+                }
+
+                completed.SetException(
+                    new TimeoutException($"the condition was not met within {timeout.TotalSeconds:0}s."));
+            }
+            catch (Exception failure)
+            {
+                completed.SetException(failure);
+            }
+        })
+        { IsBackground = true };
+        thread.Start();
+        return completed.Task;
+    }
+
+    /// <summary>The run's status, read synchronously (null when the row cannot be read right now).</summary>
+    private static string? ReadRunStatusSync(string databasePath, Guid runId)
+    {
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT \"Status\" FROM \"BuildRuns\" WHERE \"Id\" = $id";
+            command.Parameters.AddWithValue("$id", runId.ToString().ToUpperInvariant());
+            return command.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            // The server may hold a write lock; the next poll retries.
+            return null;
+        }
     }
 
     /// <summary>

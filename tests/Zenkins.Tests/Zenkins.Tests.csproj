@@ -23,6 +23,12 @@
     <None Remove="TestAssets/**" />
   </ItemGroup>
 
+  <!-- The runner config caps collection parallelism (the CI runners starved their own thread pool
+       under the default core-count parallelism); it must sit beside the test assembly. -->
+  <ItemGroup>
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../../src/Shared/Zenkins.Shared.csproj" />
     <ProjectReference Include="../../src/Server/Zenkins.Server.csproj" />

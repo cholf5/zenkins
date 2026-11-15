@@ -89,7 +89,9 @@ public sealed class MilestoneSecretHygieneTests
         Assert.Equal("Ready", artifact.Status);
 
         var downloaded = await host.DownloadAsync($"/runs/{runId}/artifacts/{artifact.Id}/download");
-        var written = Encoding.UTF8.GetBytes(secretValue + Environment.NewLine);
+        // The producing step (ArgvEcho's probe) writes a literal LF, so the expectation is built
+        // from one too - Environment.NewLine would be CRLF on Windows and never match.
+        var written = Encoding.UTF8.GetBytes(secretValue + "\n");
         Assert.Equal(written, downloaded);
         Assert.Equal(written.Length, (int)artifact.TotalBytes);
     }
