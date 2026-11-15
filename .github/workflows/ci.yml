@@ -23,6 +23,14 @@
 #
 # Triggers: every push to main and every pull request targeting it; a push of a version tag (v1.0)
 # runs the same gate, so the revision the PM tags is the revision CI proved green.
+#
+# Docs-only commits (docs/**, **/*.md, LICENSE) skip the gate: the gate proves code (build +
+# suites + AOT artifacts), and no markdown in this repo is a build input - docs files are cited
+# from build-file comments only, so a docs change cannot turn the gate red. A mixed commit (docs +
+# code) still runs. Tag pushes are unaffected: path filters are not evaluated for tag pushes
+# (GitHub's documented behaviour), so a tag always runs the gate. A filtered run leaves its check
+# "Pending"; if the gate is ever made a required status check, docs-only PRs would be blocked, and
+# the filter - not the protection rule - would be the thing to revisit.
 
 name: ci
 
@@ -30,8 +38,18 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # Docs-only commits skip the gate (reasons in the header); tag pushes ignore path filters,
+    # so a version tag always runs the gate.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
   workflow_dispatch:
 
 # Superseded commits of the same PR cancel their run; pushes to main and tags always run whole.
