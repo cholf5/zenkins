@@ -81,7 +81,10 @@ public sealed class ConcurrencyTagValidationTests
         // and placed exactly as Q-005 TC-002 proved - claimed by the covering worker and executed
         // once, with the same attribution standard.
         var matchedRunId = await host.TriggerTaggedRunAsync(project, requiredTags: "linux,cuda");
-        await host.WaitForRunStatusAsync(matchedRunId, "Running");
+        // No intermediate Running observation here: the identity pipeline completes inside one
+        // poll gap (Queued → Running → Success), so a sampled wait either starves past it or fails
+        // on a run that is already terminal - and the claim-by-the-covering-worker fact is proven
+        // exactly by the terminal row's WorkerId below.
         var coverRow = await host.ReadConcurrencyWorkerRowAsync(cover.Name);
         var matchedDone = await host.WaitForTerminalAsync(matchedRunId);
         Assert.Equal("Success", matchedDone.Status);

@@ -51,6 +51,7 @@ public sealed class WorkerProcessE2ETests
         using var server = StartServer(dotnet, serverDll, root, databasePath);
         using var serverLogs = new ProcessLog(server);
         var serverUrl = await WaitForServerAsync(server, serverLogs, cancellationToken);
+        Process? leakedWorker = null;
 
         try
         {
@@ -61,6 +62,8 @@ public sealed class WorkerProcessE2ETests
 
             using var worker = StartWorker(dotnet, workerDll, serverUrl, registrationToken, workerName, workerDataDir);
             using var workerLogs = new ProcessLog(worker);
+            leakedWorker = worker;
+            leakedWorker = worker;
 
             // Registration: the worker prints what it is doing and the server assigns an id.
             await workerLogs.WaitForLineAsync(
@@ -115,7 +118,11 @@ public sealed class WorkerProcessE2ETests
         }
         finally
         {
-            TryStop(server);
+            // The worker is stopped on every platform: on POSIX the graceful-stop path above has
+            // already exited it (TryStop is a no-op then), and on Windows - where no SIGTERM
+            // crosses a process boundary - this is the only stop. A worker left running holds the
+            // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
+            TryStop(leakedWorker);
             DeleteTempRoot(tempRoot);
         }
     }
@@ -129,11 +136,13 @@ public sealed class WorkerProcessE2ETests
 
         var tempRoot = Path.Combine(Path.GetTempPath(), $"zenkins-f005-badcfg-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempRoot);
+        Process? leakedWorker = null;
 
         try
         {
             using var worker = StartWorker(ResolveDotnetPath(), workerDll, serverUrl: null, registrationToken: null, workerName: "bad-cfg", workerDataDir: tempRoot);
             using var workerLogs = new ProcessLog(worker);
+            leakedWorker = worker;
 
             WaitForWorkerExit(worker, "The worker ignored the bad configuration and kept running.");
 
@@ -147,6 +156,11 @@ public sealed class WorkerProcessE2ETests
         }
         finally
         {
+            // The worker is stopped on every platform: on POSIX the graceful-stop path above has
+            // already exited it (TryStop is a no-op then), and on Windows - where no SIGTERM
+            // crosses a process boundary - this is the only stop. A worker left running holds the
+            // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
+            TryStop(leakedWorker);
             DeleteTempRoot(tempRoot);
         }
     }
@@ -165,11 +179,13 @@ public sealed class WorkerProcessE2ETests
         // rejection. The worker must report it once on stderr and exit non-zero, not map it to a
         // transport failure and retry forever ("cannot reach ... the server answered 400").
         using var stub = TcpWorkerStub.RejectingWith(400);
+        Process? leakedWorker = null;
         try
         {
             using var worker = StartWorker(
                 ResolveDotnetPath(), workerDll, stub.Url, "zreg_definitely-rejected-token", "rej400-agent", tempRoot);
             using var workerLogs = new ProcessLog(worker);
+            leakedWorker = worker;
 
             WaitForWorkerExit(worker, "The worker kept running against a definitive 400 rejection instead of exiting.");
 
@@ -184,6 +200,11 @@ public sealed class WorkerProcessE2ETests
         }
         finally
         {
+            // The worker is stopped on every platform: on POSIX the graceful-stop path above has
+            // already exited it (TryStop is a no-op then), and on Windows - where no SIGTERM
+            // crosses a process boundary - this is the only stop. A worker left running holds the
+            // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
+            TryStop(leakedWorker);
             DeleteTempRoot(tempRoot);
         }
     }
@@ -204,11 +225,13 @@ public sealed class WorkerProcessE2ETests
         // then serves the real register/heartbeat contract; the worker must stay alive, log the
         // backoff retries, register on a later attempt and go online.
         using var stub = TcpWorkerStub.ConflictingRegistersThenSucceeds(2);
+        Process? leakedWorker = null;
         try
         {
             using var worker = StartWorker(
                 ResolveDotnetPath(), workerDll, stub.Url, "zreg_conflicting-token", "conflict-agent", tempRoot);
             using var workerLogs = new ProcessLog(worker);
+            leakedWorker = worker;
 
             await workerLogs.WaitForLineAsync(
                 line => line.Contains("Retrying", StringComparison.Ordinal)
@@ -233,6 +256,11 @@ public sealed class WorkerProcessE2ETests
         }
         finally
         {
+            // The worker is stopped on every platform: on POSIX the graceful-stop path above has
+            // already exited it (TryStop is a no-op then), and on Windows - where no SIGTERM
+            // crosses a process boundary - this is the only stop. A worker left running holds the
+            // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
+            TryStop(leakedWorker);
             DeleteTempRoot(tempRoot);
         }
     }
@@ -251,11 +279,13 @@ public sealed class WorkerProcessE2ETests
         // per-request timeout must fire, be treated as a transport failure (backoff + retry), and
         // the process must survive a SIGTERM afterwards with exit code 0 (F-005 AC-3).
         using var stub = TcpWorkerStub.BlackHole();
+        Process? leakedWorker = null;
         try
         {
             using var worker = StartWorker(
                 ResolveDotnetPath(), workerDll, stub.Url, "zreg_black-hole-token", "black-hole-agent", tempRoot);
             using var workerLogs = new ProcessLog(worker);
+            leakedWorker = worker;
 
             await workerLogs.WaitForLineAsync(
                 line => line.Contains("request timeout", StringComparison.Ordinal),
@@ -289,6 +319,11 @@ public sealed class WorkerProcessE2ETests
         }
         finally
         {
+            // The worker is stopped on every platform: on POSIX the graceful-stop path above has
+            // already exited it (TryStop is a no-op then), and on Windows - where no SIGTERM
+            // crosses a process boundary - this is the only stop. A worker left running holds the
+            // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
+            TryStop(leakedWorker);
             DeleteTempRoot(tempRoot);
         }
     }
@@ -716,8 +751,13 @@ public sealed class WorkerProcessE2ETests
     private static string FindTokenFile(string workerDataDir) =>
         Directory.EnumerateFiles(workerDataDir, "worker.token", SearchOption.AllDirectories).Single();
 
-    private static void TryStop(Process process)
+    private static void TryStop(Process? process)
     {
+        if (process is null)
+        {
+            return;
+        }
+
         try
         {
             if (!process.HasExited)

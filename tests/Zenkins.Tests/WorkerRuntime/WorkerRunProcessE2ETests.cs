@@ -48,6 +48,7 @@ public sealed class WorkerRunProcessE2ETests
         var workerName = $"e2e-run-{Guid.NewGuid():N}".ToLowerInvariant();
 
         var dotnet = ResolveDotnetPath();
+        Process? worker = null;
         using var server = StartServer(dotnet, serverDll, root, databasePath);
         using var serverLogs = new ProcessLog(server);
         var serverUrl = await WaitForServerAsync(server, serverLogs, cancellationToken);
@@ -70,7 +71,7 @@ public sealed class WorkerRunProcessE2ETests
             var projectId = await CreateProjectAsync(owner, $"e2e-run-{Guid.NewGuid():N}".ToLowerInvariant());
             await SetProjectRepositoryAsync(databasePath, projectId, repository.FileUrl, cancellationToken);
 
-            using var worker = StartWorker(
+            worker = StartWorker(
                 dotnet, workerDll, serverUrl, registrationToken, workerName, workerDataDir, workRoot);
             using var workerLogs = new ProcessLog(worker);
             await workerLogs.WaitForLineAsync(
@@ -159,6 +160,12 @@ public sealed class WorkerRunProcessE2ETests
         }
         finally
         {
+            // The worker is stopped on every platform: on POSIX the graceful-stop path above has
+            // already exited it (TryStop is a no-op then), and on Windows - where no SIGTERM
+            // crosses a process boundary - this is the only stop. A worker left running holds the
+            // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
+            TryStop(worker);
+            worker?.Dispose();
             TryStop(server);
             DeleteTempRoot(tempRoot);
         }
@@ -744,8 +751,13 @@ public sealed class WorkerRunProcessE2ETests
         kill?.WaitForExit(5_000);
     }
 
-    private static void TryStop(Process process)
+    private static void TryStop(Process? process)
     {
+        if (process is null)
+        {
+            return;
+        }
+
         try
         {
             if (!process.HasExited)
