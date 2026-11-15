@@ -574,6 +574,9 @@ internal class MilestoneHost : IDisposable
 
         _serverLogs?.Dispose();
         Owner?.Dispose();
+        // SQLite pools connections; on Windows the file stays locked until the pool is drained
+        // (the test-side read helpers pool their connections just like the fixtures do).
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         DeleteDirectory(RootPath);
     }
 

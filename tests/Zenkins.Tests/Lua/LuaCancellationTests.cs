@@ -41,16 +41,25 @@ public sealed class LuaCancellationTests
     public void Cancellation_stops_a_script_that_loops_over_a_host_stub()
     {
         var calls = 0;
+        using var cancellation = new CancellationTokenSource();
         var runtime = LuaSandboxProbe.CreateRuntime();
         runtime.RegisterHostFunction(
             "run_process",
             _ =>
             {
-                Interlocked.Increment(ref calls);
+                var call = Interlocked.Increment(ref calls);
+                if (call == 1)
+                {
+                    // The deadline arms at the first yield, not at test start: on a loaded runner the
+                    // VM can be scheduled later than any fixed deadline, and a token that fires
+                    // before the first instruction would make "the stub was never called" a
+                    // scheduling fact rather than a product one (recorded red on the ubuntu runner).
+                    cancellation.CancelAfter(TimeSpan.FromMilliseconds(50));
+                }
+
                 return LuaHostResult.Suspend(() => LuaHostValue.FromString("exit=0"));
             });
 
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
         var result = runtime.Execute(
             "while true do run_process('make test') end",
             LuaSandboxProbe.ChunkName,

@@ -72,7 +72,10 @@ internal static class Program
                     return Usage("probe <file> <text>");
                 }
 
-                File.WriteAllText(args[1], args[2] + Environment.NewLine);
+                // The newline is written literally, not as Environment.NewLine: the tests assert the
+                // artifact's bytes (Q-002: artifact bytes are never rewritten), and a windows child
+                // must produce the same bytes a POSIX child does.
+                File.WriteAllText(args[1], args[2] + "\n");
                 Console.Out.WriteLine("probe-written");
                 return 0;
 
@@ -83,7 +86,8 @@ internal static class Program
                     return Usage("append <file> <text>");
                 }
 
-                File.AppendAllText(args[1], args[2] + Environment.NewLine);
+                // The newline is literal, for the same byte-determinism as the probe's.
+                File.AppendAllText(args[1], args[2] + "\n");
                 Console.Out.WriteLine("appended");
                 return 0;
 

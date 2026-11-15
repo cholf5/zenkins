@@ -279,9 +279,12 @@ public sealed class MilestoneGitCredentialTests
             + "echo 'username=ambient-worker'\n"
             + $"echo 'password={token}'\n");
 
+        // Git's config parser treats a backslash as an escape, so a windows path written verbatim
+        // is a "bad config line"; git itself accepts forward slashes on every platform, which is
+        // what the helper value uses.
         File.WriteAllText(
             Path.Combine(homePath, ".gitconfig"),
-            "[credential]\n\thelper = " + helper + "\n");
+            "[credential]\n\thelper = " + helper.Replace('\\', '/') + "\n");
         return helper;
     }
 }
