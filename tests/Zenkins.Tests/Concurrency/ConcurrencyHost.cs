@@ -274,9 +274,22 @@ internal sealed class ConcurrencyHost : RecoveryHost
         var ownerRow = await ReadConcurrencyWorkerRowAsync(owner.Name);
         Assert.Equal(ownerRow.Id, run.WorkerId);
 
-        Assert.Contains(
-            owner.Output,
-            line => line.Contains($"run {run.Id:D} executing in", StringComparison.Ordinal));
+        // The worker's console reaches this test through ProcessLog's asynchronous line events, and
+        // on a loaded runner those events queue behind everything else the threadpool owes - the
+        // capture arrives late, it is never wrong (the worker's whole output fits the pipe buffer,
+        // so the worker itself never blocks). The owner's claim of the execution is therefore
+        // waited for, not sampled once: the windows runner recorded a green run whose rows and log
+        // both named this worker while its console snapshot still stopped at "online as worker".
+        var executedLine = $"run {run.Id:D} executing in";
+        var claimDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        while (!owner.Output.Any(line => line.Contains(executedLine, StringComparison.Ordinal)))
+        {
+            Assert.True(
+                DateTime.UtcNow < claimDeadline,
+                $"the owner worker '{owner.Name}' never reported executing run {run.Id:D}.");
+            await Task.Delay(250, TestContext.Current.CancellationToken);
+        }
+
         foreach (var other in otherWorkers)
         {
             Assert.DoesNotContain(
@@ -284,7 +297,10 @@ internal sealed class ConcurrencyHost : RecoveryHost
                 line => line.Contains($"run {run.Id:D} executing in", StringComparison.Ordinal));
         }
 
-        var lines = await ReadLogLinesAsync(run.Id);
+        // The drained log lines land around the terminal report; they are waited for too.
+        var lines = await WaitForLogLinesAsync(
+            run.Id,
+            waited => waited.Any(line => line.Message.Contains(owner.Name, StringComparison.Ordinal)));
         Assert.Contains(lines, line => line.Message.Contains(owner.Name, StringComparison.Ordinal));
         foreach (var other in otherWorkers)
         {

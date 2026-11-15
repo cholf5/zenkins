@@ -83,27 +83,42 @@ public sealed class WorkerRunProcessE2ETests
             var work1 = Path.Combine(workRoot, run1.ToString("D"));
 
             // The temp stream files live from the run's pipeline start to the cleanup-before-report
-            // edge, and the status wait reads the same loaded-runner database the server writes to
-            // while it streams: its reads can stretch long enough to consume the file's whole
-            // lifetime before the file wait takes its first look - recorded red on windows twice,
-            // the run green both times. The two waits therefore run together, from the trigger: the
-            // file wait covers the file's entire lifetime (the first echoed line on disk while the
-            // child still has two 5s sleeps ahead of it is the incremental-capture property), and
-            // stderr must exist inside the same window. The complete content and its order are
-            // asserted from the database rows below, which persist.
-            var stdoutPath = Path.Combine(work1, "temp", "stdout.log");
-            var stderrPath = Path.Combine(work1, "temp", "stderr.log");
+            // edge (~15s on this pipeline). On a loaded runner the test's own polling can be starved
+            // past that whole window - three red windows-runner runs, each with the run itself green
+            // (Success in ~17s, 9 persisted rows) - so the creations are observed through a
+            // FileSystemWatcher: the OS buffers the notifications, so no scheduling delay can skip
+            // them, and the wait completes at the test's next wake. The complete content and its
+            // order are asserted from the persisted database rows below, which do not expire.
+            Directory.CreateDirectory(workRoot);
+            var stdoutSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stderrSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var tempWatcher = new FileSystemWatcher(workRoot, "*.log")
+            {
+                IncludeSubdirectories = true,
+                InternalBufferSize = 64 * 1024,
+            };
+            tempWatcher.Created += (_, args) =>
+            {
+                var name = Path.GetFileName(args.FullPath);
+                if (name == Zenkins.Worker.Pipelines.RunLogWriters.StdOutLogFileName)
+                {
+                    stdoutSeen.TrySetResult();
+                }
+                else if (name == Zenkins.Worker.Pipelines.RunLogWriters.StdErrorLogFileName)
+                {
+                    stderrSeen.TrySetResult();
+                }
+            };
+            tempWatcher.EnableRaisingEvents = true;
+
             try
             {
                 await Task.WhenAll(
                     WaitForRunStatusAsync(databasePath, run1, "Running", RunTerminalTimeout, cancellationToken),
-                    WaitForLogFileAsync(
-                        stdoutPath,
-                        content => ContainsInOrder(content, ["first"]) && File.Exists(stderrPath),
-                        RunTerminalTimeout,
-                        cancellationToken));
+                    stdoutSeen.Task.WaitAsync(RunTerminalTimeout, cancellationToken),
+                    stderrSeen.Task.WaitAsync(RunTerminalTimeout, cancellationToken));
             }
-            catch (TimeoutException failure)
+            catch (Exception failure) when (failure is TimeoutException or InvalidOperationException)
             {
                 // The temp files are created eagerly with the run's execution (RunLogWriters), so a
                 // missing file means the worker never reached its pipeline - the state that matters
@@ -183,54 +198,6 @@ public sealed class WorkerRunProcessE2ETests
         {
             Assert.True(Directory.Exists(Path.Combine(workPath, "temp")), $"temp/ missing in {workPath}");
         }
-    }
-
-    private static bool ContainsInOrder(string content, string[] expectedLines)
-    {
-        var lines = content.Split('\n');
-        var index = 0;
-        foreach (var line in lines)
-        {
-            if (index < expectedLines.Length && line.TrimEnd('\r') == expectedLines[index])
-            {
-                index++;
-            }
-        }
-
-        return index == expectedLines.Length;
-    }
-
-    private static async Task WaitForLogFileAsync(
-        string path,
-        Func<string, bool> predicate,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        string? lastContent = null;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (File.Exists(path))
-            {
-                try
-                {
-                    lastContent = await File.ReadAllTextAsync(path, cancellationToken);
-                    if (predicate(lastContent))
-                    {
-                        return;
-                    }
-                }
-                catch (IOException)
-                {
-                    // The writer holds the file; retry.
-                }
-            }
-
-            await Task.Delay(250, cancellationToken);
-        }
-
-        throw new TimeoutException(
-            $"The log file {path} never satisfied the predicate. Last content: {lastContent ?? "(file never appeared)"}");
     }
 
     /// <summary>
