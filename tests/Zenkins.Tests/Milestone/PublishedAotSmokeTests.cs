@@ -87,7 +87,16 @@ public sealed partial class PublishedAotSmokeTests : IClassFixture<PublishedAotS
                 Assert.Equal(0, step.ExitCode);
             });
 
-            var log = await host.ReadLogLinesAsync(runId);
+            // F-008's drain lands the drained log lines upstream around the terminal report ("on
+            // their way" when the status flips), so the lines are waited for, not read once: on a
+            // loaded runner the terminal row can beat the drained batches by seconds, and a single
+            // read then sees an empty log for a green run (recorded red on the macos runner).
+            var log = await host.WaitForLogLinesAsync(
+                runId,
+                lines => lines.Any(line => line.Message == MilestonePipelines.Greeting)
+                    && lines.Any(line => line.Message == "building")
+                    && lines.Any(line => line.Message == "probe-written")
+                    && lines.Any(line => line.Message == "***"));
             Assert.Single(log, line => line.Message == MilestonePipelines.Greeting);
             Assert.Equal(steps[0].Id, log.First(line => line.Message == MilestonePipelines.Greeting).StepId);
             Assert.Single(log, line => line.Message == "building");

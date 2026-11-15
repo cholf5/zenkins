@@ -59,10 +59,14 @@ public sealed class WorkerRunProcessE2ETests
 
             // F-014: a run executes the project's pipeline from its Git repository, so the fixture is a
             // real repository (a clone the worker really performs) and the project row is pointed at it.
+            // The 5s spacing keeps the temp stream file alive ~15s: the file dies with temp/ at the
+            // cleanup-before-report edge, and a CI runner under load can starve this test's polls for
+            // longer than a short file's whole lifetime (recorded red on windows while the run itself
+            // was green) - the widest window the child can offer is part of the observation.
             using var repository = PipelineRepository.Create(
                 PipelineTestData.Pipeline(
                     "e2e",
-                    PipelineTestData.Step("Echo", "echo-each", "2000", "first", "second", "third")));
+                    PipelineTestData.Step("Echo", "echo-each", "5000", "first", "second", "third")));
             var projectId = await CreateProjectAsync(owner, $"e2e-run-{Guid.NewGuid():N}".ToLowerInvariant());
             await SetProjectRepositoryAsync(databasePath, projectId, repository.FileUrl, cancellationToken);
 
@@ -80,14 +84,16 @@ public sealed class WorkerRunProcessE2ETests
 
             await WaitForRunStatusAsync(databasePath, run1, "Running", RunTerminalTimeout, cancellationToken);
 
-            // The streamed output must be on disk while the child is still running: three lines
-            // arrive 2s apart, so the full content observable here proves incremental capture into
-            // the per-stream temp log (the run only completes ~2s after the last line).
+            // The temp stream file must exist while the child is still running: the first echoed line
+            // is on disk while the child still has two 5s sleeps ahead of it, which is the
+            // incremental-capture property. The complete content and its order are asserted from the
+            // database rows below (they persist); the file assert takes the widest window the child
+            // offers and only asks for the first line.
             try
             {
                 await WaitForLogFileAsync(
                     Path.Combine(work1, "temp", "stdout.log"),
-                    content => ContainsInOrder(content, ["first", "second", "third"]),
+                    content => ContainsInOrder(content, ["first"]),
                     RunTerminalTimeout,
                     cancellationToken);
             }
@@ -100,7 +106,7 @@ public sealed class WorkerRunProcessE2ETests
                 throw new TimeoutException(
                     failure.Message
                     + Environment.NewLine
-                    + await DescribeAsync(databasePath, run1, worker, workerLogs, serverLogs, cancellationToken));
+                    + await DescribeAsync(databasePath, run1, work1, worker, workerLogs, serverLogs, cancellationToken));
             }
             Assert.True(
                 File.Exists(Path.Combine(work1, "temp", "stderr.log")),
@@ -338,14 +344,19 @@ public sealed class WorkerRunProcessE2ETests
 
     /// <summary>
     /// Everything the CI log needs when a phase of this test times out: the run's row (a Failed row
-    /// means the worker reported; a Running row means it never did), the worker process's liveness,
-    /// the worker's whole console (its claim, accept and pipeline lines are the story of where it
-    /// stopped) and the server's last console lines. The E2E redirects both processes' output, so
-    /// none of this reaches the CI log any other way.
+    /// means the worker reported; a Running row means it never did) with its stored start/end
+    /// timestamps - the run's real duration is what separates "the child never ran long" from "the
+    /// test never got scheduled" -, the work directory's shape (temp/ dies at the
+    /// cleanup-before-report edge, so its absence at diagnosis time is itself a timestamp), the
+    /// persisted log-row count, the worker process's liveness, the worker's whole console (its
+    /// claim, accept and pipeline lines are the story of where it stopped) and the server's last
+    /// console lines. The E2E redirects both processes' output, so none of this reaches the CI log
+    /// any other way.
     /// </summary>
     private static async Task<string> DescribeAsync(
         string databasePath,
         Guid runId,
+        string workPath,
         Process worker,
         ProcessLog workerLogs,
         ProcessLog serverLogs,
@@ -354,21 +365,130 @@ public sealed class WorkerRunProcessE2ETests
         string runRow;
         try
         {
-            var (status, exitCode) = await ReadRunRowAsync(databasePath, runId, cancellationToken);
-            runRow = "status=" + status + ", exitCode=" + (exitCode?.ToString() ?? "null");
+            var (status, exitCode, startedAt, endedAt) =
+                await ReadRunRowForDiagnosisAsync(databasePath, runId, cancellationToken);
+            var elapsed = startedAt is { } start && endedAt is { } end
+                ? $" ({(end - start).TotalSeconds:0.#}s)"
+                : string.Empty;
+            runRow = $"status={status}, exitCode={(exitCode?.ToString() ?? "null")}"
+                + $", startedAt={startedAt?.ToString("O") ?? "null"}, endedAt={endedAt?.ToString("O") ?? "null"}{elapsed}";
         }
         catch (Exception failure)
         {
             runRow = $"unreadable ({failure.GetType().Name}: {failure.Message})";
         }
 
+        string logRows;
+        try
+        {
+            var (count, minSeq, maxSeq) = await ReadLogRowSummaryAsync(databasePath, runId, cancellationToken);
+            logRows = $"count={count}, seq=[{minSeq}..{maxSeq}]";
+        }
+        catch (Exception failure)
+        {
+            logRows = $"unreadable ({failure.GetType().Name}: {failure.Message})";
+        }
+
         var workerState = worker.HasExited ? $"exited with {worker.ExitCode}" : "still running";
 
         return $"--- E2E diagnosis: run row: {runRow}; worker process: {workerState}."
+            + Environment.NewLine + $"--- persisted log rows: {logRows}."
+            + Environment.NewLine + $"--- work directory: {DescribeTree(workPath)}"
             + Environment.NewLine + "--- worker console:"
             + Environment.NewLine + Indent(workerLogs.Snapshot())
             + "--- server console (last 40 lines):"
             + Environment.NewLine + Indent(Tail(serverLogs.Snapshot(), 40));
+    }
+
+    /// <summary>The run row's status, exit code and stored start/end timestamps.</summary>
+    private static async Task<(string? Status, int? ExitCode, DateTimeOffset? StartedAt, DateTimeOffset? EndedAt)>
+        ReadRunRowForDiagnosisAsync(string databasePath, Guid runId, CancellationToken cancellationToken)
+    {
+        var lockRetryDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (true)
+        {
+            try
+            {
+                await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+                await connection.OpenAsync(cancellationToken);
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    "SELECT \"Status\", \"ExitCode\", \"StartedAt\", \"EndedAt\" FROM \"BuildRuns\" WHERE \"Id\" = $id";
+                command.Parameters.AddWithValue("$id", runId.ToString().ToUpperInvariant());
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                if (await reader.ReadAsync(cancellationToken))
+                {
+                    return (
+                        reader.GetString(0),
+                        reader.IsDBNull(1) ? null : reader.GetInt32(1),
+                        reader.IsDBNull(2) ? null : reader.GetDateTimeOffset(2),
+                        reader.IsDBNull(3) ? null : reader.GetDateTimeOffset(3));
+                }
+
+                return (null, null, null, null);
+            }
+            catch (SqliteException) when (DateTime.UtcNow < lockRetryDeadline)
+            {
+                // The server may hold a write lock; poll again.
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+    }
+
+    /// <summary>How many log rows the run persisted, and their sequence span.</summary>
+    private static async Task<(long Count, long MinSeq, long MaxSeq)> ReadLogRowSummaryAsync(
+        string databasePath,
+        Guid runId,
+        CancellationToken cancellationToken)
+    {
+        var lockRetryDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (true)
+        {
+            try
+            {
+                await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+                await connection.OpenAsync(cancellationToken);
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    "SELECT COUNT(*), MIN(\"Seq\"), MAX(\"Seq\") FROM \"BuildLogs\" WHERE \"RunId\" = $id";
+                command.Parameters.AddWithValue("$id", runId.ToString().ToUpperInvariant());
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                await reader.ReadAsync(cancellationToken);
+                return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
+            }
+            catch (SqliteException) when (DateTime.UtcNow < lockRetryDeadline)
+            {
+                // The server may hold a write lock; poll again.
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+    }
+
+    /// <summary>The work directory's top-level shape, with temp/'s files when it survived.</summary>
+    private static string DescribeTree(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            return "(the run's work directory does not exist)";
+        }
+
+        var lines = new List<string>();
+        foreach (var entry in new DirectoryInfo(root).EnumerateFileSystemInfos("*", SearchOption.TopDirectoryOnly))
+        {
+            lines.Add(entry is DirectoryInfo directory
+                ? $"{entry.Name}/ ({Directory.GetFiles(entry.FullName, "*", SearchOption.AllDirectories).Length} files inside)"
+                : $"{entry.Name} ({((FileInfo)entry).Length} bytes)");
+        }
+
+        var temp = Path.Combine(root, "temp");
+        if (Directory.Exists(temp))
+        {
+            lines.Add("temp/ holds: " + string.Join(", ", Directory.EnumerateFiles(temp).Select(Path.GetFileName)));
+        }
+
+        return lines.Count > 0 ? string.Join("; ", lines) : "(empty)";
     }
 
     private static string Indent(string[] lines) =>
