@@ -211,7 +211,9 @@ public sealed partial class PublishedAotSmokeTests : IClassFixture<PublishedAotS
 
                 // The clone's stderr embeds each host's own temporary root (and run id); everything
                 // else must match byte for byte. Durations inside the one synthetic "exited with
-                // code N after Xs" line are timing, not semantics, and are masked.
+                // code N after Xs" line are timing, not semantics, and are masked. The run id is
+                // masked in both separator forms: git echoes the platform's own separators, and a
+                // windows clone's backslash path is not touched by the forward-slash replace.
                 outcomes[mode] = new AotOutcomeComparison(
                     run.Status,
                     run.ExitCode,
@@ -220,7 +222,8 @@ public sealed partial class PublishedAotSmokeTests : IClassFixture<PublishedAotS
                     [.. steps.Select(step => (step.Index, step.Name, step.Status, step.ExitCode, step.FailureReason))],
                     [.. log.Select(line => NormalizeDuration(line.Message)
                         .Replace(host.RootPath, "<host-root>")
-                        .Replace($"/work/{runId}/", "/work/<run-id>/"))],
+                        .Replace($"/work/{runId}/", "/work/<run-id>/")
+                        .Replace($"\\work\\{runId}\\", "\\work\\<run-id>\\"))],
                     artifact.TotalBytes,
                     log.Count(line => line.Message == "***"));
                 artifactBytes[mode] = await host.DownloadAsync($"/runs/{runId}/artifacts/{artifact.Id}/download");
