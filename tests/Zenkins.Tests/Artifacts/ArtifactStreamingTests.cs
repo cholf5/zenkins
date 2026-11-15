@@ -329,6 +329,17 @@ public sealed class ArtifactStreamingTests
                     continue;
                 }
 
+                // The snapshot covers only archive-shaped files, and that is a narrowing with a
+                // recorded reason: the whole-root form raced every other test's scratch files
+                // (parallel collections share this temp root, and the windows runner recorded a
+                // foreign scratch path appearing mid-download). The property this fact owns - the
+                // download materialises no archive - is a zip-shaped file; the store-side snapshot
+                // in the test still proves the store grew by nothing.
+                if (!relative.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 entries.Add(relative + "|" + file.Length);
             }
             catch (IOException)
