@@ -6,6 +6,13 @@ product version itself lives in the single `Version` property of `Directory.Buil
 P-001); both binaries print it for `--version`, and the web UI's sidebar footer shows it on every
 signed-in page, so a tag below can be checked against the binaries that carry it.
 
+## Unreleased
+
+- **License chosen: Apache-2.0.** The 1.0.0 source distribution shipped with no license granted
+  (the PRD said TBD); that entry below stays as the historical record. The decision is now made:
+  the Apache License, Version 2.0 text is in `LICENSE` (SPDX: `Apache-2.0`), the PRD and README
+  point at it, and the bundled third-party components remain noted in `THIRD-PARTY-NOTICES.md`.
+
 ## 1.0.0 — 2026-11-15 (tag `v1.0`)
 
 The first tagged release, closing roadmap Phase 6. A build worker you deploy next to your code: an

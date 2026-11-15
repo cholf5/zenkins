@@ -5,7 +5,7 @@
 **产品类型：** Self-hosted CI Server
 **技术栈：** C# / .NET / Blazor Server / Lua
 **目标平台：** Windows / Linux / macOS
-**开源协议：** TBD（建议 MIT 或 Apache-2.0）
+**开源协议：** Apache-2.0（见仓库根目录的 [`LICENSE`](../LICENSE)）
 
 ---
 

@@ -133,7 +133,6 @@ Candidate tasks:
 
 Future ideas that are not yet committed:
 
-- License decision: MIT vs Apache-2.0 (PRD says TBD).
 - Docker images (explicitly out of v1 scope, but the most requested thing a self-hosted CI gets asked for).
 - DAG / parallel pipelines, matrix builds, scheduled triggers.
 - Plugin system and third-party marketplace.
