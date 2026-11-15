@@ -48,3 +48,4 @@ appsettings.Development.json
 *.pfx
 *.pem
 *.key
+.zcode
