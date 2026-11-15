@@ -82,20 +82,26 @@ public sealed class WorkerRunProcessE2ETests
             var run1 = await TriggerRunAsync(owner, projectId, cancellationToken);
             var work1 = Path.Combine(workRoot, run1.ToString("D"));
 
-            await WaitForRunStatusAsync(databasePath, run1, "Running", RunTerminalTimeout, cancellationToken);
-
-            // The temp stream file must exist while the child is still running: the first echoed line
-            // is on disk while the child still has two 5s sleeps ahead of it, which is the
-            // incremental-capture property. The complete content and its order are asserted from the
-            // database rows below (they persist); the file assert takes the widest window the child
-            // offers and only asks for the first line.
+            // The temp stream files live from the run's pipeline start to the cleanup-before-report
+            // edge, and the status wait reads the same loaded-runner database the server writes to
+            // while it streams: its reads can stretch long enough to consume the file's whole
+            // lifetime before the file wait takes its first look - recorded red on windows twice,
+            // the run green both times. The two waits therefore run together, from the trigger: the
+            // file wait covers the file's entire lifetime (the first echoed line on disk while the
+            // child still has two 5s sleeps ahead of it is the incremental-capture property), and
+            // stderr must exist inside the same window. The complete content and its order are
+            // asserted from the database rows below, which persist.
+            var stdoutPath = Path.Combine(work1, "temp", "stdout.log");
+            var stderrPath = Path.Combine(work1, "temp", "stderr.log");
             try
             {
-                await WaitForLogFileAsync(
-                    Path.Combine(work1, "temp", "stdout.log"),
-                    content => ContainsInOrder(content, ["first"]),
-                    RunTerminalTimeout,
-                    cancellationToken);
+                await Task.WhenAll(
+                    WaitForRunStatusAsync(databasePath, run1, "Running", RunTerminalTimeout, cancellationToken),
+                    WaitForLogFileAsync(
+                        stdoutPath,
+                        content => ContainsInOrder(content, ["first"]) && File.Exists(stderrPath),
+                        RunTerminalTimeout,
+                        cancellationToken));
             }
             catch (TimeoutException failure)
             {
@@ -108,9 +114,6 @@ public sealed class WorkerRunProcessE2ETests
                     + Environment.NewLine
                     + await DescribeAsync(databasePath, run1, work1, worker, workerLogs, serverLogs, cancellationToken));
             }
-            Assert.True(
-                File.Exists(Path.Combine(work1, "temp", "stderr.log")),
-                "the stderr log file was not created in temp/");
 
             var (status1, exitCode1) = await WaitUntilTerminalAsync(databasePath, run1, cancellationToken);
             Assert.Equal("Success", status1);

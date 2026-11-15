@@ -27,6 +27,12 @@ internal sealed record MilestoneRun(
     string? PipelineSpecJson,
     DateTimeOffset? EndedAt);
 
+/// <summary>
+/// One run's stored execution window: <c>StartedAt</c> is stamped at the accept edge, <c>EndedAt</c>
+/// at the terminal report - the server-written record of when the worker really held the run.
+/// </summary>
+internal sealed record RunInterval(Guid Id, DateTimeOffset? StartedAt, DateTimeOffset? EndedAt);
+
 /// <summary>One recorded step of a run.</summary>
 internal sealed record MilestoneStep(
     Guid Id,
@@ -884,6 +890,23 @@ internal class MilestoneHost : IDisposable
         reader.IsDBNull(7) ? null : reader.GetString(7),
         reader.IsDBNull(8) ? null : reader.GetString(8),
         reader.IsDBNull(9) ? null : reader.GetDateTimeOffset(9));
+
+    /// <summary>
+    /// The stored execution windows of the given runs. Sampled counters can miss a
+    /// two-runs-at-once moment on a loaded runner; these intervals are the same fact, written down
+    /// by the server itself.
+    /// </summary>
+    public Task<IReadOnlyList<RunInterval>> ReadRunIntervalsAsync(IReadOnlyList<Guid> runIds)
+    {
+        var ids = string.Join(", ", runIds.Select(id => $"'{id.ToString("D").ToUpperInvariant()}'"));
+        return ReadAsync(
+            "SELECT \"Id\", \"StartedAt\", \"EndedAt\" FROM \"BuildRuns\" "
+            + $"WHERE \"Id\" IN ({ids})",
+            reader => new RunInterval(
+                Guid.Parse(reader.GetString(0)),
+                reader.IsDBNull(1) ? null : reader.GetDateTimeOffset(1),
+                reader.IsDBNull(2) ? null : reader.GetDateTimeOffset(2)));
+    }
 
     /// <summary>Every recorded step of one run, in spec order.</summary>
     public Task<IReadOnlyList<MilestoneStep>> ReadStepsAsync(Guid runId) =>

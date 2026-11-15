@@ -50,7 +50,6 @@ public sealed class ConcurrencyMaxConcurrencyTests
         }
 
         var remaining = runIds.ToHashSet();
-        var maxDuoRunning = 0;
         var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(3);
         while (remaining.Count > 0)
         {
@@ -67,7 +66,6 @@ public sealed class ConcurrencyMaxConcurrencyTests
             Assert.True(
                 duoAssigned <= 2,
                 $"worker '{duo.Name}' holds {duoAssigned} assigned runs (running + leases) - more than 2.");
-            maxDuoRunning = Math.Max(maxDuoRunning, duoRunning);
 
             foreach (var (rowId, rowName) in new[] { (singleRow.Id, single.Name), (singleBRow.Id, singleB.Name) })
             {
@@ -94,7 +92,19 @@ public sealed class ConcurrencyMaxConcurrencyTests
         }
 
         // The ceiling was exercised, not skirted: the two-loop worker really held two runs at once.
-        Assert.Equal(2, maxDuoRunning);
+        // The sampled counter above cannot prove that on a loaded runner - a slow poll stretch eats
+        // the overlap moment while the run rows carry it - so the stored intervals decide: two of
+        // the duo's runs whose [StartedAt, EndedAt] windows overlap is the same fact, written down
+        // by the server at the accept and terminal edges.
+        var intervals = await host.ReadRunIntervalsAsync(runIds);
+        Assert.Contains(
+            intervals,
+            run => run.StartedAt is { } start && run.EndedAt is { } end
+                && intervals.Any(other =>
+                    other.Id != run.Id
+                    && other.StartedAt is { } otherStart
+                    && other.EndedAt is { } otherEnd
+                    && otherStart < end && start < otherEnd));
 
         // Every run finished in the state its worker reported, and the ring's heartbeats kept
         // reporting the same declared concurrency throughout.

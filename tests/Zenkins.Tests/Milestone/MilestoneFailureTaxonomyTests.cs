@@ -53,8 +53,13 @@ public sealed class MilestoneFailureTaxonomyTests
         Assert.Equal(repository.MainTip, missing.GitCommit);
         Assert.NotNull(missing.EndedAt);
         Assert.Empty(await host.ReadStepsAsync(missing.Id));
+        // F-008's drain lands the log lines around the terminal report ("on their way"), so the
+        // lines are waited for, not read once - a loaded runner legitimately saw an empty log for
+        // these green runs (recorded red on the ubuntu runner).
         Assert.Contains(
-            await host.ReadLogLinesAsync(missing.Id),
+            await host.WaitForLogLinesAsync(
+                missing.Id,
+                lines => lines.Any(line => line.Message.Contains("not found", StringComparison.Ordinal))),
             line => line.Message.Contains("not found", StringComparison.Ordinal));
         Assert.False(File.Exists(missingMarker), "a step process ran for a run whose repository has no pipeline file.");
 
@@ -68,7 +73,9 @@ public sealed class MilestoneFailureTaxonomyTests
         Assert.NotNull(syntax.EndedAt);
         Assert.Empty(await host.ReadStepsAsync(syntax.Id));
         Assert.Contains(
-            await host.ReadLogLinesAsync(syntax.Id),
+            await host.WaitForLogLinesAsync(
+                syntax.Id,
+                lines => lines.Any(line => line.Message.Contains("pipeline.lua", StringComparison.Ordinal))),
             line => line.Message.Contains("pipeline.lua", StringComparison.Ordinal));
         Assert.False(File.Exists(syntaxMarker), "a step process ran for a definition that never compiled.");
 
@@ -105,7 +112,9 @@ public sealed class MilestoneFailureTaxonomyTests
         Assert.NotNull(runaway.EndedAt);
         Assert.Empty(await host.ReadStepsAsync(runaway.Id));
         Assert.Contains(
-            await host.ReadLogLinesAsync(runaway.Id),
+            await host.WaitForLogLinesAsync(
+                runaway.Id,
+                lines => lines.Any(line => line.Message.Contains("deadline", StringComparison.Ordinal))),
             line => line.Message.Contains("deadline", StringComparison.Ordinal));
         Assert.False(File.Exists(runawayMarker), "a step process ran for a definition that never returned.");
         Assert.True(
