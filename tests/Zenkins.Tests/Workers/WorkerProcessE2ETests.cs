@@ -60,7 +60,7 @@ public sealed class WorkerProcessE2ETests
             using var owner = await SignInOwnerAsync(serverUrl, cancellationToken);
             var registrationToken = await MintRegistrationTokenAsync(owner, cancellationToken);
 
-            using var worker = StartWorker(dotnet, workerDll, serverUrl, registrationToken, workerName, workerDataDir);
+            var worker = StartWorker(dotnet, workerDll, serverUrl, registrationToken, workerName, workerDataDir);
             using var workerLogs = new ProcessLog(worker);
             leakedWorker = worker;
             leakedWorker = worker;
@@ -123,6 +123,9 @@ public sealed class WorkerProcessE2ETests
             // crosses a process boundary - this is the only stop. A worker left running holds the
             // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
             TryStop(leakedWorker);
+            leakedWorker?.Dispose();
+            TryStop(server);
+            server.Dispose();
             DeleteTempRoot(tempRoot);
         }
     }
@@ -140,7 +143,7 @@ public sealed class WorkerProcessE2ETests
 
         try
         {
-            using var worker = StartWorker(ResolveDotnetPath(), workerDll, serverUrl: null, registrationToken: null, workerName: "bad-cfg", workerDataDir: tempRoot);
+            var worker = StartWorker(ResolveDotnetPath(), workerDll, serverUrl: null, registrationToken: null, workerName: "bad-cfg", workerDataDir: tempRoot);
             using var workerLogs = new ProcessLog(worker);
             leakedWorker = worker;
 
@@ -161,6 +164,7 @@ public sealed class WorkerProcessE2ETests
             // crosses a process boundary - this is the only stop. A worker left running holds the
             // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
             TryStop(leakedWorker);
+            leakedWorker?.Dispose();
             DeleteTempRoot(tempRoot);
         }
     }
@@ -182,7 +186,7 @@ public sealed class WorkerProcessE2ETests
         Process? leakedWorker = null;
         try
         {
-            using var worker = StartWorker(
+            var worker = StartWorker(
                 ResolveDotnetPath(), workerDll, stub.Url, "zreg_definitely-rejected-token", "rej400-agent", tempRoot);
             using var workerLogs = new ProcessLog(worker);
             leakedWorker = worker;
@@ -205,6 +209,7 @@ public sealed class WorkerProcessE2ETests
             // crosses a process boundary - this is the only stop. A worker left running holds the
             // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
             TryStop(leakedWorker);
+            leakedWorker?.Dispose();
             DeleteTempRoot(tempRoot);
         }
     }
@@ -228,7 +233,7 @@ public sealed class WorkerProcessE2ETests
         Process? leakedWorker = null;
         try
         {
-            using var worker = StartWorker(
+            var worker = StartWorker(
                 ResolveDotnetPath(), workerDll, stub.Url, "zreg_conflicting-token", "conflict-agent", tempRoot);
             using var workerLogs = new ProcessLog(worker);
             leakedWorker = worker;
@@ -261,6 +266,7 @@ public sealed class WorkerProcessE2ETests
             // crosses a process boundary - this is the only stop. A worker left running holds the
             // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
             TryStop(leakedWorker);
+            leakedWorker?.Dispose();
             DeleteTempRoot(tempRoot);
         }
     }
@@ -282,7 +288,7 @@ public sealed class WorkerProcessE2ETests
         Process? leakedWorker = null;
         try
         {
-            using var worker = StartWorker(
+            var worker = StartWorker(
                 ResolveDotnetPath(), workerDll, stub.Url, "zreg_black-hole-token", "black-hole-agent", tempRoot);
             using var workerLogs = new ProcessLog(worker);
             leakedWorker = worker;
@@ -324,6 +330,7 @@ public sealed class WorkerProcessE2ETests
             // crosses a process boundary - this is the only stop. A worker left running holds the
             // Release Worker.dll open, and the PublishAot suite's republish cannot survive that.
             TryStop(leakedWorker);
+            leakedWorker?.Dispose();
             DeleteTempRoot(tempRoot);
         }
     }
