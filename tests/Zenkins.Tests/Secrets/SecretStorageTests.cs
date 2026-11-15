@@ -36,7 +36,7 @@ public sealed class SecretStorageTests
         // it) fails here even if the row's Ciphertext column still looks encrypted.
         foreach (var path in DatabaseFiles(host.Host.DatabasePath))
         {
-            var bytes = await File.ReadAllBytesAsync(path, CancellationToken);
+            var bytes = await TestFileRead.ReadHeldBytesAsync(path, CancellationToken);
             var text = System.Text.Encoding.UTF8.GetString(bytes);
             Assert.DoesNotContain(Marker, text, StringComparison.Ordinal);
         }

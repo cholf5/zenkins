@@ -48,31 +48,68 @@ public sealed class GitLfsTests
     }
 
     /// <summary>
-    /// <paramref name="prefix"/> plus every inherited <c>PATH</c> entry that does not contain a
-    /// <c>git-lfs</c> executable - a PATH on which <c>git lfs</c> provably cannot resolve, while git's
-    /// own POSIX helper scripts still find the utilities they shell out to.
+    /// <paramref name="prefix"/> plus every inherited <c>PATH</c> entry, with a <c>git-lfs</c> that
+    /// provably cannot resolve. An entry holding a git-lfs binary is not dropped outright - a CI
+    /// runner's <c>/usr/bin</c> also holds the utilities git's own helper scripts shell out to
+    /// (basename, sed, uname), and dropping it killed the clone with git exit 127 there. Instead the
+    /// entry's executables are mirrored into a scratch directory (inside <paramref name="directory"/>,
+    /// so it dies with the fixture) minus every <c>git-lfs*</c> binary: the utilities stay reachable
+    /// and no git-lfs can be resolved anywhere on the PATH.
     /// </summary>
-    private static string PathWithoutGitLfs(string prefix)
+    private static string PathWithoutGitLfs(string prefix, GitTestDirectory directory)
     {
         var inherited = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        var kept = inherited
-            .Split(Path.PathSeparator)
-            .Where(directory => !string.IsNullOrWhiteSpace(directory))
-            .Where(directory => !File.Exists(Path.Combine(directory, "git-lfs")))
-            .ToArray();
-        return string.Join(Path.PathSeparator, [prefix, .. kept]);
+        var entries = new List<string> { prefix };
+        var mirrorIndex = 0;
+        foreach (var entry in inherited.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                continue;
+            }
+
+            if (!File.Exists(Path.Combine(entry, "git-lfs")))
+            {
+                entries.Add(entry);
+                continue;
+            }
+
+            var mirror = directory.Combine($"path-mirror-{mirrorIndex++}");
+            Directory.CreateDirectory(mirror);
+            foreach (var binary in Directory.EnumerateFiles(entry))
+            {
+                var name = Path.GetFileName(binary);
+                if (name.StartsWith("git-lfs", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                Directory.CreateSymbolicLink(Path.Combine(mirror, name), binary);
+            }
+
+            entries.Add(mirror);
+        }
+
+        return string.Join(Path.PathSeparator, entries);
     }
 
     [Fact]
     public async Task Without_git_lfs_one_warning_names_the_tool_and_the_run_continues()
     {
+        // The recorded skip (Q-009's contract): this fact observes the run through the recording
+        // shim, which Windows cannot exec - the reason is recorded there, never silent.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }
+
         using var fixture = GitLfsFixture.Create();
 
-        // The child's PATH is the recording shim's directory plus every inherited directory that does
-        // NOT hold a git-lfs binary: git's own helper scripts still work (they need basename/sed/uname),
-        // and no git-lfs can be resolved. If a machine still resolved an lfs binary through git's exec
-        // path, the "exactly one warning" assertion fails loudly rather than letting the missing-binary
-        // branch go untested.
+        // The child's PATH is the recording shim's directory plus every inherited entry, with any
+        // git-lfs-bearing entry mirrored minus git-lfs (see PathWithoutGitLfs): git's own helper
+        // scripts still work (they need basename/sed/uname), and no git-lfs can be resolved. If a
+        // machine still resolved an lfs binary through git's exec path, the "exactly one warning"
+        // assertion fails loudly rather than letting the missing-binary branch go untested.
         using var directory = new GitTestDirectory("lfs-absent");
         using var shim = RecordingGitShim.Create(directory, GitCli.ResolveGitPath());
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
@@ -85,7 +122,7 @@ public sealed class GitLfsTests
                 gitExecutable: shim.GitPath,
                 extraEnvironment: new Dictionary<string, string?>(StringComparer.Ordinal)
                 {
-                    ["PATH"] = PathWithoutGitLfs(shim.BinDirectory),
+                    ["PATH"] = PathWithoutGitLfs(shim.BinDirectory, directory),
                 }));
 
         var result = await workspace.CloneAsync(

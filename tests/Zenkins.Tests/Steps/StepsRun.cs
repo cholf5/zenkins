@@ -522,13 +522,10 @@ internal sealed class StepsRun : IDisposable
     public void Dispose()
     {
         WorkerClient?.Dispose();
-        try
-        {
-            Directory.Delete(_workRoot, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
+        // Q-011's cleanup contract via TestCleanup: the tree holds a cloned repository, whose pack
+        // and object files are read-only (a Windows delete reports UnauthorizedAccessException for
+        // them), and a surviving tree must be reported, never thrown and never silent.
+        TestCleanup.DeleteTree(_workRoot);
     }
 
     /// <summary>Records every transition the executor sends, so a test can assert on the protocol itself.</summary>

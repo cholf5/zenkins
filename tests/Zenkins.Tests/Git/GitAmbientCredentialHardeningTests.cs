@@ -63,6 +63,13 @@ public sealed class GitAmbientCredentialHardeningTests
     public async Task With_no_credential_assigned_a_credential_helper_on_the_host_is_not_used()
     {
         using var fixture = GitFixtureRepository.Create("f018-ambient");
+        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
+        // through, so the fact is named as skipped there rather than silently red or green.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {{
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }}
+
         var token = NewToken();
         using var server = AuthenticatedHttpsGitServer.Start(fixture.BarePath, token);
         using var directory = new GitTestDirectory("f018-ambient-run");

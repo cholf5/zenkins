@@ -293,22 +293,9 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
 
     private static void DeleteDirectory(string path)
     {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            try
-            {
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, recursive: true);
-                }
-
-                return;
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(200);
-            }
-        }
+        // Q-011's cleanup contract via TestCleanup: a scratch root can hold read-only files, which
+        // no retry count deletes on Windows until the attribute is cleared.
+        TestCleanup.DeleteTree(path);
     }
 
     private static int PickFreePort()
@@ -400,17 +387,8 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
 
         public ValueTask DisposeAsync()
         {
-            try
-            {
-                if (Directory.Exists(_root))
-                {
-                    Directory.Delete(_root, recursive: true);
-                }
-            }
-            catch (IOException)
-            {
-            }
-
+            // Q-011's cleanup contract via TestCleanup (read-only files survive a plain Windows delete).
+            TestCleanup.DeleteTree(_root);
             return ValueTask.CompletedTask;
         }
 

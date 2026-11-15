@@ -128,12 +128,8 @@ public sealed class InProcessWorker : IAsyncDisposable
             // The runner's shutdown is best effort in test teardown; the work root is removed below.
         }
 
-        try
-        {
-            Directory.Delete(WorkRoot, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
+        // Q-011's cleanup contract via TestCleanup: the tree holds a cloned repository with
+        // read-only pack files (a Windows delete reports UnauthorizedAccessException for them).
+        TestCleanup.DeleteTree(WorkRoot);
     }
 }

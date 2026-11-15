@@ -427,19 +427,12 @@ internal sealed class AuthenticatedHttpsGitServer : IDisposable
         _serverCertificate.Dispose();
         _stop.Dispose();
 
-        try
+        // The served root holds a bare git repository with read-only pack files - the whole-repo
+        // cleanup contract clears the attribute on Windows before deleting (TestCleanup).
+        var directory = Path.GetDirectoryName(_certificateAuthorityPath);
+        if (directory is not null)
         {
-            var directory = Path.GetDirectoryName(_certificateAuthorityPath);
-            if (directory is not null && Directory.Exists(directory))
-            {
-                Directory.Delete(directory, recursive: true);
-            }
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
+            TestCleanup.DeleteTree(directory);
         }
     }
 

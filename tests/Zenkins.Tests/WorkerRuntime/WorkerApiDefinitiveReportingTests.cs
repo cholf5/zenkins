@@ -299,12 +299,8 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
     public void Dispose()
     {
         _repository.Dispose();
-        try
-        {
-            Directory.Delete(_workRoot, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
+        // Q-011's cleanup contract via TestCleanup: the tree holds a cloned repository with
+        // read-only pack files (a Windows delete reports UnauthorizedAccessException for them).
+        TestCleanup.DeleteTree(_workRoot);
     }
 }

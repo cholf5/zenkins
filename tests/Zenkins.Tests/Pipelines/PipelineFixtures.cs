@@ -189,18 +189,20 @@ internal static class TempRootCleanup
 
     private static void Delete(string path, bool isDirectory)
     {
+        // A directory here holds fixture repositories, whose pack and object files are read-only -
+        // a Windows delete only passes once the attribute is cleared, so the directory branch goes
+        // through the whole-repo cleanup contract (TestCleanup); a lone file keeps this retry.
+        if (isDirectory)
+        {
+            TestCleanup.DeleteTree(path);
+            return;
+        }
+
         for (var attempt = 0; attempt < Attempts; attempt++)
         {
             try
             {
-                if (isDirectory)
-                {
-                    if (Directory.Exists(path))
-                    {
-                        Directory.Delete(path, recursive: true);
-                    }
-                }
-                else if (File.Exists(path))
+                if (File.Exists(path))
                 {
                     File.Delete(path);
                 }

@@ -71,6 +71,10 @@ public static class SecretDataProtection
             }
         }
 
-        return Path.Combine(AppContext.BaseDirectory, DefaultKeysDirectoryRelativePath);
+        // The relative default is written with forward slashes so every document quotes one portable
+        // path, but the runtime directory must be joined segment-wise: Path.Combine embeds a forward
+        // slash verbatim on Windows ("App_Data/keys" inside a backslash path), which is not the shape
+        // any other surface reports the directory in.
+        return Path.Combine([AppContext.BaseDirectory, .. DefaultKeysDirectoryRelativePath.Split('/')]);
     }
 }

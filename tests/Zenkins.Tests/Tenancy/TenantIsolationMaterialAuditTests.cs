@@ -86,7 +86,7 @@ public sealed class TenantIsolationMaterialAuditTests
         //      plaintext (F-012 stores Data Protection ciphertext, for every tenant alike). Row
         //      names and ordinary tenant rows legitimately share the file; the material values may
         //      not be readable there under any tenant.
-        var databaseBytes = await File.ReadAllBytesAsync(host.Data.DatabasePath, CancellationToken);
+        var databaseBytes = await TestFileRead.ReadHeldBytesAsync(host.Data.DatabasePath, CancellationToken);
         var databaseText = Encoding.Latin1.GetString(databaseBytes);
         Assert.DoesNotContain(BetaSecretValue, databaseText, StringComparison.Ordinal);
         Assert.DoesNotContain(BetaCredentialValue, databaseText, StringComparison.Ordinal);

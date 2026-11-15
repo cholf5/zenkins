@@ -44,6 +44,13 @@ public sealed class GitTimeoutTests
     public async Task A_clone_that_exceeds_its_budget_is_killed_with_its_process_tree()
     {
         using var directory = new GitTestDirectory("timeout");
+        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
+        // through, so the fact is named as skipped there rather than silently red or green.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {{
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }}
+
         var gitPath = CreateHangingGit(directory, out var pidFile);
 
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
@@ -104,6 +111,13 @@ public sealed class GitTimeoutTests
     public async Task A_clone_is_bounded_by_the_runs_remaining_budget_not_only_the_operation_timeout()
     {
         using var directory = new GitTestDirectory("timeout-deadline");
+        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
+        // through, so the fact is named as skipped there rather than silently red or green.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {{
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }}
+
         var gitPath = CreateHangingGit(directory, out var pidFile);
 
         // The per-operation timeout is generous (90 seconds); the run's own deadline is what must cut

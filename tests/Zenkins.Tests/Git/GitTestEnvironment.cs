@@ -42,35 +42,12 @@ internal sealed class GitTestDirectory : IDisposable
     public void Dispose()
     {
         // Q-011: a single failed delete used to abandon the root silently, which is how the
-        // zenkins-* roots accumulated in the system temp. A fixture's own git child can hold a
-        // handle or its working directory a moment after the test ends, so the deletion is retried
-        // briefly and a root that survives every attempt is reported with one warning line - never
-        // silently abandoned. A leak in a failing test must still not mask the real failure, so
-        // Dispose itself never throws.
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            try
-            {
-                if (Directory.Exists(RootPath))
-                {
-                    Directory.Delete(RootPath, recursive: true);
-                }
-
-                return;
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                if (attempt == 9)
-                {
-                    Console.Error.WriteLine(
-                        $"zenkins test cleanup: '{RootPath}' survived 10 deletion attempts "
-                        + $"({failure.GetType().Name}: {failure.Message}) - left behind in the system temp.");
-                    return;
-                }
-
-                Thread.Sleep(200);
-            }
-        }
+        // zenkins-* roots accumulated in the system temp. Dispose itself never throws, a surviving
+        // root is reported with one warning line - never silently abandoned. The whole-repo form of
+        // that contract (TestCleanup) also clears the read-only attribute first on Windows: this
+        // root holds fixture repositories, whose pack and object files git writes 0444, and no
+        // number of retries can delete a read-only file there.
+        TestCleanup.DeleteTree(RootPath);
     }
 }
 
@@ -172,6 +149,22 @@ internal static class GitCli
         IReadOnlyDictionary<string, string?> environment,
         string revision) =>
         MustRun(workingDirectory, environment, "rev-parse", revision);
+
+    /// <summary>
+    /// Why the shim-observed facts cannot run on this OS, or <see langword="null"/> when they can.
+    /// The recording shims are <c>#!/bin/sh</c> scripts by design: they must observe the child's real
+    /// argv and environment through the exec path. Git for Windows happily runs such scripts when
+    /// <em>git</em> spawns them, but the worker starts the shim itself through <c>Process.Start</c>,
+    /// which on Windows cannot execute a script ("not a valid application for this OS platform").
+    /// The facts skip there with this recorded reason - a named platform fact, never a silent
+    /// exclusion, the same contract Q-009's sshd skip follows.
+    /// </summary>
+    public static string? RecordingShimUnavailableReason() =>
+        OperatingSystem.IsWindows()
+            ? "the recording shims are #!/bin/sh scripts; the worker's Process.Start cannot exec a "
+                + "script on Windows (\"not a valid application for this OS platform\"), so the "
+                + "shim-observed facts are not runnable there."
+            : null;
 
     /// <summary>The absolute path of the real <c>git</c> binary (used by the recording shim).</summary>
     public static string ResolveGitPath()

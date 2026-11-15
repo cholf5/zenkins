@@ -6,5 +6,11 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Zenkins.Tests/Zenkins.Tests.csproj" />
+    <!-- F-007: the E2E's ArgvEcho asset must be a solution project, not only a ProjectReference.
+         A solution build assigns configurations only to its own projects; a referenced-but-unsolved
+         project is built with the solution's default configuration (Debug), so `dotnet build -c
+         Release` produced bin/Debug output the WorkerRuntime E2E (which needs bin/Release) never
+         saw - the CI gate failed on all three OSes for exactly this. -->
+    <Project Path="tests/Zenkins.Tests/TestAssets/ArgvEcho/ArgvEcho.csproj" />
   </Folder>
 </Solution>

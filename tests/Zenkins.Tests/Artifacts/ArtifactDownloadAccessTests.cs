@@ -123,6 +123,16 @@ public sealed class ArtifactDownloadAccessTests
     [Fact(Timeout = 120 * 1000)]
     public async Task A_hostile_file_name_cannot_inject_a_header_or_a_second_file_name()
     {
+        // The recorded skip (Q-009's contract): the attack needs a stored name holding a double
+        // quote, and a Windows file name cannot contain one - the header-injection surface this
+        // fact exercises does not exist on a Windows store, so the fact is named as skipped there.
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(
+                "the hostile name holds a double quote, which no Windows file name can contain, so "
+                + "the stored-file attack this fact exercises cannot even be written there.");
+        }
+
         var token = TestContext.Current.CancellationToken;
         using var host = await ArtifactsTestHost.CreateAsync();
 

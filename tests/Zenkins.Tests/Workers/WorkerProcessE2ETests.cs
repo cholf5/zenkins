@@ -734,22 +734,10 @@ public sealed class WorkerProcessE2ETests
 
     private static void DeleteTempRoot(string tempRoot)
     {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            try
-            {
-                if (Directory.Exists(tempRoot))
-                {
-                    Directory.Delete(tempRoot, recursive: true);
-                }
-
-                return;
-            }
-            catch (IOException)
-            {
-                Thread.Sleep(200);
-            }
-        }
+        // Q-011's cleanup contract via TestCleanup: the temp root holds the worker's cloned
+        // repositories, whose pack and object files are read-only (a Windows delete reports
+        // UnauthorizedAccessException for them), and a surviving root is reported, never silent.
+        TestCleanup.DeleteTree(tempRoot);
     }
 
     private static string FindRepositoryRoot()

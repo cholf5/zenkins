@@ -599,22 +599,10 @@ internal class MilestoneHost : IDisposable
 
     private static void DeleteDirectory(string path)
     {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            try
-            {
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, recursive: true);
-                }
-
-                return;
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(200);
-            }
-        }
+        // Q-011's cleanup contract via TestCleanup: these roots hold fixture repositories, whose
+        // pack and object files are read-only (a Windows delete reports UnauthorizedAccessException
+        // for them, and no retry count fixes that - the attribute has to be cleared).
+        TestCleanup.DeleteTree(path);
     }
 
     // -------------------------------------------------------------------------------------------

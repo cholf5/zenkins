@@ -19,6 +19,13 @@ public sealed class GitCredentialSecrecyTests
     public async Task The_HTTPS_token_travels_only_through_the_askpass_helper()
     {
         using var fixture = GitFixtureRepository.Create("https");
+        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
+        // through, so the fact is named as skipped there rather than silently red or green.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {{
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }}
+
         var token = NewToken();
         using var server = LocalHttpGitServer.Start(fixture.BarePath, token);
         using var directory = new GitTestDirectory("https-secret");
@@ -87,6 +94,13 @@ public sealed class GitCredentialSecrecyTests
     public async Task A_rejected_token_fails_honestly_and_is_deleted_anyway()
     {
         using var fixture = GitFixtureRepository.Create("https-rejected");
+        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
+        // through, so the fact is named as skipped there rather than silently red or green.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {{
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }}
+
         var presentedToken = NewToken();
         var acceptedToken = NewToken();
         using var server = LocalHttpGitServer.Start(fixture.BarePath, acceptedToken);

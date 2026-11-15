@@ -553,24 +553,9 @@ internal sealed class SshdGitServer : IDisposable
 
     private static bool DeleteDirectory(string path)
     {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            try
-            {
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, recursive: true);
-                }
-
-                return !Directory.Exists(path);
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(200);
-            }
-        }
-
-        return false;
+        // Q-011's cleanup contract via TestCleanup: the served roots hold git repositories with
+        // read-only pack files, which a Windows delete can only pass once the attribute is cleared.
+        return TestCleanup.DeleteTree(path);
     }
 
     private static int FindFreePort()

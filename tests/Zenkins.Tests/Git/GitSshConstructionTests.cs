@@ -117,15 +117,27 @@ public sealed class GitSshConstructionTests
         Assert.Null(carrier.SshKeyPath);
 
         var script = File.ReadAllText(carrier.AskPassPath!);
-        Assert.StartsWith("#!" + "/" + "bin" + "/" + "sh", script, StringComparison.Ordinal);
-        Assert.Contains("[Uu]sername*", script, StringComparison.Ordinal);
-
-        // The value is a single quoted shell word, and the quote character is escaped - a token is
-        // never allowed to break out of its literal.
-        Assert.Contains("'zkpat_token_with_'\\''quotes'\\'''", script, StringComparison.Ordinal);
-
-        if (!OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows())
         {
+            // The Windows helper is a cmd batch (git-askpass.cmd), the one form Process.Start can
+            // run there: the username prompt is told apart by a "sername" match, and the value is
+            // written cmd-escaped - for a token without % that is the value verbatim.
+            Assert.StartsWith("@echo off", script, StringComparison.Ordinal);
+            Assert.Contains("sername", script, StringComparison.Ordinal);
+            Assert.Contains(material.Secret, script, StringComparison.Ordinal);
+            Assert.Contains(
+                WorkerGit.GitCredentialMaterial.DefaultTokenUserName, script, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.StartsWith("#!" + "/" + "bin" + "/" + "sh", script, StringComparison.Ordinal);
+            Assert.Contains("[Uu]sername*", script, StringComparison.Ordinal);
+
+            // The value is a single quoted shell word, and the quote character is escaped - a token
+            // is never allowed to break out of its literal.
+            Assert.Contains("'zkpat_token_with_'\\''quotes'\\'''", script, StringComparison.Ordinal);
+
+            // 0700: the helper holds the value, so only the worker's own user may read or run it.
             Assert.Equal(
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
                 File.GetUnixFileMode(carrier.AskPassPath!));
@@ -152,6 +164,13 @@ public sealed class GitSshConstructionTests
     public async Task An_ssh_clone_uses_the_key_file_and_deletes_it_afterwards()
     {
         using var directory = new GitTestDirectory("ssh-clone");
+        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
+        // through, so the fact is named as skipped there rather than silently red or green.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {{
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }}
+
         using var shim = RecordingGitShim.Create(directory, GitCli.ResolveGitPath());
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
         var material = new WorkerGit.GitCredentialMaterial(WorkerGit.GitCredentialKind.SshKey, PrivateKey);

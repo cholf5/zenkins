@@ -26,6 +26,13 @@ public sealed class GitSubmoduleTests
     public async Task A_submodule_is_fetched_recursively_through_the_runs_credential_channel()
     {
         using var directory = new GitTestDirectory("submodule");
+        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
+        // through, so the fact is named as skipped there rather than silently red or green.
+        if (GitCli.RecordingShimUnavailableReason() is { } reason)
+        {{
+            throw Xunit.Sdk.SkipException.ForSkip(reason);
+        }}
+
         var environment = GitCli.Environment(directory);
 
         // 1. The submodule's own repository, served as /sub.git.
