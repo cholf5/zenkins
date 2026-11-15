@@ -1565,10 +1565,15 @@ public sealed class RunService(
 
                 // Lost the race: the run left Queued between the read and the CAS. Re-read and
                 // fall through - it is either Running now (cancel-request path) or terminal
-                // (the friendly no-op).
-                var reread = await context.BuildRuns.SingleOrDefaultAsync(
-                    candidate => candidate.Id == runId,
-                    cancellationToken);
+                // (the friendly no-op). The re-read must bypass the change tracker: this context
+                // already tracks the row from the read above, and the queued-cancel CAS
+                // (ExecuteUpdate) writes the database without touching tracked state, so a tracked
+                // re-read hands back the stale Queued snapshot - the Running branch never runs, the
+                // cancel is dropped behind a 302, and the run executes on with no recorded cancel
+                // request (the windows gate recorded exactly that race).
+                var reread = await context.BuildRuns
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(candidate => candidate.Id == runId, cancellationToken);
                 if (reread is null)
                 {
                     // The run's project (and with it the run) is gone; nothing left to cancel.
