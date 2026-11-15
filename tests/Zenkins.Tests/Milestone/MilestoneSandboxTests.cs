@@ -72,12 +72,14 @@ public sealed class MilestoneSandboxTests
             Assert.False(File.Exists(escapePath), $"the '{name}' probe wrote a file outside the checkout.");
 
             // The run log carries the Lua error at the primitive's call site: the chunk name, a position,
-            // and the engine's own wording for the refusal.
-            var log = await host.ReadLogLinesAsync(runId);
-            Assert.Contains(
-                log,
-                line => line.Message.Contains("pipeline.lua:(", StringComparison.Ordinal)
-                    && line.Message.Contains(refusal, StringComparison.Ordinal));
+            // and the engine's own wording for the refusal. F-008's drain lands the lines around the
+            // terminal report, so the lines are waited for, not read once - a loaded runner
+            // legitimately saw an empty log for these green runs (recorded on both ubuntu and
+            // windows).
+            await host.WaitForLogLinesAsync(
+                runId,
+                lines => lines.Any(line => line.Message.Contains("pipeline.lua:(", StringComparison.Ordinal)
+                    && line.Message.Contains(refusal, StringComparison.Ordinal)));
         }
 
         // The worker never crashed: four refusals later, a healthy build still runs on the same process.

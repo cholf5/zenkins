@@ -91,7 +91,12 @@ public sealed class MilestoneQueueTests
 
         Assert.NotNull(terminal.WorkerId);
 
-        var log = await host.ReadLogLinesAsync(queued.Id);
+        // F-008's drain lands the lines around the terminal report; waited for, not read once.
+        var log = await host.WaitForLogLinesAsync(
+            queued.Id,
+            lines => lines.Any(line => line.Message.StartsWith(
+                "zenkins: step 1/3 \"Restore\" started",
+                StringComparison.Ordinal)));
         Assert.Single(log, line => line.Message.StartsWith(
             "zenkins: step 1/3 \"Restore\" started",
             StringComparison.Ordinal));

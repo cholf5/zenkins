@@ -82,7 +82,11 @@ public sealed class PublishedSmokeTests : IClassFixture<PublishedSmokeTests.Publ
                 Assert.Equal(0, step.ExitCode);
             });
 
-            var log = await host.ReadLogLinesAsync(runId);
+            // F-008's drain lands the lines around the terminal report; the wait anchors on the
+            // definition's last emitted line.
+            var log = await host.WaitForLogLinesAsync(
+                runId,
+                lines => lines.Any(line => line.Message == "probe-written"));
             Assert.Single(log, line => line.Message == MilestonePipelines.Greeting);
             Assert.Equal(steps[0].Id, log.First(line => line.Message == MilestonePipelines.Greeting).StepId);
             Assert.Single(log, line => line.Message == "building");

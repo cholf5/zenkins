@@ -330,7 +330,13 @@ internal sealed class ConcurrencyHost : RecoveryHost
         Assert.Equal(steps.Count, steps.Select(step => step.Id).Distinct().Count());
 
         var stepIds = steps.Select(step => step.Id).ToHashSet();
-        var lines = await ReadLogLinesAsync(runId);
+        // F-008's drain lands the lines around the terminal report; the wait anchors on the last
+        // declared step's start line so the attribution check never runs over an undrained log.
+        var lines = await WaitForLogLinesAsync(
+            runId,
+            waited => waited.Any(line => line.Message.StartsWith(
+                $"zenkins: step {declaredNames.Count}/",
+                StringComparison.Ordinal)));
         Assert.All(
             lines,
             line => Assert.True(

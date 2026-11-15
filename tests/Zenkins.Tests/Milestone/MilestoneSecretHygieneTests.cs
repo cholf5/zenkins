@@ -53,7 +53,11 @@ public sealed class MilestoneSecretHygieneTests
         Assert.DoesNotContain(secretValue, run.PipelineSpecJson, StringComparison.Ordinal);
 
         // ----- The log side: persisted rows, per stream. -----
-        var log = await host.ReadLogLinesAsync(runId);
+        // F-008's drain lands the lines around the terminal report; the wait anchors on the
+        // definition's last emitted line ("probe-written" from the Publish step's probe).
+        var log = await host.WaitForLogLinesAsync(
+            runId,
+            lines => lines.Any(line => line.Message == "probe-written"));
         Assert.DoesNotContain(log, line => line.Message.Contains(secretValue, StringComparison.Ordinal));
 
         // Step 1 printed the secret to stdout; step 2 printed it to stderr. Both are `***` now, and

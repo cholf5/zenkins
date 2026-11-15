@@ -78,7 +78,12 @@ public sealed class MilestoneHappyPathTests
         });
 
         // ----- The persisted log: each step's own output, attributed to its own step. -----
-        var log = await host.ReadLogLinesAsync(runId);
+        // F-008's drain lands the lines around the terminal report; the wait anchors on the
+        // definition's last emitted line - with per-run Seq-ordered delivery, the last line's
+        // arrival means every earlier line is already there.
+        var log = await host.WaitForLogLinesAsync(
+            runId,
+            lines => lines.Any(line => line.Message == "probe-written"));
 
         // The pipeline-level env var really reached the child process of step 1.
         Assert.Single(log, line => line.Message == MilestonePipelines.Greeting);

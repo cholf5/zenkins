@@ -85,9 +85,14 @@ public sealed class RecoveryRestartTests
         });
 
         // Exactly one execution: one run row for the project, one "step 1/3 started" line in the
-        // persisted log - a second execution would write a second one.
+        // persisted log - a second execution would write a second one. F-008's drain lands the
+        // lines around the terminal report, so they are waited for, not read once.
         Assert.Single(await host.ReadProjectRunsAsync(projectId));
-        var log = await host.ReadLogLinesAsync(runId);
+        var log = await host.WaitForLogLinesAsync(
+            runId,
+            lines => lines.Any(line => line.Message.StartsWith(
+                "zenkins: step 1/3 \"Step1\" started",
+                StringComparison.Ordinal)));
         Assert.Single(log, line => line.Message.StartsWith(
             "zenkins: step 1/3 \"Step1\" started",
             StringComparison.Ordinal));
