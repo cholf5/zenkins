@@ -83,11 +83,25 @@ public sealed class WorkerRunProcessE2ETests
             // The streamed output must be on disk while the child is still running: three lines
             // arrive 2s apart, so the full content observable here proves incremental capture into
             // the per-stream temp log (the run only completes ~2s after the last line).
-            await WaitForLogFileAsync(
-                Path.Combine(work1, "temp", "stdout.log"),
-                content => ContainsInOrder(content, ["first", "second", "third"]),
-                RunTerminalTimeout,
-                cancellationToken);
+            try
+            {
+                await WaitForLogFileAsync(
+                    Path.Combine(work1, "temp", "stdout.log"),
+                    content => ContainsInOrder(content, ["first", "second", "third"]),
+                    RunTerminalTimeout,
+                    cancellationToken);
+            }
+            catch (TimeoutException failure)
+            {
+                // The temp files are created eagerly with the run's execution (RunLogWriters), so a
+                // missing file means the worker never reached its pipeline - the state that matters
+                // is the worker's own console and the run's terminal row, which no other failure
+                // path of this test prints. Dump both, or the red stays undiagnosable in CI.
+                throw new TimeoutException(
+                    failure.Message
+                    + Environment.NewLine
+                    + await DescribeAsync(databasePath, run1, worker, workerLogs, serverLogs, cancellationToken));
+            }
             Assert.True(
                 File.Exists(Path.Combine(work1, "temp", "stderr.log")),
                 "the stderr log file was not created in temp/");
@@ -321,6 +335,47 @@ public sealed class WorkerRunProcessE2ETests
 
         throw new TimeoutException($"Run {runId} never reached {expectedStatus} within the timeout.");
     }
+
+    /// <summary>
+    /// Everything the CI log needs when a phase of this test times out: the run's row (a Failed row
+    /// means the worker reported; a Running row means it never did), the worker process's liveness,
+    /// the worker's whole console (its claim, accept and pipeline lines are the story of where it
+    /// stopped) and the server's last console lines. The E2E redirects both processes' output, so
+    /// none of this reaches the CI log any other way.
+    /// </summary>
+    private static async Task<string> DescribeAsync(
+        string databasePath,
+        Guid runId,
+        Process worker,
+        ProcessLog workerLogs,
+        ProcessLog serverLogs,
+        CancellationToken cancellationToken)
+    {
+        string runRow;
+        try
+        {
+            var (status, exitCode) = await ReadRunRowAsync(databasePath, runId, cancellationToken);
+            runRow = "status=" + status + ", exitCode=" + (exitCode?.ToString() ?? "null");
+        }
+        catch (Exception failure)
+        {
+            runRow = $"unreadable ({failure.GetType().Name}: {failure.Message})";
+        }
+
+        var workerState = worker.HasExited ? $"exited with {worker.ExitCode}" : "still running";
+
+        return $"--- E2E diagnosis: run row: {runRow}; worker process: {workerState}."
+            + Environment.NewLine + "--- worker console:"
+            + Environment.NewLine + Indent(workerLogs.Snapshot())
+            + "--- server console (last 40 lines):"
+            + Environment.NewLine + Indent(Tail(serverLogs.Snapshot(), 40));
+    }
+
+    private static string Indent(string[] lines) =>
+        string.Join(Environment.NewLine, lines.Select(line => "    " + line));
+
+    private static string[] Tail(string[] lines, int count) =>
+        lines.Length <= count ? lines : lines[^count..];
 
     private static async Task<(string Status, int? ExitCode)> ReadRunRowAsync(
         string databasePath,
