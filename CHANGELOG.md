@@ -93,6 +93,21 @@ entry when it lands.
   worker-tags section) and pinned end to end by a Concurrency-suite test (split set accepted →
   queued while uncovered → executes when a covering worker registers; the matched case unchanged).
   No behaviour change; ships with the next release.
+- **F-009 — a user cancel racing the accept edge could be dropped; fixed.** When the queued-cancel
+  compare-and-set lost the race to a worker's accept, the follow-up re-read ran on the same
+  tracked context and EF's identity resolution handed back the stale in-memory row (its status
+  still `Queued`): the Running branch never ran, the cancel was dropped behind a 302, and the run
+  executed on with no recorded cancel request. The claim-storm cancellation test
+  (`RunCancellationTests`) caught it; the CI runners' load widened the window until it failed
+  every run. Fixed after the `v1.0` tag, 2026-11-15: the re-read is `AsNoTracking`, so the race
+  window takes the cancel-request path it was designed to take (evidence on card B-005). Ships
+  with the next release.
+- **The postgres-fallback key-ring directory carried a forward slash inside Windows paths;
+  fixed.** The documented default (`App_Data/keys`) was joined verbatim, and on Windows
+  `Path.Combine` embeds the slash — a server-database deployment got a mixed-separator key-ring
+  directory that no other surface reports the same way. Fixed after the `v1.0` tag, 2026-11-15:
+  joined segment-wise, so the runtime path uses the platform's own separators (evidence on card
+  B-005). Ships with the next release.
 - **A wrong pinned SSH host key reports `git-failed`, not a host-key-specific reason** (Q-009,
   observed and accepted). The refusal is honest and named in the run log — ssh's own
   `REMOTE HOST IDENTIFICATION HAS CHANGED` and `Host key verification failed` — and the page's
