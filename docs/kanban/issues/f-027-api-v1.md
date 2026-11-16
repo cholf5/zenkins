@@ -4,7 +4,7 @@ title: API v1 — organization API tokens, trigger/cancel/read runs without a br
 type: feature
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-16
 updated: 2026-11-16
 blocked: none
@@ -34,25 +34,26 @@ concurrency policy and dedupe cannot diverge from the form.
 - [x] An Owner can mint and revoke API tokens with scopes (`trigger`, `read`,
       `cancel`); the plaintext is shown exactly once, the stored form is a hash, and
       "last used at" is recorded.
-- [ ] `POST /api/v1/projects/{id}/runs` triggers a run and answers 201 with the run
-      id and number; parameters, branch, required tags and timeout are accepted with
-      the form's validation and the form's error codes.
+- [x] `POST /api/v1/projects/{id}/runs` triggers a run and answers 201 with the run
+      id (`number` arrives with F-036 — see Dependencies); parameters, branch,
+      required tags and timeout are accepted with the form's validation and the
+      form's error codes.
 
-      **Partial — everything but the number.** The 201 carries the run resource (its
-      `id` is the run id) and a `Location` header; parameters/branch/tags/timeout are
-      validated by the form's own routine, and the 400/409 codes are the form's
-      (`parameter-unknown`, `branch-invalid`, `timeout-invalid`, `project-disabled`,
-      `queue-full`), proven side by side in
+      **Satisfied once the AC stopped claiming the number.** The 201 carries the run
+      resource (its `id` is the run id) and a `Location` header; parameters/branch/
+      tags/timeout are validated by the form's own routine, and the 400/409 codes are
+      the form's (`parameter-unknown`, `branch-invalid`, `timeout-invalid`,
+      `project-disabled`, `queue-full`), proven side by side in
       `ApiV1RunApiTests.The_api_answers_the_form_s_parameter_codes` and
-      `A_disabled_project_answers_409_project_disabled_and_queues_nothing`. There is
-      no run **number**: F-036 has not landed, and the card that owns numbering must
-      define it rather than the API inventing one (the response deliberately has no
-      `number` field).
-- [ ] `GET /api/v1/runs/{id}` returns status, steps, failure reason, numbers and
-      chain links — never secret values, never a credential, never a parameter value
-      the definition marks as password (F-041).
+      `A_disabled_project_answers_409_project_disabled_and_queues_nothing`. The
+      response deliberately has no `number` field: F-036 owns numbering, and this
+      card must not invent one (a placeholder number would poison every bookmark).
+- [x] `GET /api/v1/runs/{id}` returns status, steps and the failure reason, and never
+      a secret value, a credential, or any parameter value (`number` arrives with
+      F-036; the product has no run-chain concept, so no chain links are claimed).
 
-      **Partial — chain links do not exist.** The resource carries status, the frozen
+      **Satisfied once the AC stopped claiming numbers and chain links.** The resource
+      carries status, the frozen
       step list, failure reason, times, exit code, timeout, deadline and the worker
       name, and it carries **no** parameter values at all (F-041's password-typed
       parameters do not exist yet; omitting every value is the safe answer and is
@@ -92,7 +93,9 @@ concurrency policy and dedupe cannot diverge from the form.
 - [x] Rate limiting per token using the existing limiter infrastructure (the
       webhook's per-id budget is the model).
 - [x] UI: an API tokens page (mint, list, revoke, last used) next to Secrets, Owner
-      only; the scope checkboxes.
+      only; the scope checkboxes. "Next to Secrets" is literal: the sidebar entry was
+      added after Secrets (`NavMenu.razor`), because a page with no link is an Owner
+      typing a URL from memory.
 - [x] Q-006 inventory: add the new routes to
       `docs/audits/q-006-surface-inventory.md` — the inventory test fails by
       construction otherwise.
@@ -103,7 +106,9 @@ concurrency policy and dedupe cannot diverge from the form.
 
 ## Dependencies
 
-- F-036 (numbers in responses) — nice to have, not blocking
+- F-036 (numbers in responses) — **out of scope here, not deferred**: F-036's own AC
+  already says API responses show `#N`. This card ships without the field and F-036
+  adds it; that is why neither AC below claims a number.
 - F-017 (the rate limiter and refusal shapes it established) — accepted
 
 ## Test Cases
@@ -184,3 +189,109 @@ Expected:
   (`20261116063155_AddApiTokens`), per `docs/development.md`'s contract.
 - **Verification.** `dotnet build`, the seven-suite gate and the new tests are recorded
   in the review log below when the reviewer runs them.
+
+### Verification (2026-11-16)
+
+- `dotnet build Zenkins.slnx -c Release`: 0 warnings, 0 errors.
+- The repository gate (`scripts/verify.sh`'s exact commands and filters, re-run after the review
+  round): fast **1142**, Milestone **12**, Recovery **4**, PublishSmoke **2**, PublishAot **2**,
+  GitSshd **3**, Postgres **1 skipped** (no `ZENKINS_TEST_POSTGRES` on this machine - the suite's
+  designed skip); all seven 1166. `artifacts/logs/f-027-gate.log` holds every suite's output, one
+  section each: the tooling's command clock splits a single invocation, so the script's commands were
+  run one suite at a time rather than through one `verify.sh` process.
+- `dotnet ef migrations has-pending-model-changes` (PostgreSQL provider): **no pending changes** -
+  the migration and the snapshot agree with the model.
+- This card's own tests: `Category=Api` (13) plus `TenantIsolationApiProbeTests` (5) and the Q-006
+  inventory tests (3) - all green. They pin: 201 + `Location` + the run row (attributed `Api`), the
+  form's parameter code answered identically by API and form, the F-028 409 `project-disabled` and
+  F-029 409 `queue-full` with nothing queued, the bare 404 for unknown/foreign ids, 403 per scope,
+  401 for unknown/revoked tokens (bodyless), 429 before any lookup (a nonexistent run id is rate-limited
+  rather than 404), the log body byte-identical to the UI download plus `?from=` and
+  `X-Zenkins-Last-Seq`, cancel + the terminal no-op, paging defaults and bounds, one run for a
+  retried `Idempotency-Key`, a session cookie alone never authenticating `/api/v1`, and a missing
+  scope answering 403 **before** the budget is consulted (`A_session_cookie_cannot_authenticate_the_api`,
+  `A_missing_scope_is_a_403_before_the_budget_is_spent`).
+
+### Review round 1 (2026-11-16) - the fixes, item by item
+
+The review's verdict was FAIL on two AC wordings only (the Lead rewrote them; the code had no blocking
+defect), plus eight smaller corrections. Nothing else was reworked.
+
+1. **`/api-tokens` had no entry point.** `NavMenu.razor` now carries "API tokens" (Lucide
+   `key-square`) directly after "Secrets", so the page is reachable the way every other page is; the
+   subtask's "next to Secrets" now means the sidebar order, not just a prose intention.
+2. **`TouchLastUsedAt` could turn an authenticated request into a 500.** It now catches
+   `DbUpdateException` (which covers the concurrency loser) and logs a Warning. The invariant is in the
+   doc comment: last-used is best effort and never vetoes a request that already authenticated - a
+   revoke that won the row still takes effect on the next request.
+3. **`docs/development.md` baseline.** Re-measured with this card's tests and written back
+   (fast 1142 / all seven 1166), so the old 1124/1148 figures are gone rather than deferred.
+4. **`docs/api-v1.md`'s code list** now includes `tag-invalid` (the form really returns it) and names
+   the API-only codes next to it.
+5. **A body whose JSON does not parse** is documented as the framework binder's existing, global
+   empty-`400` behaviour (the worker API does the same); every 400 a handler produces carries the
+   `error` body. Chosen over a second parsing path in the endpoint, which would duplicate the binder.
+6. **API cancels no longer borrow the user vocabulary.** `RunCancelReasons.ForApi(tokenName)` writes
+   `canceled-by-api <label>` into the run's `FailureReason`, and `CancelForApiAsync` uses it - the
+   record now says an organization token did it, not a person.
+7. **`GetTokensAsync` takes the acting user id and checks the Owner role itself** (empty list for a
+   Member), so the Owner gate is a service rule like Create/Revoke, not only a page rendering choice.
+8. **The trigger answer no longer fabricates a run resource.** When the row is gone between the insert
+   and the read, the body is `{id, url}` only (`ApiRunRefResource`) instead of a well-shaped resource
+   with `status: ""` and `ProjectId = Guid.Empty`.
+9. **Two more tests:** a session cookie alone cannot authenticate `/api/v1` (bare 401), and a missing
+   scope answers 403 *before* the budget is consulted (three refused reads that never spend the token's
+   one slot). This card's total is now 13 contract facts + 5 tenancy probes.
+10. **In-memory paging** stays (the UI's own pattern) and is recorded as an explicit follow-up with
+    file and line numbers, below.
+
+The gate baseline in `docs/development.md` was re-measured with this card's tests and written back
+(fast 1142, all seven 1166); there is no "stale baseline" follow-up left.
+
+Follow-ups this card leaves, deliberately:
+
+- **Paging is in memory.** `ApiEndpoints.ListProjectRunsAsync`
+  (`src/Server/Api/ApiEndpoints.cs:155`, `:173`) reads every run of the project through
+  `RunService.GetProjectRunsAsync` (`src/Server/Runs/RunService.cs:878`), which materialises the whole
+  list and builds every run's step views (`ToViewsAsync`, `RunService.cs:2465`) before
+  `ApiPageResource` takes the requested slice (`ApiEndpoints.cs:428`). That is the UI's own existing
+  pattern - the run list page reads the same way - so this card does not change it, but a project with
+  thousands of runs would pay for the full read on every `page=1`. A later card should push
+  `Skip/Take` plus a `COUNT` into the service (and skip the step views for runs it pages past).
+- F-036 (run numbers) is out of scope per Dependencies - the response has no `number` field and gains
+  one when F-036 lands.
+- F-041 (password-typed parameters) does not exist yet; when it lands, `ApiRunResource` stays
+  value-free (it exposes no parameter value at all), so nothing here has to change - a future card
+  would only decide whether a *non-secret* value is ever worth exposing.
+
+### 2026-11-16 — independent review: PASS (second round)
+
+Two rounds in an isolated copy of the uncommitted batch. The first ended FAIL for a reason that was
+the card's fault, not the code's: AC2 demanded a run `number` and AC3 demanded `numbers` and chain
+links, while Dependencies called F-036 "nice to have". Both clauses were removed — F-036's own AC
+already promises API responses show `#N`, and the product has no run-chain concept at all, so the
+clause was vacuous from the day it was written. Under the corrected wording both criteria are
+satisfied.
+
+What the review actually proved, rather than read:
+
+- **No second trigger path.** Read side by side, `TriggerAsync` and `TriggerForApiAsync` differ only
+  in the tenant/membership check and the trigger type; everything after them is
+  `CreateQueuedRunAsync` — project lookup, the F-028 disabled gate, freestyle/steps, branch, tags,
+  timeout, parameters, the queue cap, the transaction. No fork in order, codes, kind branch or
+  refusal mapping.
+- **The refusal shapes are real, not asserted into existence.** A spent budget answers 429 to an
+  *unknown* run id, which is what proves no lookup happened first. A session cookie is rejected with
+  a bare 401 (verified with a real login). A missing scope is a 403 that does **not** spend budget:
+  the reviewer confirmed a trigger-only token survives three 403s and still gets 201 on its next
+  scoped call, with a read-only control token proving the bucket really holds one.
+- **The stamp never 500s.** Holding `BEGIN IMMEDIATE` on the SQLite file, an authenticated request
+  still answered 200 with one warning in the log.
+- The migration is pending-clean under PostgreSQL, and the SQLite provider reports pending on HEAD as
+  well — the repo's pre-existing provider asymmetry, not this card's.
+- Deviating from the subtask's "source-generated serializers" was accepted: the repo has no
+  response-side source-gen context and `/api/workers/*` uses the same `Results.Json` path; the AOT
+  promise belongs to the Worker, which this does not touch.
+
+Leftovers recorded as Q-015 rather than reopening the card (a broader stamp catch and its timeout,
+the untested `GetTokensAsync` Owner check, one unqualified sentence in the API doc).

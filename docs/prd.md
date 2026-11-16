@@ -744,6 +744,57 @@ Parameters 是 Project 上的一组输入定义，两种 Kind 通用。触发时
 参数值并入 Worker 的 server-provided 环境层（与 `ZENKINS_*` 同层、优先于步骤自身 env），因此
 Pipeline（Lua）与 Freestyle 的每个步骤都能直接以参数名读取，`${env:NAME}` 引用同样可用。
 
+### 3.12 组织 API（API v1）
+
+为一个组织提供机器可用的 HTTP 接口：脚本或其他 CI 不需要浏览器即可触发、读取、跟随日志和取消
+构建。API 与页面共用同一个 RunService 与同一套校验/闸门，不产生第二条触发路径。
+
+#### 3.12.1 令牌与作用域
+
+| 字段 | 说明 |
+|---|---|
+| Label | Owner 起的名字，组织内唯一；只用于列表与归因 |
+| Scopes | `trigger` / `read` / `cancel` 的任意组合，逐路由校验 |
+| TokenHash | 明文（`zapi_…`）仅在创建时显示一次，库中只存 SHA-256 |
+| LastUsedAt | 最近一次成功认证（最多每分钟写一次） |
+| ExpiresAt / RevokedAt | 过期或吊销后一律 401；吊销即时生效 |
+
+- 仅 Owner 可创建、查看、吊销令牌；Member 在页面上看不到任何令牌标签，端点返回 403。
+- 使用 `Authorization: Bearer <token>`；**不提供** query string 形式的令牌（会进入访问日志与
+  代理日志）。Cookie 不能授权 API 调用，令牌也不能授权页面。
+
+#### 3.12.2 路由
+
+| 方法 | 路径 | 作用域 |
+|---|---|---|
+| POST | `/api/v1/projects/{id}/runs` | `trigger` |
+| GET | `/api/v1/projects` | `read` |
+| GET | `/api/v1/projects/{id}/runs` | `read` |
+| GET | `/api/v1/runs/{id}` | `read` |
+| GET | `/api/v1/runs/{id}/log?from=<seq>` | `read` |
+| POST | `/api/v1/runs/{id}/cancel` | `cancel` |
+
+触发返回 201（响应体即本次 run 资源，`id` 即 run id）；请求体接受 branch、requiredTags、
+timeoutMinutes、parameters，校验规则与错误码与表单完全一致。可选 `Idempotency-Key` 使重试只排
+一个 run（第二次返回 200 与同一 run，带 `Idempotency-Replayed: true`）。日志接口返回
+`text/plain`，`from` 表示“已有到该序号为止的行”，`X-Zenkins-Last-Seq` 给出下次应使用的偏移。
+
+#### 3.12.3 拒绝形状
+
+| 状态 | 场景 |
+|---|---|
+| 401 | 无凭证、未知、已吊销、已过期令牌；实体为空，不泄露租户 |
+| 403 | 令牌缺少该路由的作用域（在任何查询之前） |
+| 404 | 项目/run 不属于令牌所在组织（与不存在同一答案，无存在性预言机） |
+| 429 | 该令牌每分钟预算耗尽，带 `Retry-After`；在任何资源查询之前判定 |
+| 400 | 请求格式或字段错误，`error` 使用与表单相同的错误码 |
+| 409 | 项目自身拒绝触发：`project-disabled` / `queue-full` |
+
+#### 3.12.4 范围与非目标
+
+- 响应不包含参数值、Secret、凭证与任何 artifact 内容；run 编号由 F-036 提供，本期不发明编号。
+- 不提供 GraphQL、SDK、CLI，也不提供 query string 令牌。
+
 ---
 
 ## 4. UI 设计

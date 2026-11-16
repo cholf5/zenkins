@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Zenkins.Server.Auth;
+using Zenkins.Server.Api;
 using Zenkins.Server.Artifacts;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
@@ -65,6 +66,10 @@ builder.Services.AddZenkinsArtifacts();
 
 // F-017: webhook management, the signature-verified delivery pipeline and the replay-record sweeper.
 builder.Services.AddZenkinsWebhooks();
+
+// F-027: the organization API (bearer tokens with scopes), its per-token budget, and the Owner-only
+// token-management forms.
+builder.Services.AddZenkinsApi();
 
 // F-012: the Data Protection key ring is data, not a machine default. It encrypts every stored
 // secret and mints the F-008 log-subscription tickets, so it is persisted next to the database and
@@ -242,6 +247,10 @@ app.MapArtifactEndpoints();
 // cookie+antiforgery settings forms. The delivery route is deliberately outside the cookie-auth fallback,
 // like the worker API: a git host has no session, and the shared secret is the whole credential.
 app.MapWebhookEndpoints();
+
+// F-027: the organization API (/api/v1) - bearer token + scope policies, bearer only, never a cookie -
+// and the Owner-only token-management forms (/api-tokens).
+app.MapApiEndpoints();
 
 // Log streaming hubs (F-008): the worker upstream (worker-token authenticated) and the browser
 // subscription hub (subscription-ticket authenticated). Both authenticate before any hub method

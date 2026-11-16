@@ -22,10 +22,12 @@ loop (`dotnet run` from a clone).
 > test, which runs in the fast suite). F-028 and F-029 added the project gate and the queue controls
 > on 2026-11-16: 18 tests in the fast suite (7 project enable/disable, 8 queue-control facts, 2
 > webhook gate, 1 project-cap race) and a seventh category, `Postgres`, for the concurrency fact
-> that only a real PostgreSQL can show (§2). **Earlier revisions of this note carried counts that
+> that only a real PostgreSQL can show (§2). F-027 added the organization API on 2026-11-16: 18
+> tests in the fast suite (13 API contract facts, 5 API tenancy probes). **Earlier revisions of this
+> note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines against a real run: **fast 1124, all seven 1148** (Milestone 12, Recovery 4,
+> and re-baselines against a real run: **fast 1142, all seven 1166** (Milestone 12, Recovery 4,
 > PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 1). Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
@@ -183,7 +185,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~2½ min on the reference machine (1124 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~2½ min on the reference machine (1142 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -193,7 +195,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1148 at the time of writing) but
+filter runs **all seven** (1166 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

@@ -35,6 +35,11 @@ public static class TenantIsolationProbes
             typeof(OrganizationMember), typeof(Project), typeof(BuildRun), typeof(BuildLog),
             typeof(BuildStep), typeof(WorkerEntity), typeof(WorkerToken), typeof(Secret), typeof(GitCredential),
             typeof(Artifact), typeof(Webhook), typeof(WebhookDelivery),
+
+            // F-027: the organization API's credential and its idempotency record. Probed by
+            // TenantIsolationApiProbeTests (a foreign token is refused; a foreign project/run id is one
+            // bare 404 on every route; a key binds only inside the token that sent it).
+            typeof(ApiToken), typeof(ApiIdempotencyRecord),
         ];
 
     /// <summary>

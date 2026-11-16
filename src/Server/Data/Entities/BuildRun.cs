@@ -41,6 +41,13 @@ public static class BuildRunTriggerType
     /// commit from the payload instead of waiting for the worker's accept report.
     /// </summary>
     public const string Webhook = "Webhook";
+
+    /// <summary>
+    /// Triggered by an organization API token (card F-027): a script sent the trigger with a token's
+    /// <c>trigger</c> scope. Such a run has no <see cref="BuildRun.TriggerUserId"/> - nobody was signed
+    /// in - and is otherwise the same run a member's click queues (the same validation, gate and queue).
+    /// </summary>
+    public const string Api = "Api";
 }
 
 /// <summary>

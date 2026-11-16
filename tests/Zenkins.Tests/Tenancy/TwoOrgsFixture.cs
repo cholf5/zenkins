@@ -120,6 +120,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only delivery record.</summary>
     public static readonly Guid WebhookDeliveryBId = new("b0000000-0000-4000-8000-000000000094");
 
+    /// <summary>F-027: A's only API token, the positive control for the API probes.</summary>
+    public static readonly Guid ApiTokenAId = new("a0000000-0000-4000-8000-0000000000a1");
+
+    /// <summary>F-027: B's only API token (the id a cross-tenant probe substitutes).</summary>
+    public static readonly Guid ApiTokenBId = new("b0000000-0000-4000-8000-0000000000a2");
+
     public const string OrgAName = "Alpha";
     public const string OrgBName = "Beta";
 
@@ -173,6 +179,14 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string WebhookACiphertext = "CfDJ8-fixture-alpha-webhook-ciphertext";
     public const string WebhookBCiphertext = "CfDJ8-fixture-beta-webhook-ciphertext";
     public const string WebhookDedupeKey = "id:0000000000000000000000000000000000000000000000000000000000000000";
+
+    // F-027: one API token per organization. Only the SHA-256 hash is stored, so the probes' plaintext is
+    // a fixture constant whose hash the seed writes - the same discipline as the worker tokens above.
+    public const string ApiTokenAName = "alpha-api";
+    public const string ApiTokenBName = "beta-api";
+    public const string ApiTokenAPlaintext = "zapi_alpha-fixture-token";
+    public const string ApiTokenBPlaintext = "zapi_beta-fixture-token";
+    public const string ApiTokenScopesAll = "trigger,read,cancel";
 
     private readonly string _databasePath;
     private bool _migrated;
@@ -418,6 +432,46 @@ public sealed class TwoOrgsFixture : IDisposable
                 RequiredTags = "dotnet",
                 GitBranch = "main",
                 PipelinePath = "pipeline.lua",
+            });
+
+        // F-027: one API token per organization, all three scopes, so an API probe has a working
+        // credential on each side without minting through the form first.
+        context.ApiTokens.AddRange(
+            new ApiToken
+            {
+                Id = ApiTokenAId,
+                OrganizationId = OrgAId,
+                Name = ApiTokenAName,
+                TokenHash = Zenkins.Server.Api.ApiTokenCrypto.Hash(ApiTokenAPlaintext),
+                Scopes = ApiTokenScopesAll,
+                CreatedByUserId = OrgAOwnerUserId,
+            },
+            new ApiToken
+            {
+                Id = ApiTokenBId,
+                OrganizationId = OrgBId,
+                Name = ApiTokenBName,
+                TokenHash = Zenkins.Server.Api.ApiTokenCrypto.Hash(ApiTokenBPlaintext),
+                Scopes = ApiTokenScopesAll,
+                CreatedByUserId = OrgBOwnerUserId,
+            });
+
+        // F-027: one idempotency record per organization (the token + run it queued), so the entity's
+        // tenant filter has a row on each side.
+        context.ApiIdempotencyRecords.AddRange(
+            new ApiIdempotencyRecord
+            {
+                OrganizationId = OrgAId,
+                ApiTokenId = ApiTokenAId,
+                Key = "fixture-key",
+                RunId = BuildRunAId,
+            },
+            new ApiIdempotencyRecord
+            {
+                OrganizationId = OrgBId,
+                ApiTokenId = ApiTokenBId,
+                Key = "fixture-key",
+                RunId = BuildRunBId,
             });
 
         // F-008: one log line per organization's run, the row every log probe reads.

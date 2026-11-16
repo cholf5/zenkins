@@ -42,6 +42,8 @@ The Server never executes builds. Workers connect outbound to the Server, pull j
 - [Installation and upgrade guide](docs/install.md) — deploy the published binaries as a service on
   Windows, Linux or macOS, configure, upgrade with data intact, uninstall
 - [Lua runtime contract](docs/lua-runtime.md) — engine, sandbox surface, execution model, fixtures
+- [API v1](docs/api-v1.md) — scoped organization tokens, the trigger/read/tail/cancel routes, and the
+  refusal shapes a script sees
 - [Roadmap](docs/kanban/roadmap.md) — milestones and long-term direction
 - [Kanban board](docs/kanban/board.md) — what is being worked on now
 

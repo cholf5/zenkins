@@ -410,13 +410,71 @@ public sealed class RunService(
                 "You are not a member of an organization, so there is no project to run.");
         }
 
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        if (!await context.OrganizationMembers.AnyAsync(
-                member => member.UserId == actingUserId,
-                cancellationToken))
+        if (!await IsOrganizationMemberAsync(actingUserId, cancellationToken))
         {
             return RunTriggerResult.Forbidden("You are not a member of the active organization.");
         }
+
+        return await CreateQueuedRunAsync(
+            activeOrganizationId.Value,
+            projectId,
+            input,
+            BuildRunTriggerType.Manual,
+            actingUserId,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// The organization API's trigger (card F-027): <b>the same routine the form runs</b> - the same
+    /// project lookup through the tenant filter, the same F-028/F-029 gate, the same branch/tag/timeout/
+    /// parameter validation and error codes, the same staging under the project row lock. The only
+    /// differences are the ones an API necessarily has: the credential (a token row, which already
+    /// selected the tenant) instead of a membership check, and no acting user, so the run is attributed
+    /// to <see cref="BuildRunTriggerType.Api"/>.
+    /// <para>
+    /// <b>Why not a second trigger path.</b> A copy of the validation would let the API and the form drift
+    /// (a rule fixed in one place would not hold in the other); this method exists only to hand the shared
+    /// routine a tenant and a trigger type.
+    /// </para>
+    /// </summary>
+    public async Task<RunTriggerResult> TriggerForApiAsync(
+        Guid projectId,
+        RunTriggerInput input,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        if (tenantContext.OrganizationId is not { } organizationId)
+        {
+            // Unreachable through the endpoint (authentication sets the tenant); kept as a guard so a
+            // future caller can never trigger inside an unspecified tenant.
+            return RunTriggerResult.Forbidden(
+                "No organization is selected for this request, so there is no project to run.");
+        }
+
+        return await CreateQueuedRunAsync(
+            organizationId,
+            projectId,
+            input,
+            BuildRunTriggerType.Api,
+            actingUserId: null,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// The one trigger implementation (cards F-003/F-014/F-020/F-021/F-028/F-029/F-027): every caller - the
+    /// form, the API, and a future source - arrives here after it has proved it may act for
+    /// <paramref name="organizationId"/>.
+    /// </summary>
+    private async Task<RunTriggerResult> CreateQueuedRunAsync(
+        Guid organizationId,
+        Guid projectId,
+        RunTriggerInput input,
+        string triggerType,
+        string? actingUserId,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
         var project = await context.Projects.SingleOrDefaultAsync(
             candidate => candidate.Id == projectId,
@@ -435,10 +493,11 @@ public sealed class RunService(
         if (ProjectTriggerGuard.DisabledRefusal(project.Disabled) is { } disabledCode)
         {
             logger.LogInformation(
-                "Trigger refused: the project is disabled. OrganizationId={OrganizationId} ProjectId={ProjectId} Refusal={Refusal} ByUserId={UserId}",
-                activeOrganizationId,
+                "Trigger refused: the project is disabled. OrganizationId={OrganizationId} ProjectId={ProjectId} Refusal={Refusal} TriggerType={TriggerType} ByUserId={UserId}",
+                organizationId,
                 project.Id,
                 disabledCode,
+                triggerType,
                 actingUserId);
             return RunTriggerResult.Refused(
                 disabledCode,
@@ -503,12 +562,12 @@ public sealed class RunService(
         }
 
         var run = BuildQueuedRun(
-            activeOrganizationId.Value,
+            organizationId,
             project,
             requestedBranch.Length > 0 ? requestedBranch : project.DefaultBranch,
             requiredTags,
             timeoutMinutes is { } minutes ? minutes * 60 : null,
-            BuildRunTriggerType.Manual,
+            triggerType,
             actingUserId,
             gitCommit: null,
             // F-020: a Freestyle run freezes the project's spec at trigger time - the same snapshot
@@ -529,14 +588,24 @@ public sealed class RunService(
         await transaction.CommitAsync(cancellationToken);
 
         logger.LogInformation(
-            "Run queued. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} PipelinePath={PipelinePath} ByUserId={UserId}",
-            activeOrganizationId,
+            "Run queued. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} PipelinePath={PipelinePath} TriggerType={TriggerType} ByUserId={UserId}",
+            organizationId,
             project.Id,
             run.Id,
             run.GitBranch,
             run.PipelinePath,
+            triggerType,
             actingUserId);
         return staged;
+    }
+
+    /// <summary>Whether the account is a member of the request's active organization (the trigger right).</summary>
+    private async Task<bool> IsOrganizationMemberAsync(string userId, CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.OrganizationMembers.AnyAsync(
+            member => member.UserId == userId,
+            cancellationToken);
     }
 
     /// <summary>
@@ -928,10 +997,28 @@ public sealed class RunService(
         Guid runId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        await foreach (var line in StreamRunLogAsync(runId, fromSeq: 0, cancellationToken))
+        {
+            yield return line;
+        }
+    }
+
+    /// <summary>
+    /// The same stream starting after <paramref name="fromSeq"/> (card F-027's <c>?from=&lt;offset&gt;</c>
+    /// tailing): a client that already holds every line up to <c>fromSeq</c> asks again with that value
+    /// and receives only what is new. The lines are the same already-redacted rows the UI's download
+    /// streams - there is no second redaction step anywhere on the server, so the two surfaces cannot
+    /// diverge.
+    /// </summary>
+    public async IAsyncEnumerable<LogLineMessage> StreamRunLogAsync(
+        Guid runId,
+        long fromSeq,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var rows = context.BuildLogs
             .AsNoTracking()
-            .Where(log => log.RunId == runId)
+            .Where(log => log.RunId == runId && log.Seq > fromSeq)
             .OrderBy(log => log.Seq)
             .Select(log => new LogLineMessage(log.Seq, log.Stream, log.Message, log.Timestamp, log.StepId));
 
@@ -939,6 +1026,19 @@ public sealed class RunService(
         {
             yield return line;
         }
+    }
+
+    /// <summary>
+    /// The highest log sequence this run holds (0 when it has none). The API answers it in the log
+    /// response's <c>X-Zenkins-Last-Seq</c> header before streaming starts, so a tailing client learns the
+    /// offset to ask for next without parsing the body.
+    /// </summary>
+    public async Task<long> GetRunLogLastSeqAsync(Guid runId, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.BuildLogs
+            .Where(log => log.RunId == runId)
+            .MaxAsync(log => (long?)log.Seq, cancellationToken) ?? 0;
     }
 
     // ---------------------------------------------------------------------
@@ -1889,6 +1989,56 @@ public sealed class RunService(
             return RunCancelResult.Forbidden("You are not a member of the active organization.");
         }
 
+        var actor = await context.Users
+            .Where(user => user.Id == actingUserId)
+            .Select(user => user.Email)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return await CancelRunCoreAsync(
+            runId,
+            RunCancelReasons.ForUser(actor ?? actingUserId),
+            $"ByUserId={actingUserId}",
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// The organization API's cancel (card F-027): the same cancellation routine the run page's button
+    /// runs - the same queued compare-and-set, the same running cancel-request path, the same friendly
+    /// no-op for a terminal run, the same 404 for a foreign id. The caller proved its authority with a
+    /// token carrying the <c>cancel</c> scope (the endpoint's policy), so there is no membership check
+    /// here; the reason names the token instead of a person, because a person was not involved.
+    /// </summary>
+    public async Task<RunCancelResult> CancelForApiAsync(
+        Guid runId,
+        string tokenName,
+        CancellationToken cancellationToken = default)
+    {
+        if (tenantContext.OrganizationId is null)
+        {
+            return RunCancelResult.Forbidden(
+                "No organization is selected for this request, so there is no run to cancel.");
+        }
+
+        return await CancelRunCoreAsync(
+            runId,
+            RunCancelReasons.ForApi(tokenName),
+            $"ByApiToken={tokenName}",
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// F-009's cancel, from the run lookup to the last write - shared by the page's button and the API so
+    /// the queued race (F-009's re-read) has exactly one implementation. The caller has already resolved
+    /// the actor and the tenant; nothing here checks authority.
+    /// </summary>
+    private async Task<RunCancelResult> CancelRunCoreAsync(
+        Guid runId,
+        string reason,
+        string actorLog,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
         var run = await context.BuildRuns.SingleOrDefaultAsync(
             candidate => candidate.Id == runId,
             cancellationToken);
@@ -1898,11 +2048,6 @@ public sealed class RunService(
             return RunCancelResult.NotFound();
         }
 
-        var actor = await context.Users
-            .Where(user => user.Id == actingUserId)
-            .Select(user => user.Email)
-            .FirstOrDefaultAsync(cancellationToken);
-        var reason = RunCancelReasons.ForUser(actor ?? actingUserId);
         var now = DateTimeOffset.UtcNow;
 
         if (run.Status is BuildRunStatus.Queued or BuildRunStatus.Running)
@@ -1914,10 +2059,10 @@ public sealed class RunService(
                 if (canceled == 1)
                 {
                     logger.LogInformation(
-                        "Queued run canceled. OrganizationId={OrganizationId} RunId={RunId} ByUserId={UserId}",
+                        "Queued run canceled. OrganizationId={OrganizationId} RunId={RunId} {Actor}",
                         run.OrganizationId,
                         runId,
-                        actingUserId);
+                        actorLog);
                     return RunCancelResult.Canceled();
                 }
 
@@ -1952,10 +2097,10 @@ public sealed class RunService(
                 }
 
                 logger.LogInformation(
-                    "Running run cancel requested. OrganizationId={OrganizationId} RunId={RunId} ByUserId={UserId}",
+                    "Running run cancel requested. OrganizationId={OrganizationId} RunId={RunId} {Actor}",
                     run.OrganizationId,
                     runId,
-                    actingUserId);
+                    actorLog);
                 return RunCancelResult.CancelRequested();
             }
         }

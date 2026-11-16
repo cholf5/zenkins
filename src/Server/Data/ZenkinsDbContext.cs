@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Git;
+using Zenkins.Server.Api;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Artifacts;
@@ -109,6 +110,14 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Encrypted Git credentials (F-013). Write-only above this layer: the only decrypt path
     /// is <c>GitCredentialService.FetchMaterialForRunAsync</c>, which serves one run's worker.</summary>
     public DbSet<GitCredential> GitCredentials => Set<GitCredential>();
+
+    /// <summary>Organization API tokens (F-027): SHA-256 hashes, never plaintext; the hash lookup
+    /// through the system scope is what selects the tenant for <c>/api/v1/*</c>.</summary>
+    public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
+
+    /// <summary>Remembered <c>Idempotency-Key</c> values of API triggers (F-027), one per
+    /// (token, key); the unique index is the replay guard.</summary>
+    public DbSet<ApiIdempotencyRecord> ApiIdempotencyRecords => Set<ApiIdempotencyRecord>();
 
     /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
     public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
@@ -960,6 +969,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // F-017: the webhook and its replay records (tenant-owned; unique (ProjectId, Name) and
         // (WebhookId, DedupeKey)). The rules live next to the feature (src/Server/Webhooks).
         modelBuilder.ConfigureWebhooks(this);
+
+        // F-027: the organization API tokens and their idempotency records (tenant-owned; globally
+        // unique TokenHash, unique (OrganizationId, Name) and (ApiTokenId, Key)). The rules live next
+        // to the feature (src/Server/Api).
+        modelBuilder.ConfigureApi(this);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

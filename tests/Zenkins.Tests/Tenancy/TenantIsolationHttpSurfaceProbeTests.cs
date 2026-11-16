@@ -42,6 +42,7 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
                      "/projects",
                      "/secrets",
                      "/workers",
+                     "/api-tokens",
                      "/organizations/members",
                      $"/projects/{TwoOrgsFixture.ProjectAId}/settings",
                      $"/projects/{TwoOrgsFixture.ProjectAId}/runs",

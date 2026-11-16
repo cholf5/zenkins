@@ -30,6 +30,17 @@ public static class RunCancelReasons
     /// <summary>Builds the full reason for a user-initiated cancel (<c>canceled-by-user &lt;user&gt;</c>).</summary>
     public static string ForUser(string actor) => $"{CanceledByUser} {actor}";
 
+    /// <summary>
+    /// The prefix of an API-initiated cancel reason (<c>canceled-by-api &lt;token label&gt;</c>, card
+    /// F-027). Deliberately not <see cref="CanceledByUser"/>: this becomes the run's
+    /// <c>FailureReason</c>, and no person was involved - the actor was an organization token, which
+    /// the reason names.
+    /// </summary>
+    public const string CanceledByApi = "canceled-by-api";
+
+    /// <summary>Builds the full reason for an API-initiated cancel (<c>canceled-by-api &lt;token&gt;</c>).</summary>
+    public static string ForApi(string tokenName) => $"{CanceledByApi} {tokenName}";
+
     /// <summary>Whether a reason is the deadline sweeper's timeout request.</summary>
     public static bool IsTimeout(string? reason) =>
         string.Equals(reason, Timeout, StringComparison.Ordinal);

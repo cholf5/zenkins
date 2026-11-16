@@ -17,7 +17,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | M | | F-020 |
 | [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | L | | I-005, F-017, F-036 |
 | [F-024](issues/f-024-scheduled-triggers.md) | Scheduled triggers: cron per project, with an honest overlap and miss policy | P1 | M | | F-021, F-029 |
-| [F-027](issues/f-027-api-v1.md) | API v1: organization API tokens, trigger/cancel/read runs without a browser | P1 | M | | F-017 |
 | [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | M | | I-005, F-017 |
 | [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | M | | F-036 |
 | [F-030](issues/f-030-stage-grouping.md) | Stage grouping: named stages in the frozen spec, with status and duration | P2 | L | | F-014, F-015, F-020 |
@@ -36,6 +35,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-007](issues/b-007-missing-base-token-palette.md) | The app defines no base token palette — dark/light changes nothing until a base color is picked | P1 | M | | none |
 | [Q-013](issues/q-013-theme-shell-test-strength.md) | The theme shell tests do not pin the load order, the trigger wiring or the cookie's negative cases | P2 | S | | none |
 | [Q-014](issues/q-014-artifact-zip-temp-snapshot-flake.md) | The artifact zip fact snapshots the OS temp directory and fails whenever anything else writes there | P2 | S | | none |
+| [Q-015](issues/q-015-api-token-stamp-and-test-gaps.md) | F-027's review leftovers: the last-used stamp still fails loud and wide, and two fixes have no regression net | P3 | S | | none |
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | S | | none |
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Duplicate choice entries accepted; a Freestyle row's inherited pipeline path | P3 | S | | none |
 
@@ -94,4 +94,5 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-021](issues/f-021-parameterized-builds.md) | Parameterized builds: project definitions, trigger values and a frozen run snapshot (both kinds) | P1 | 2026-11-16 |
 | [F-028](issues/f-028-project-enable-disable.md) | Project enable/disable: stop every trigger without deleting history | P2 | 2026-11-16 |
 | [F-029](issues/f-029-queue-controls.md) | Queue controls: per-project concurrency, quiet period and a bounded queue | P2 | 2026-11-16 |
+| [F-027](issues/f-027-api-v1.md) | API v1: organization API tokens, trigger/cancel/read runs without a browser | P1 | 2026-11-16 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | 2026-11-16 |

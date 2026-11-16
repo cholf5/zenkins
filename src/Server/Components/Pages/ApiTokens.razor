@@ -1,0 +1,201 @@
+@page "/api-tokens"
+@attribute [Authorize]
+@using Zenkins.Server.Api
+@inject UserSession UserSession
+@inject ApiTokenService TokenService
+
+<PageTitle>API tokens · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1" tabindex="-1">API tokens</BbCardTitle>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+        }
+    </div>
+
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else if (!_canManage)
+    {
+        @* Owner-only page (F-027, the F-004 rule): a token is a standing authority for the whole
+           organization, so a Member must not even learn which labels exist. The endpoints are the
+           enforcement; this is the page half of it. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Owner access required</BbCardTitle>
+                <BbCardDescription>
+                    API tokens are managed by organization Owners. Ask an Owner if a script needs one.
+                </BbCardDescription>
+            </BbCardHeader>
+        </BbCard>
+    }
+    else
+    {
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">New token</BbCardTitle>
+                <BbCardDescription>
+                    A bearer token for scripts and other systems: <code>Authorization: Bearer &lt;token&gt;</code>
+                    against <code>/api/v1</code>. The plaintext is shown once at creation and never stored -
+                    only its SHA-256 hash is kept. Each scope opens exactly the routes it names.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <form method="post" action="/api-tokens/create" data-zenkins-antiforgery class="bb:space-y-3">
+                    <div class="bb:space-y-2">
+                        <label for="api-token-name" class="bb:text-sm bb:font-medium">Label</label>
+                        <input id="api-token-name"
+                               name="Name"
+                               type="text"
+                               required
+                               maxlength="@ApiTokenLimits.MaxNameLength"
+                               value="@SubmittedName"
+                               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                               autocomplete="off"
+                               spellcheck="false"
+                               placeholder="deploy pipeline" />
+                        <p class="bb:text-xs bb:text-muted-foreground">
+                            Unique in this organization; it names the token in this list and in the run's
+                            cancel reason.
+                        </p>
+                    </div>
+
+                    <fieldset class="bb:space-y-1">
+                        <legend class="bb:text-sm bb:font-medium">Scopes</legend>
+                        <label class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                            <input type="checkbox" name="Trigger" value="true" checked />
+                            <span><code>trigger</code> - queue a run for a project</span>
+                        </label>
+                        <label class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                            <input type="checkbox" name="Read" value="true" checked />
+                            <span><code>read</code> - list projects and runs, read a run and its log</span>
+                        </label>
+                        <label class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                            <input type="checkbox" name="Cancel" value="true" />
+                            <span><code>cancel</code> - cancel a queued or running run</span>
+                        </label>
+                    </fieldset>
+
+                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create token</BbButton>
+                </form>
+            </BbCardContent>
+        </BbCard>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Tokens</BbCardTitle>
+                <BbCardDescription>
+                    Revoking is immediate and permanent; a token that never expires is valid until it is
+                    revoked. "Last used" moves at most once a minute.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_tokens.Count == 0)
+                {
+                    <p class="bb:text-sm bb:text-muted-foreground">No API tokens yet.</p>
+                }
+                else
+                {
+                    <ul class="bb:divide-y">
+                        @foreach (var token in _tokens)
+                        {
+                            <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
+                                <div class="bb:min-w-0">
+                                    <p class="bb:font-medium">
+                                        @token.Name
+                                        @if (token.RevokedAt is not null)
+                                        {
+                                            <BbBadge Variant="BadgeVariant.Destructive">Revoked</BbBadge>
+                                        }
+                                        else if (!token.IsActive)
+                                        {
+                                            <BbBadge Variant="BadgeVariant.Outline">Expired</BbBadge>
+                                        }
+                                    </p>
+                                    <p class="bb:text-xs bb:text-muted-foreground">
+                                        Scopes: @string.Join(", ", token.Scopes) · Created @token.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC
+                                    </p>
+                                    <p class="bb:text-xs bb:text-muted-foreground">
+                                        @(token.LastUsedAt is { } used ? $"Last used {used:yyyy-MM-dd HH:mm} UTC" : "Never used")
+                                    </p>
+                                </div>
+                                @if (token.RevokedAt is null)
+                                {
+                                    <form method="post" action="/api-tokens/@token.Id/revoke" data-zenkins-antiforgery>
+                                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Revoke</BbButton>
+                                    </form>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    private UserSessionInfo? _session;
+    private IReadOnlyList<ApiTokenView> _tokens = [];
+    private bool _canManage;
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "name")]
+    private string? SubmittedName { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        "token-revoked" => "The API token was revoked. Requests with it are refused from now on.",
+        _ => null,
+    };
+
+    private string? Error => ErrorCode switch
+    {
+        ApiErrorCodes.NameRequired => "A label is required.",
+        ApiErrorCodes.NameInvalid => "The label is too long or contains a control character.",
+        ApiErrorCodes.NameTaken => "This organization already has a token with that label.",
+        ApiErrorCodes.ScopeRequired => "Choose at least one scope.",
+        ApiErrorCodes.ScopeInvalid => "One of the chosen scopes is not known.",
+        ApiErrorCodes.TokenAlreadyRevoked => "That token is already revoked.",
+        _ => null,
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Resolving the session selects the circuit's tenant before any tenant-owned row is read.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _canManage = _session.CanManageActiveOrganization;
+        if (_canManage)
+        {
+            _tokens = await TokenService.GetTokensAsync(_session.UserId);
+        }
+    }
+}
