@@ -1,22 +1,64 @@
 <Project>
 
   <!--
-    B-009: the repository's own NativeAOT compiler version.
+    B-009: the NativeAOT compiler version, derived from the SDK's runtime band and guarded.
 
-    The SDK adds Microsoft.DotNet.ILCompiler as an *implicit* PackageReference during restore, taking
-    its version from the installed SDK's KnownILCompilerPack item (`ILCompilerPackVersion`). Central
-    package management cannot override an implicit reference (NU1009), and an explicit
-    PackageReference cannot carry a version under CPM either (NU1008) - so the item the SDK reads is
-    rewritten here instead. The version itself, and the reasoning behind 10.0.14, live in
-    Directory.Build.props next to the `TreatWarningsAsErrors` that made the missing pin fatal.
+    Why derived rather than a constant: `Microsoft.DotNet.ILCompiler` and the AOT runtime pack must
+    carry the *same* patch as `Microsoft.NETCore.App.Runtime.<rid>` - ILC refuses to publish when the
+    AOT pack's `System.Private.CoreLib.dll` is older ("Overriding System.Private.CoreLib.dll with a
+    newer version is not supported"). A constant pin cannot be right on two machines whose SDKs are on
+    different 10.0.x patches: 10.0.14 fixed a 10.0.11 machine and broke every CI runner on 10.0.15, in
+    the PublishAot segment only. `BundledNETCoreAppPackageVersion` is the SDK's own runtime band, so
+    taking the compiler's version from it pairs the two by construction on every machine.
 
-    Restore is what reads this item, so the Update has to happen at evaluation time (this file is
-    imported after the SDK's targets but before any target runs) - do not move it into a Target.
+    `ZenkinsILCompilerVersion` stays overridable on purpose (a future band may need an explicit value),
+    but an override is only accepted when it *equals* the band - the guard below turns that rule into
+    a build error instead of something to remember. The advisory floor lives in Directory.Build.props
+    next to the `TreatWarningsAsErrors` that made the old failure fatal.
+
+    Evaluation time for the item: restore is what reads it, and it reads it before any target of ours
+    would run.
   -->
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <ZenkinsRuntimeBandVersion Condition="'$(ZenkinsRuntimeBandVersion)' == ''">$(BundledNETCoreAppPackageVersion)</ZenkinsRuntimeBandVersion>
+    <ZenkinsILCompilerVersion Condition="'$(ZenkinsILCompilerVersion)' == ''">$(ZenkinsRuntimeBandVersion)</ZenkinsILCompilerVersion>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(PublishAot)' == 'true'">
     <KnownILCompilerPack Update="Microsoft.DotNet.ILCompiler"
                          ILCompilerPackVersion="$(ZenkinsILCompilerVersion)" />
   </ItemGroup>
+
+  <!--
+    The rule, as a build error in both graphs (restore and build), because the failure it prevents
+    happens at publish time - the one place nobody looks until CI does. The band is read a second time,
+    from KnownFrameworkReference metadata (the value the publish really uses for the runtime pack), so
+    the comparison is against the SDK and not against our own property. Three checks, three messages:
+    nothing to derive, a compiler that does not match the runtime band (a broken publish), and a band
+    below the patched floor (an artifact compiled by a version with an open advisory).
+  -->
+  <Target Name="Zenkins_ValidateILCompilerVersion"
+          BeforeTargets="CollectPackageReferences;PrepareForBuild"
+          Condition="'$(PublishAot)' == 'true'">
+    <ItemGroup>
+      <_ZenkinsRuntimeBand Include="@(KnownFrameworkReference->WithMetadataValue('RuntimeFrameworkName', 'Microsoft.NETCore.App')->WithMetadataValue('TargetFramework', '$(TargetFramework)'))" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_ZenkinsKnownRuntimeBand>@(_ZenkinsRuntimeBand->'%(LatestRuntimeFrameworkVersion)')</_ZenkinsKnownRuntimeBand>
+    </PropertyGroup>
+
+    <Error Condition="'$(ZenkinsILCompilerVersion)' == '' or '$(_ZenkinsKnownRuntimeBand)' == ''"
+           Code="ZENKINS0001"
+           Text="B-009: could not determine the NativeAOT compiler version for $(MSBuildProjectName): KnownFrameworkReference for Microsoft.NETCore.App / $(TargetFramework) reported no LatestRuntimeFrameworkVersion and no ZenkinsILCompilerVersion was given. The AOT compiler must match the runtime pack's patch (ILC rejects a newer runtime pack), so the build cannot guess." />
+
+    <Error Condition="'$(ZenkinsILCompilerVersion)' != '$(_ZenkinsKnownRuntimeBand)'"
+           Code="ZENKINS0002"
+           Text="B-009: NativeAOT compiler $(ZenkinsILCompilerVersion) does not match this SDK's runtime band $(_ZenkinsKnownRuntimeBand) (KnownFrameworkReference / $(TargetFramework)). They must be the same patch: Microsoft.DotNet.ILCompiler and Microsoft.NETCore.App.Runtime.* are one pair, and ILC refuses to publish an AOT pack whose System.Private.CoreLib.dll is older than the runtime pack's (&quot;Overriding System.Private.CoreLib.dll with a newer version is not supported&quot;). Fix: drop the ZenkinsILCompilerVersion override so the version is derived from the SDK, or set it to $(_ZenkinsKnownRuntimeBand)." />
+
+    <Error Condition="$([System.Version]::Parse('$(ZenkinsILCompilerVersion)')) &lt; $([System.Version]::Parse('$(ZenkinsILCompilerMinimumVersion)'))"
+           Code="ZENKINS0003"
+           Text="B-009: this SDK's runtime band is $(ZenkinsILCompilerVersion), older than the patched floor $(ZenkinsILCompilerMinimumVersion). GHSA-p3jp-9v83-76w9 covers Microsoft.DotNet.ILCompiler &gt;= 10.0.0, &lt; $(ZenkinsILCompilerMinimumVersion), so this machine would compile the shipped worker with a compiler that has an open high-severity advisory. Install a .NET 10 SDK whose runtime band is $(ZenkinsILCompilerMinimumVersion) or newer (a current 10.0.4xx installer does) - do not disable NuGet audit." />
+  </Target>
 
   <!--
     Structural guard for card I-001 (AC7): Zenkins.Shared is consumed by the console

@@ -111,15 +111,18 @@ environment discipline as card Q-008.
 - Verified on this machine: `10.0.403` (also `10.0.101` is installed; either works).
 - Floor enforced by [`global.json`](../global.json): `10.0.100` with `rollForward: latestFeature`, so
   any 10.0.x SDK in feature band `1xx` or newer is accepted (a 9.x SDK is not).
-- The NativeAOT compiler is **pinned by the repository, not by the SDK**: `ZenkinsILCompilerVersion` in
-  [`Directory.Build.props`](../Directory.Build.props) (applied to the SDK's `KnownILCompilerPack` item
-  in [`Directory.Build.targets`](../Directory.Build.targets)) fixes `Microsoft.DotNet.ILCompiler` at
-  **10.0.14**, the first release outside GHSA-p3jp-9v83-76w9's affected range. Without that pin the
-  version came from whichever SDK the machine had, so two machines could compile the shipped worker
-  with two compilers — one of them the vulnerable one, which failed the restore through NuGet audit
-  and `TreatWarningsAsErrors` (B-009). `rollForward` therefore cannot change what compiles the worker,
-  and a machine on an older 10.0.x band still restores and builds; a *publish* wants a current band.
-  Bumping the pin is a one-line change and never a suppression: NuGet audit stays on.
+- The NativeAOT compiler is **not hard-coded; it is derived from your SDK and guarded**. It cannot be a
+  constant: `Microsoft.DotNet.ILCompiler` has to carry the same 10.0.x patch as the SDK's
+  `Microsoft.NETCore.App.Runtime.*` pack, because ILC refuses to publish an AOT pack whose
+  `System.Private.CoreLib.dll` is older than the runtime pack's. (`Directory.Build.targets` therefore
+  takes `ZenkinsILCompilerVersion` from the SDK's own runtime band; an earlier constant pin of 10.0.14
+  built fine on one machine and failed every CI runner on 10.0.15 — B-009.) Two build errors hold the
+  rule instead of a note in a guide: **ZENKINS0002** when an override disagrees with the band this SDK
+  reports (fails `dotnet build` and `dotnet restore`, before a publish ever runs), and **ZENKINS0003**
+  when the band is below `ZenkinsILCompilerMinimumVersion` = **10.0.14**, the first 10.0 release
+  outside GHSA-p3jp-9v83-76w9 — such a machine would compile the shipped worker with a compiler that
+  has an open high-severity advisory, so install a current `10.0.4xx` SDK rather than disabling NuGet
+  audit. `rollForward` stays wide because the compiler no longer comes from it.
 
 ```bash
 dotnet --version     # 10.0.403

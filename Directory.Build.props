@@ -1,31 +1,30 @@
 <Project>
 
   <!--
-    B-009: the NativeAOT compiler (Microsoft.DotNet.ILCompiler), pinned by the repository.
+    B-009: the NativeAOT compiler (Microsoft.DotNet.ILCompiler) must be the runtime band's own patch.
 
-    Nothing in the solution references it directly. With PublishAot the SDK injects it at restore
-    time, and its version is whatever `ILCompilerPackVersion` the *installed SDK's*
-    Microsoft.NETCoreSdk.BundledVersions.props carries - a function of the machine, not of this
-    repository, since global.json accepts any 10.0.x band. Two machines therefore compiled the
-    shipped Worker with two compilers: a fresh Windows box resolved 10.0.11, which
-    GHSA-p3jp-9v83-76w9 (high, the Brotli decoder) covers for the whole `>= 10.0.0, < 10.0.14`
-    range - so NuGet audit's NU1903, fatal under the `TreatWarningsAsErrors` below, turned into a
-    restore that could not finish - while macOS resolved 10.0.14 and built clean.
+    Nothing in the solution references it directly: with `PublishAot` the SDK injects it as an
+    *implicit* PackageReference at restore time, taking its version from the installed SDK's
+    `KnownILCompilerPack` item, and the AOT runtime pack it compiles against comes from the same band
+    (`KnownFrameworkReference`'s `LatestRuntimeFrameworkVersion`). The two are **one number**: ILC
+    refuses to publish when the AOT pack's `System.Private.CoreLib.dll` is older than the runtime
+    pack's (`Overriding System.Private.CoreLib.dll with a newer version is not supported`), so a
+    compiler version that disagrees with the runtime band is not a setting, it is a broken build.
 
-    10.0.14 is the first release of the 10.0 line outside that advisory's range and the version the
-    current SDK band ships, so the pin changes nothing on a machine already there while pulling a
-    10.0.11 machine onto the patched compiler. Deliberately not 10.0.15 (the band EF Core and the
-    hosting packages are on): the AOT compiler is paired with the SDK's own runtime band, so a pin
-    that outruns the SDK is the same drift pointing the other way.
+    That is exactly what treating the version as a hard-coded constant broke: pinning 10.0.14 fixed
+    the machine that shipped 10.0.11, then failed every CI runner whose band is 10.0.15, in the
+    `PublishAot` segment only. The value is therefore **derived** (Directory.Build.targets takes it
+    from the SDK's own runtime band) and a manual override is only accepted when it equals that band
+    - the guard below is what makes the rule a build error instead of a memory test.
 
-    This is a *version*, not an exemption, and it cannot be a PackageVersion: the reference is
-    SDK-implicit and central package management refuses a PackageVersion for those (NU1009).
-    Directory.Build.targets therefore rewrites the SDK's own KnownILCompilerPack item. Bumping it is
-    a one-line change here, made when a new advisory or runtime band says so - never by whichever
-    machine happens to build.
+    What is genuinely the repository's decision is the **floor**: `ZenkinsILCompilerMinimumVersion`.
+    GHSA-p3jp-9v83-76w9 (high, the Brotli decoder) covers `Microsoft.DotNet.ILCompiler
+    >= 10.0.0, < 10.0.14`, and 10.0.14 is the first patched release of the 10.0 line. An SDK whose
+    band is older than the floor cannot produce a safe worker, so the build stops with a message that
+    says which SDK to install - never with a suppressed audit, and never with `-p:NuGetAudit=false`.
   -->
   <PropertyGroup>
-    <ZenkinsILCompilerVersion>10.0.14</ZenkinsILCompilerVersion>
+    <ZenkinsILCompilerMinimumVersion>10.0.14</ZenkinsILCompilerMinimumVersion>
   </PropertyGroup>
 
   <!--
