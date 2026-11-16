@@ -4,9 +4,9 @@ title: Parameterized builds: project parameter definitions, trigger values and a
 type: feature
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 blocked: none
 ---
 
@@ -161,3 +161,24 @@ Expected:
   so the claim's new JSON members stay source-generated and AOT-safe. After the review fixes the
   non-Milestone suite is **1113 passed / 0 failed**, including the refused-save PRG target and the
   corrupt-choice resolution.
+
+### 2026-11-16 — independent review: PASS
+
+Adversarial re-verification of the committed state (`da3c513`), in the reviewer's own clean
+checkout, not the shared tree the developer works in.
+
+- Build: `dotnet build -c Release` — 0 warnings, 0 errors. Suite: full `dotnet test -c Release`
+  **1129 passed / 0 failed / 0 skipped** (6m28s); `--filter Category=Milestone` **12/12**.
+- All seven criteria satisfied with file:line evidence. The resolution really is total and strict
+  (`ProjectParameters.cs:180-230`) and it really runs before the run row exists
+  (`RunService.cs:438-445` vs `:460`); both kinds carry real-process proof that a child reads the
+  parameter (`MilestoneParameterTests.cs:19-60`, `:62-102`); the webhook path resolves the
+  definitions' defaults and not a previous manual trigger's values (`RunService.cs:566-569`).
+- Two criteria were under-tested in the suite: the trigger form's pre-filled defaults, and the
+  out-of-bounds refusal, which only reaches the unit layer and never the trigger endpoint. The
+  reviewer proved the form behaviour with its own probe; the bound gap is recorded on Q-012.
+- Two low-severity inconsistencies found and recorded on Q-012: duplicate `choice` entries are
+  accepted (two identical `<option>`s render), and `Project.PipelinePath` still defaults to
+  `pipeline.lua` at the entity level — a Freestyle row created outside `ProjectService`
+  validation would carry it into a run snapshot.
+- **Verdict: PASS.** Status → done; board row moved to Done (2026-11-16).

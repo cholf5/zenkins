@@ -4,9 +4,9 @@ title: Freestyle job kind: repository-free projects with server-configured scrip
 type: feature
 priority: P1
 size: L
-status: review
+status: done
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 blocked: none
 ---
 
@@ -176,3 +176,22 @@ Expected:
   pass on the Release build (macOS arm64). After the review fixes the non-Milestone suite is 1113
   passed / 0 failed and `MilestoneFreestyleTests` + `MilestoneParameterTests` are 4 passed / 0 failed
   (two consecutive runs).
+
+### 2026-11-16 — independent review: PASS
+
+Adversarial re-verification of the committed state (`da3c513`), in the reviewer's own clean
+checkout (`git clone --no-hardlinks`), not the shared tree the developer works in.
+
+- Build: `dotnet build -c Release` — 0 warnings, 0 errors. Suite: full `dotnet test -c Release`
+  **1129 passed / 0 failed / 0 skipped** (6m28s); `--filter Category=Milestone` **12/12**.
+- All eight criteria satisfied, each re-derived from the tree with file:line evidence. The
+  mechanisms the Background records are real: the envelope still reads v1
+  (`PipelineSpec.cs:153-156`), exactly one of run/shell/script is enforced (`:370-377`), the
+  Freestyle branch skips clone and definition phase (`PipelineRunner.cs:425-441`), and the trigger
+  copies the saved spec onto the run (`RunService.cs:456-459`).
+- Three criteria had **no test at all** in the suite — kind immutability, the post-trigger snapshot
+  (AC6), and the Freestyle webhook refusals (AC7). The reviewer proved each with its own probes
+  rather than trusting the ticked boxes; the missing regression tests are recorded on Q-012.
+- Windows-only behaviour (the `cmd /d /s /c` branch, BOM handling under cmd) was code read, not
+  executed — this box is macOS and the Milestone E2E runs there too.
+- **Verdict: PASS.** Status → done; board row moved to Done (2026-11-16).
