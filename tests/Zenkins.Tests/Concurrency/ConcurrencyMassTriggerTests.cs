@@ -61,14 +61,24 @@ public sealed class ConcurrencyMassTriggerTests
         }
 
         // Every run ends in the terminal state its worker reported: exit 0, no failure reason,
-        // and every run was claimed (a WorkerId stamped) - no run lost in the queue.
-        Assert.All(runs, run =>
-        {
-            Assert.Equal("Success", run.Status);
-            Assert.Equal(0, run.ExitCode);
-            Assert.Null(run.FailureReason);
-            Assert.NotNull(run.WorkerId);
-        });
+        // and every run was claimed (a WorkerId stamped) - no run lost in the queue. A failure names
+        // the runs that did not and attaches the ring's own output (Q-020: `Lost` alone was not
+        // diagnosable from the CI log).
+        var unexpected = runs
+            .Where(run => run.Status != "Success"
+                || run.ExitCode != 0
+                || run.FailureReason is not null
+                || run.WorkerId is null)
+            .ToArray();
+        Assert.True(
+            unexpected.Length == 0,
+            $"{unexpected.Length} of {runs.Count} runs did not end in the state their worker reported: "
+            + string.Join(
+                "; ",
+                unexpected.Select(run => $"{run.Id:D} ended {run.Status} (exit {run.ExitCode}, "
+                    + $"reason '{run.FailureReason}', worker {run.WorkerId?.ToString("D") ?? "none"})"))
+            + Environment.NewLine
+            + await host.FormatWorkerTailsAsync(workers));
 
         // Exactly once, per run, provable from records: row, process output and persisted log.
         var rows = new Dictionary<string, Guid>(StringComparer.Ordinal);

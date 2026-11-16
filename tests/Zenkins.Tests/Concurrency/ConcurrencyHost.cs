@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Diagnostics;
+using System.Text;
 using Xunit;
 using Zenkins.Tests.Milestone;
 using Zenkins.Tests.Organizations;
@@ -37,6 +38,47 @@ internal sealed class ConcurrencyHost : RecoveryHost
 {
     private static readonly TimeSpan WorkerOnlineTimeout = TimeSpan.FromSeconds(45);
 
+    /// <summary>
+    /// The compressed F-010 offline window the whole ring runs under: <b>15 s</b>, not the 5 s Q-005
+    /// first picked (Q-020).
+    /// <para>
+    /// <b>Why 5 s was not enough, and it is not a load problem.</b> A worker sends one heartbeat per
+    /// <see cref="HeartbeatSeconds"/> and, on a transport failure,
+    /// <c>WorkerRunner.HeartbeatLoopAsync</c> backs off 1 s, 2 s, 4 s ... (±25 % jitter, reset on
+    /// success), while a single request may sit for its 10 s timeout before the loop even learns it
+    /// failed. A 5 s window is therefore five skipped beats: one stalled request already consumes
+    /// most of it, three consecutive failures exceed it, and a two-core runner hosting the server,
+    /// three workers and the test host over SQLite's single writer (three claim polls a second) has
+    /// potholes that size. Windows CI proved the arithmetic in the only way that counts - three of
+    /// twelve runs `Lost` with `worker-offline`, no worker dead, every one of them heartbeating again
+    /// afterwards.
+    /// </para>
+    /// <para>
+    /// <b>Why 15 s is enough.</b> Two full request timeouts plus a beat fit inside it, so a stall has
+    /// to be a real one (the card's reproduction needed 6 s of a fully suspended process to lose a
+    /// run; with this window the same suspension is silent, and 15 s of it would not be). The cost is
+    /// wall-clock: a genuinely dead worker's row takes 10 s longer to flip Offline, which only
+    /// <c>ConcurrencyTagAssignmentTests</c>' killed-worker wait pays, inside its own timeout. The
+    /// margin is <b>proved</b>, not assumed - see
+    /// <c>ConcurrencyOfflineWindowTests.A_stalled_worker_inside_the_window_loses_no_run</c>.
+    /// </para>
+    /// </summary>
+    private const int OfflineWindowSeconds = 15;
+
+    /// <summary>
+    /// The heartbeat period every ring worker is started with (<c>ZENKINS_HEARTBEAT_SECONDS</c>); 1 s
+    /// is the finest the worker accepts. It stays at 1 s deliberately: the window above is the knob
+    /// Q-020 moves, so the ratio the offline decision runs on gets <b>wider</b> rather than the
+    /// traffic between three workers and one SQLite writer getting denser.
+    /// </summary>
+    private const int HeartbeatSeconds = 1;
+
+    /// <summary>The claim poll period every ring worker is started with.</summary>
+    private const int ClaimSeconds = 1;
+
+    /// <summary>The offline window in seconds, for the facts that reason about it.</summary>
+    public static int OfflineWindow => OfflineWindowSeconds;
+
     private ConcurrencyHost(string rootPath, string dotnetPath, string workerDll)
         : base(rootPath, dotnetPath, workerDll)
     {
@@ -47,7 +89,7 @@ internal sealed class ConcurrencyHost : RecoveryHost
     {
         options ??= new MilestoneHostOptions(
             SweepIntervalSeconds: 1,
-            OfflineAfterSeconds: 5,
+            OfflineAfterSeconds: OfflineWindowSeconds,
             WorkerMonitorIntervalSeconds: 1);
         var root = Path.Combine(Path.GetTempPath(), $"zenkins-q005-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -81,7 +123,11 @@ internal sealed class ConcurrencyHost : RecoveryHost
     /// registration token is minted through the Owner's real form, and the process is a member of the
     /// ring: it stays online (heartbeating every second) until dispose kills it.
     /// </summary>
-    public async Task<RecoveryWorker> StartWorkerAsync(string name, string tags, int maxConcurrency)
+    public async Task<RecoveryWorker> StartWorkerAsync(
+        string name,
+        string tags,
+        int maxConcurrency,
+        string? serverUrl = null)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var dataDirectory = Path.Combine(RootPath, $"worker-data-{name}");
@@ -113,14 +159,16 @@ internal sealed class ConcurrencyHost : RecoveryHost
         };
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(WorkerDllPath);
-        startInfo.Environment["ZENKINS_SERVER_URL"] = ServerUrl;
+        startInfo.Environment["ZENKINS_SERVER_URL"] = serverUrl ?? ServerUrl;
         startInfo.Environment["ZENKINS_REGISTRATION_TOKEN"] = registrationToken;
         startInfo.Environment["ZENKINS_WORKER_NAME"] = name;
         startInfo.Environment["ZENKINS_WORKER_TAGS"] = tags;
         startInfo.Environment["ZENKINS_WORKER_CONCURRENCY"] = maxConcurrency.ToString(
             System.Globalization.CultureInfo.InvariantCulture);
-        startInfo.Environment["ZENKINS_HEARTBEAT_SECONDS"] = "1";
-        startInfo.Environment["ZENKINS_CLAIM_SECONDS"] = "1";
+        startInfo.Environment["ZENKINS_HEARTBEAT_SECONDS"] = HeartbeatSeconds.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        startInfo.Environment["ZENKINS_CLAIM_SECONDS"] = ClaimSeconds.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
         startInfo.Environment["ZENKINS_DATA_DIR"] = dataDirectory;
         startInfo.Environment["ZENKINS_WORK_ROOT"] = workRoot;
 
@@ -198,6 +246,125 @@ internal sealed class ConcurrencyHost : RecoveryHost
         Assert.DoesNotContain("runError=", location, StringComparison.Ordinal);
         Assert.StartsWith("/runs/", location, StringComparison.Ordinal);
         return Guid.Parse(location["/runs/".Length..].Split('?')[0]);
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // The stalled heartbeat (Q-020): a live worker whose heartbeat stops arriving, and the evidence
+    // a failure carries
+    // -------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Waits until the server's stored last heartbeat for <paramref name="name"/> is at least
+    /// <paramref name="age"/> old, and returns the age it measured. While the worker's traffic is
+    /// gated (<see cref="HeartbeatGate"/>) the age only grows, so the wait is a <b>measurement</b> of
+    /// how long the heartbeat has been silent, not a sleep: the fact can claim "older than the window
+    /// Q-020 replaced" from the server's own row instead of from the clock it started.
+    /// </summary>
+    public async Task<TimeSpan> WaitForHeartbeatAgeAsync(string name, TimeSpan age, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var row = await ReadConcurrencyWorkerRowAsync(name);
+            var measured = row.LastHeartbeatAt is { } last
+                ? DateTimeOffset.UtcNow - last
+                : TimeSpan.Zero;
+            if (measured >= age)
+            {
+                return measured;
+            }
+
+            Assert.True(
+                DateTime.UtcNow < deadline,
+                $"worker '{name}' never went {age.TotalSeconds:0.#}s without a heartbeat "
+                + $"(last one {measured.TotalSeconds:0.#}s ago, status {row.Status}).{Environment.NewLine}"
+                + FormatDiagnostics());
+            await Task.Delay(200, TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Polls until at least one of <paramref name="runIds"/> is <c>Running</c> and returns that run,
+    /// so a scenario can act on the worker that really holds work (Q-020). With
+    /// <paramref name="workerId"/> the wait is for a run <b>that worker</b> holds. The wait is on the
+    /// runs' own rows; a run that has already finished is never waited for twice.
+    /// </summary>
+    public async Task<MilestoneRun> WaitForAnyRunningAsync(
+        IReadOnlyCollection<Guid> runIds,
+        TimeSpan? timeout = null,
+        Guid? workerId = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(120));
+        while (DateTime.UtcNow < deadline)
+        {
+            var list = string.Join(", ", runIds.Select(id => $"'{id.ToString("D").ToUpperInvariant()}'"));
+            var running = await ReadAsync(
+                "SELECT \"Id\", \"ProjectId\", \"Status\", \"TriggerType\", \"WorkerId\", \"ExitCode\", "
+                + "\"FailureReason\", \"GitCommit\", \"PipelineSpecJson\", \"EndedAt\", \"ParametersJson\" "
+                + $"FROM \"BuildRuns\" WHERE \"Status\" = 'Running' AND \"Id\" IN ({list})",
+                reader => new MilestoneRun(
+                    Guid.Parse(reader.GetString(0)),
+                    Guid.Parse(reader.GetString(1)),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : Guid.Parse(reader.GetString(4)),
+                    reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.IsDBNull(9) ? null : reader.GetDateTimeOffset(9),
+                    reader.IsDBNull(10) ? null : reader.GetString(10)));
+            if (running.Count > 0 && (workerId is null || running.Any(run => run.WorkerId == workerId)))
+            {
+                return running.First(run => workerId is null || run.WorkerId == workerId);
+            }
+
+            await Task.Delay(200, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Fail(
+            "no run was ever Running"
+            + (workerId is { } id ? $" on worker {id:D}" : string.Empty)
+            + $" among the {runIds.Count} triggered, so no worker held work to stall."
+            + Environment.NewLine + FormatDiagnostics());
+        return null!;
+    }
+
+    /// <summary>
+    /// The ring's own output, one worker at a time, with the server's row for each - what a failure
+    /// message needs to be diagnosable. Q-020 exists because the CI log named the terminal state
+    /// (<c>Lost</c>, <c>worker-offline</c>) and nothing else: the reason was in the workers' output and
+    /// the rows (which one stopped heartbeating, what it was doing when it did).
+    /// </summary>
+    public async Task<string> FormatWorkerTailsAsync(IEnumerable<RecoveryWorker> workers, int lines = 40)
+    {
+        var rows = await ReadAsync(
+            "SELECT \"Name\", \"Status\", \"LastHeartbeatAt\" FROM \"Workers\"",
+            reader => (
+                Name: reader.GetString(0),
+                Status: reader.GetString(1),
+                LastHeartbeat: reader.IsDBNull(2) ? (DateTimeOffset?)null : reader.GetDateTimeOffset(2)));
+
+        var builder = new StringBuilder();
+        foreach (var worker in workers)
+        {
+            var row = rows.FirstOrDefault(candidate => candidate.Name == worker.Name);
+            var serverSide = row.Name is null
+                ? "no server row"
+                : $"server row {row.Status}, last heartbeat "
+                  + (row.LastHeartbeat is { } beat
+                      ? $"{(DateTimeOffset.UtcNow - beat).TotalSeconds:0.#}s ago"
+                      : "never");
+            builder.AppendLine(
+                $"--- worker '{worker.Name}' (pid {worker.ProcessId}), {serverSide} - stdout/stderr tail ---");
+            var output = worker.Output;
+            foreach (var line in output.Length <= lines ? output : output[^lines..])
+            {
+                builder.AppendLine(line);
+            }
+        }
+
+        return builder.ToString();
     }
 
     // -------------------------------------------------------------------------------------------

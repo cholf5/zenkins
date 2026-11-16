@@ -4,10 +4,10 @@ title: A fresh Windows machine cannot restore the solution — NU1903 on ILCompi
 type: bug
 priority: P2
 size: S
-status: todo
+status: review
 created: 2026-11-16
 updated: 2026-11-16
-blocked: windows: reproducible there; not on macOS
+blocked: windows: the pin is verified on macOS only (the 10.0.11 failure itself was reproduced there)
 ---
 
 ## Goal
@@ -39,22 +39,25 @@ compiler that produces the shipped worker binary.
 
 ## Acceptance Criteria
 
-- [ ] The ILCompiler version is pinned by the repository (central package management) or by an
+- [x] The ILCompiler version is pinned by the repository (central package management) or by an
       explicit SDK pin, so two machines with different installed feature bands resolve the same
       compiler.
 - [ ] A clean `dotnet build Zenkins.slnx -c Release` succeeds on Windows without
       `-p:NuGetAudit=false`, and `dotnet list package --vulnerable --include-transitive` reports
-      nothing for the Worker on both Windows and macOS.
-- [ ] `TreatWarningsAsErrors` stays on: the fix is a correct dependency, not a suppressed audit.
-- [ ] If `global.json`'s roll-forward is what lets the drift in, narrow it and record why; if pinning
+      nothing for the Worker on both Windows and macOS. macOS: verified. Windows: **not verified here**
+      (no Windows machine) — but the failing half of it was reproduced on macOS by pinning 10.0.11,
+      see Verification.
+- [x] `TreatWarningsAsErrors` stays on: the fix is a correct dependency, not a suppressed audit.
+- [x] If `global.json`'s roll-forward is what lets the drift in, narrow it and record why; if pinning
       ILCompiler is enough, record that instead.
-- [ ] CI keeps building green on all three runners after the change.
+- [ ] CI keeps building green on all three runners after the change. Owed: the Windows and Linux jobs.
 
 ## Subtasks
 
-- [ ] Pin `Microsoft.DotNet.ILCompiler` (or the runtime/toolchain set) to a version with no advisory.
-- [ ] Verify on the Windows box and on macOS; record both `project.assets.json` versions.
-- [ ] Decide and document the `global.json` roll-forward policy.
+- [x] Pin `Microsoft.DotNet.ILCompiler` (or the runtime/toolchain set) to a version with no advisory.
+- [ ] Verify on the Windows box and on macOS; record both `project.assets.json` versions. macOS done
+      (10.0.14); the Windows number is owed.
+- [x] Decide and document the `global.json` roll-forward policy.
 
 ## Dependencies
 
@@ -67,3 +70,70 @@ compiler that produces the shipped worker binary.
   deliberately rather than by whichever machine built the artifact.
 - The workaround is deliberately **not** written into `docs/` as the supported way to build: a build
   that needs audit disabled is a build that would ship the vulnerable compiler.
+
+## Resolution (2026-11-16)
+
+**The version: 10.0.14.** GHSA-p3jp-9v83-76w9 (CVE-2026-111497, the Brotli decoder, high) covers
+`Microsoft.DotNet.ILCompiler >= 10.0.0, < 10.0.14`; 10.0.14 is the first patched release of the 10.0
+line and the version the current SDK band ships, so the pin is a no-op on a machine already there and
+lifts a 10.0.11 machine onto the patched compiler. Deliberately **not** 10.0.15 (the band EF Core and
+the hosting packages are on): the AOT compiler is paired with the SDK's own runtime band, and pinning
+it ahead of the SDK would be the same drift pointing the other way. The advisory is the only one
+published against this package (`/advisories?affects=Microsoft.DotNet.ILCompiler` returns one entry).
+
+**How it is pinned — not where you would look first.** `Directory.Packages.props` cannot hold it: the
+reference is *SDK-implicit* under `PublishAot`, and central package management refuses a
+`PackageVersion` for an implicit reference (**NU1009**, measured). An explicit `PackageReference` with
+a version is refused too (**NU1008**). The SDK builds that reference from its own
+`KnownILCompilerPack` item (`ILCompilerPackVersion` in the installed SDK's
+`Microsoft.NETCoreSdk.BundledVersions.props`), so the repository rewrites that item instead:
+
+- `Directory.Build.props` — `<ZenkinsILCompilerVersion>10.0.14</ZenkinsILCompilerVersion>`, next to the
+  `TreatWarningsAsErrors` that made the missing pin fatal, with the reasoning above written out.
+- `Directory.Build.targets` — `KnownILCompilerPack Update="Microsoft.DotNet.ILCompiler"
+  ILCompilerPackVersion="$(ZenkinsILCompilerVersion)"`, at evaluation time (restore is what reads it;
+  a `Target` would be too late).
+
+That the update really drives the graph was proved by moving it: 10.0.15 in the property turned
+`project.assets.json` into `Microsoft.DotNet.ILCompiler/10.0.15` plus
+`runtime.osx-arm64.Microsoft.DotNet.ILCompiler/10.0.15`, and back.
+
+**`global.json`: keep `latestFeature`, and say why in the file.** Narrowing it would not make machines
+agree — it would only choose a *different* SDK per machine and, at `latestPatch`, refuse a fresh
+Windows box that ships 10.0.4xx, which is this card's defect inverted. With the compiler pinned by the
+repository, the field no longer decides what compiles the worker, so it stays at the value that makes
+the guide's single prerequisite (".NET 10 SDK, 10.0.100 or newer") true. The reasoning is written as
+comments in `global.json` itself (the SDK's reader accepts them) and summarised in
+`docs/development.md` §1.
+
+**Residual risk, stated rather than hidden.** On a machine whose SDK band is *older* than 10.0.14, the
+pin makes restore and `dotnet build` correct immediately (build runs the AOT analyzers, not `ilc`), but
+an AOT *publish* there would pair a 10.0.14 compiler with that SDK's older runtime pack. The fix for
+that is to be on a current SDK band, which is what "10.0.100 or newer" already asks for; the Windows
+box in the report (10.0.400) would want a 10.0.4xx SDK that ships 10.0.14 or newer. Not verified here
+— there is no Windows machine.
+
+## Verification
+
+- **The Windows failure reproduced on macOS, by pinning the version it failed on.** With
+  `ZenkinsILCompilerVersion` set to `10.0.11`, `dotnet build src/Worker/Zenkins.Worker.csproj -c Release`
+  fails exactly as reported: `error NU1903: Warning As Error: Package 'Microsoft.DotNet.ILCompiler'
+  10.0.11 has a known high severity vulnerability, https://github.com/advisories/GHSA-p3jp-9v83-76w9`
+  (two occurrences, one per restore/build pass). With 10.0.14 the same command is clean. The audit is a
+  function of the resolved version, not of the machine, so this is the same verdict the Windows box
+  will report. Log: `artifacts/logs/b009-mutant-ilcompiler-10.0.11.log`.
+- **macOS `project.assets.json`** (`src/Worker/obj/project.assets.json`):
+  `Microsoft.DotNet.ILCompiler/10.0.14` and `runtime.osx-arm64.Microsoft.DotNet.ILCompiler/10.0.14`
+  (SDK 10.0.403). The Windows number is **owed** — the expectation is 10.0.14, because the pin no longer
+  consults the installed SDK.
+- `dotnet build Zenkins.slnx -c Release` (macOS): 0 warnings, 0 errors —
+  `artifacts/logs/b009-build-clean-10.0.14.log`. `TreatWarningsAsErrors` and NuGet audit untouched;
+  no `NuGetAudit=false` anywhere.
+- `dotnet list package --vulnerable --include-transitive`: `Zenkins.Worker` → "no vulnerable packages";
+  solution-wide → no vulnerable packages in any of the six projects
+  (`artifacts/logs/b009-vulnerable-worker.log`, `artifacts/logs/b009-vulnerable-solution.log`).
+  Windows still owed.
+- The full gate (`scripts/verify.sh`), including the two AOT suites that actually run `ilc` with the
+  pinned compiler: `artifacts/logs/b004-q020-b009-gate.log`.
+- Not verified: the Windows box itself (restore without `NuGetAudit=false`, its assets version, its
+  `--vulnerable` output, and an AOT publish there), and the Linux runner.

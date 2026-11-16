@@ -7,7 +7,7 @@ size: M
 status: review
 created: 2026-11-15
 updated: 2026-11-16
-blocked: windows: AC1 partial, AC2 unrun
+blocked: windows: AC1 partial, AC2 red on CI and fixed, unverified here
 ---
 
 ## Goal
@@ -40,9 +40,10 @@ need for the skips and restore those observations on Windows.
 - [ ] The recording shims exist in a compiled form usable from a Windows `Process.Start`.
       Partial: the compiled TestAsset exists, starts as a native process and drives a real clone on
       POSIX; starting it from a Windows `Process.Start` is unverified — no Windows machine here.
-- [ ] The nine facts run (not skip) on a Windows machine and pass. Unverified: the guards are gone
-      (8 of them, see Resolution) and those facts are green on POSIX, but the Windows run itself has
-      not happened.
+- [ ] The nine facts run (not skip) on a Windows machine and pass. Guards are gone (8 of them, see
+      Resolution), the facts are green on POSIX, and the one Windows-only failure they exposed (the
+      ssh config path assertion) is fixed - see the updates below. Unverified: the Windows run itself
+      has still not happened on a machine we control.
 - [x] The POSIX path keeps using the shell scripts; the shim log format stays identical for both.
 
 ## Subtasks
@@ -139,3 +140,41 @@ exists there, so this is reproducible locally rather than only in CI).
 Same run also fails `Concurrency.ConcurrencyMassTriggerTests`
 (`Twelve_runs_across_three_workers_are_claimed_and_executed_exactly_once`: three of twelve runs `Lost`
 with `worker-offline`), which the previous Windows run did not — tracked separately, not here.
+
+## Update 2026-11-16 — root cause: the test compared an unescaped path with the escaped command
+
+The Windows failure was diagnosed on a real Windows box and it is one line of test expectation, not a
+product or shim defect. `GitEnvironment.Quote()` (`src/Worker/Git/GitEnvironment.cs`) puts every path
+in a double-quoted word for git's shell-style `GIT_SSH_COMMAND` parser and escapes it (`\` → `\\`,
+`"` → `\"`), so the recorded command line reads
+
+```
+ssh -F "C:\\Users\\<user>\\AppData\\Local\\Temp\\zenkins-f013-ssh-clone-<guid>\\hardening\\ssh_config.hardened" -i "…"
+```
+
+while the assertion searched for the **bare** Windows path (`C:\Users\…\hardening`). Every backslash
+appears doubled, so the substring cannot match. POSIX paths hold no backslash, which is why the same
+two lines pass on macOS and Linux and why this stayed hidden until B-004 removed the Windows skip.
+
+The product behaviour is correct - git unescapes the word before handing ssh its argv, and
+`SshdCloneTests` already proves that end to end by parsing the command exactly as git does. The test
+was wrong: it compared a value from before the escaping with a value after it.
+
+## Resolution (this round)
+
+The two assertions escape the expectation instead of unescaping the command, through the product's
+own helper - `QuotedWord(path)` is `GitEnvironment.Quote(path)` without the surrounding quotes, so the
+POSIX path is unchanged and the Windows path is doubled exactly as the command doubles it. One source
+of truth for the escaping: if the quoting ever changes, the expectation changes with it rather than
+re-implementing git's parser in a test (which is `SshdCloneTests`' job, and it has the sshd for it).
+
+## Verification (this round)
+
+- POSIX (macOS 26.5 / arm64, .NET 10.0.403): `--filter FullyQualifiedName~GitSshConstructionTests`
+  → 8/8 pass, 0 skipped. Before the change the same filter was green for the same reason it was green
+  on Windows' first run: the bare-path comparison happens to hold without backslashes.
+- `dotnet build Zenkins.slnx -c Release`: 0 warnings, 0 errors.
+- **The Windows run itself is still owed.** Nothing here was executed on Windows: the fix is derived
+  from the actual and expected strings in the CI log plus the escaping rule in the product, which is
+  the whole diff. AC2 stays unticked until someone reruns `--filter Category=Git` on Windows and sees
+  those eight facts pass (0 skipped).

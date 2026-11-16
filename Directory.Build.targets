@@ -1,6 +1,24 @@
 <Project>
 
   <!--
+    B-009: the repository's own NativeAOT compiler version.
+
+    The SDK adds Microsoft.DotNet.ILCompiler as an *implicit* PackageReference during restore, taking
+    its version from the installed SDK's KnownILCompilerPack item (`ILCompilerPackVersion`). Central
+    package management cannot override an implicit reference (NU1009), and an explicit
+    PackageReference cannot carry a version under CPM either (NU1008) - so the item the SDK reads is
+    rewritten here instead. The version itself, and the reasoning behind 10.0.14, live in
+    Directory.Build.props next to the `TreatWarningsAsErrors` that made the missing pin fatal.
+
+    Restore is what reads this item, so the Update has to happen at evaluation time (this file is
+    imported after the SDK's targets but before any target runs) - do not move it into a Target.
+  -->
+  <ItemGroup Condition="'$(PublishAot)' == 'true'">
+    <KnownILCompilerPack Update="Microsoft.DotNet.ILCompiler"
+                         ILCompilerPackVersion="$(ZenkinsILCompilerVersion)" />
+  </ItemGroup>
+
+  <!--
     Structural guard for card I-001 (AC7): Zenkins.Shared is consumed by the console
     Worker, which has to stay publishable self-contained/trimmed without ASP.NET Core.
 

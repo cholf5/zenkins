@@ -55,11 +55,19 @@ loop (`dotnet run` from a clone).
 > the shared classifier now carries (the missing branch answers before an auth-sounding stderr, the two
 > shared kinds survive, and a silent git still yields "no stderr output" rather than a bare `: )`). Still no
 > new category and no new exclusion - the sextuple filter is unchanged.
+> B-007 and Q-013 (the theme palette and the theme shell tests) added **3** tests on 2026-11-16: the
+> served-stylesheet cascade that pins the base token palette (the default state's tokens in both modes,
+> their equality with the library's own zinc, and a picked accent still overriding them), alongside
+> D-007's tightened ordering, wiring and cookie-contract facts. No new category, no new exclusion.
+> Q-020 added **1** test on 2026-11-16: the offline-window margin fact (a ring worker behind a shut
+> loopback gate must keep its run and lose none of twelve, with the silence measured from the
+> server's own heartbeat row). It moved a harness constant (the concurrency ring's offline window,
+> 5 s → 15 s) rather than a product one, and added no category and no exclusion.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines against a real run: **fast 1220, all seven 1246** (Milestone 12, Recovery 4,
+> and re-baselines against a real run: **fast 1242, all seven 1268** (Milestone 12, Recovery 4,
 > PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 3 - the last one skipping without
 > `ZENKINS_TEST_POSTGRES`). Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
@@ -103,6 +111,15 @@ environment discipline as card Q-008.
 - Verified on this machine: `10.0.403` (also `10.0.101` is installed; either works).
 - Floor enforced by [`global.json`](../global.json): `10.0.100` with `rollForward: latestFeature`, so
   any 10.0.x SDK in feature band `1xx` or newer is accepted (a 9.x SDK is not).
+- The NativeAOT compiler is **pinned by the repository, not by the SDK**: `ZenkinsILCompilerVersion` in
+  [`Directory.Build.props`](../Directory.Build.props) (applied to the SDK's `KnownILCompilerPack` item
+  in [`Directory.Build.targets`](../Directory.Build.targets)) fixes `Microsoft.DotNet.ILCompiler` at
+  **10.0.14**, the first release outside GHSA-p3jp-9v83-76w9's affected range. Without that pin the
+  version came from whichever SDK the machine had, so two machines could compile the shipped worker
+  with two compilers — one of them the vulnerable one, which failed the restore through NuGet audit
+  and `TreatWarningsAsErrors` (B-009). `rollForward` therefore cannot change what compiles the worker,
+  and a machine on an older 10.0.x band still restores and builds; a *publish* wants a current band.
+  Bumping the pin is a one-line change and never a suppression: NuGet audit stays on.
 
 ```bash
 dotnet --version     # 10.0.403
@@ -229,7 +246,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1238 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1242 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -239,7 +256,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1264 at the time of writing) but
+filter runs **all seven** (1268 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

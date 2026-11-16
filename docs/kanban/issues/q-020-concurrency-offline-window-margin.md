@@ -4,10 +4,10 @@ title: The concurrency mass trigger gives the offline window no margin, so a sta
 type: test
 priority: P2
 size: S
-status: todo
+status: review
 created: 2026-11-16
 updated: 2026-11-16
-blocked: none
+blocked: windows: the new fact has only run on POSIX
 ---
 
 ## Goal
@@ -42,21 +42,25 @@ that arithmetic is enough. `Lost` rather than `Failed`, with no rerun, is F-010'
 
 ## Acceptance Criteria
 
-- [ ] The harness's offline window has margin over the heartbeat period and the backoff ladder: either
+- [x] The harness's offline window has margin over the heartbeat period and the backoff ladder: either
       `OfflineAfterSeconds` raised to at least 15, or the heartbeat interval reduced to the sub-second
       range — whichever is chosen, the reasoning is recorded next to the constants.
-- [ ] A fact proves the margin rather than asserting it: suspending a live worker long enough to
+- [x] A fact proves the margin rather than asserting it: suspending a live worker long enough to
       exceed the old window but not the new one leaves all twelve runs successful.
-- [ ] When the fact does fail, the message carries each suspect worker's stdout/stderr tail (today it
+- [x] When the fact does fail, the message carries each suspect worker's stdout/stderr tail (today it
       reports only `Lost`, which is why the CI log could not be diagnosed from its own output).
-- [ ] The fact passes on a two-core configuration and on the Windows runner.
-- [ ] `docs/development.md` §2 counts re-recorded if facts were added.
+- [ ] The fact passes on a two-core configuration and on the Windows runner. Unverified: it has only
+      been run on a normal POSIX machine (8 cores). The mechanism it drives is platform-independent
+      (a loopback TCP relay, no signals), and the load-only failure modes the card recorded all
+      reproduced on Windows, so the remaining risk is timing, not mechanism.
+- [x] `docs/development.md` §2 counts re-recorded if facts were added. (No new category, no new
+      exclusion; the fast suite grew by one.)
 
 ## Subtasks
 
-- [ ] Raise the window (or shorten the heartbeat) and record why next to the knobs.
-- [ ] Add the suspend-based margin fact.
-- [ ] Attach worker output tails to the failure message.
+- [x] Raise the window (or shorten the heartbeat) and record why next to the knobs.
+- [x] Add the suspend-based margin fact.
+- [x] Attach worker output tails to the failure message.
 
 ## Dependencies
 
@@ -69,3 +73,56 @@ that arithmetic is enough. `Lost` rather than `Failed`, with no rerun, is F-010'
   window until a scheduler hiccup looks like an outage.
 - The suspend-based reproduction is worth keeping as a fact precisely because load alone cannot
   reproduce this class; it is a deterministic way to produce "process alive, heartbeat stopped".
+
+## Resolution (2026-11-16)
+
+**The window.** `ConcurrencyHost` now runs the ring under `OfflineWindowSeconds = 15` (was a literal
+`OfflineAfterSeconds: 5`), with the arithmetic and the two rejected alternatives written next to the
+constant: 15 s tolerates two full 10 s request timeouts plus jitter on the backoff ladder, where 5 s
+tolerated one stalled request and no backoff at all. The heartbeat stays at 1 s (the finest the worker
+accepts) and is now a named constant beside it — the fix widens the ratio the offline decision runs on
+instead of making the traffic between three workers and one SQLite writer denser. `RecoveryHost` keeps
+its own 5 s window: Q-004's lease facts use the short threshold as an observation window on purpose,
+and no concurrency fact depends on the window being short.
+
+**The fact.** `Concurrency/ConcurrencyOfflineWindowTests.A_stalled_worker_inside_the_window_loses_no_run`
+puts two ring workers directly on the server and the third behind a `HeartbeatGate` — a loopback TCP
+relay that can be shut. With the gate shut, the gated worker's bytes stop reaching the server: its
+heartbeat request hangs until its own 10 s request timeout, its claim poll and log stream stall with it,
+and nothing it owes the server arrives, exactly as the CI incident looked. The fact waits until the
+*server's own row* says that heartbeat has been silent for more than the window this card replaced
+(5 s + 1 s of headroom) and less than the new one (15 s), asserts the worker is still `Online` and still
+holding its `Running` run **and its process is alive**, reopens the gate, waits for the stored heartbeat
+to move forward again, and then requires all twelve runs to finish `Success` with exit 0 and no failure
+reason. The stall length is a measurement from the row, never a sleep.
+
+**Why a relay and not `SIGSTOP`.** The card's Windows diagnosis suspended the process with
+`NtSuspendProcess`; the POSIX equivalent (`kill -STOP`) is **not usable from this harness**, and that is
+worth recording because it looks like it should be. The test host is the worker's parent, so stopping
+the worker sends it `SIGCHLD`, and .NET's `Process` bookkeeping wedges there: the next
+`Process` call — even the `Process.Dispose` of the very object that sent the signal — never returns,
+with a thread spinning inside `Process.OnSigChild` while the rest of the harness waits for
+`ProcessWaitState`. It was reproduced twice in the harness and then in a three-child repro on
+macOS 26.5 + .NET 10.0.403 (a `sleep` child, `kill -STOP`, then any further `Process` use hangs), so it
+is a property of the platform, not of this fact's code. The relay stalls the *arrival* of the heartbeat
+rather than the process, needs no signals and no privileges, and is identical on all three OSes.
+
+**The failure message.** Both facts now build their message from the run rows (`status`, `exit`,
+`FailureReason`, assigned worker) plus `ConcurrencyHost.FormatWorkerTailsAsync`, which emits, per ring
+worker, its name, pid, the server's row for it (`Online`/`Offline` and how old its last heartbeat is) and
+the tail of its own stdout/stderr. The CI log named `Lost … worker-offline` and nothing else; the next
+occurrence explains itself.
+
+## Verification
+
+- POSIX (macOS 26.5 / arm64, 8 cores, .NET 10.0.403):
+  - `--filter FullyQualifiedName~ConcurrencyOfflineWindowTests` → 1/1 pass in 62 s.
+  - **Mutant, the window back at 5 s** (`OfflineWindowSeconds = 5`): the fact fails in 13 s with
+    `worker 'stall-c' was already Offline after 6.1s without a heartbeat, inside the 5s window` plus
+    both other workers' tails. That is the card's mechanism, measured: 6 s of silence is enough to lose
+    a run under the old window and not under the new one. Log:
+    `artifacts/logs/q020-mutant-window-5.log`.
+  - `--filter Category=Concurrency` and the full fast suite: green (see the gate log
+    `artifacts/logs/b004-q020-b009-gate.log`).
+- Two cores / the Windows runner: **not run here** (AC4 above). Nothing in the fact depends on the
+  platform, and the numbers it asserts come from the server's rows rather than from wall-clock sleeps.

@@ -1,4 +1,18 @@
 {
+  // B-009: `latestFeature` is deliberate, and it is not what makes the two machines disagree about
+  // the build. It accepts any 10.0.x SDK (the floor is 10.0.100, feature band 1xx or newer), which is
+  // what lets the guide's one prerequisite - ".NET 10 SDK, 10.0.100 or newer" - be true on a machine
+  // that has only ever installed the current installer build. Narrowing it to `latestPatch` would
+  // require a 10.0.1xx SDK and refuse a fresh Windows box that ships with 10.0.4xx, which is the
+  // defect B-009 is about, inverted.
+  //
+  // What it does *not* do is decide the NativeAOT compiler. That version came from the installed
+  // SDK's own KnownILCompilerPack (10.0.11 on one machine's 10.0.400, 10.0.14 on another's
+  // 10.0.403), so two machines compiled the shipped Worker with two compilers and the older one
+  // carried GHSA-p3jp-9v83-76w9. The repository now pins that compiler itself
+  // (`ZenkinsILCompilerVersion` in Directory.Build.props, applied in Directory.Build.targets), so the
+  // SDK may roll forward for the toolchain while the artifact stays compiled by 10.0.14. Revisit this
+  // field only if the SDK itself (not a package it injects) turns out to change build output.
   "sdk": {
     "version": "10.0.100",
     "rollForward": "latestFeature"

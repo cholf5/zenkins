@@ -14,6 +14,13 @@ public sealed class GitSshConstructionTests
 {
     private const string PrivateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nzenkins-test-key-material\n-----END OPENSSH PRIVATE KEY-----\n";
 
+    /// <summary>
+    /// One path as it appears <i>inside</i> a <c>GIT_SSH_COMMAND</c> word: the product's own quoting
+    /// without the surrounding quotes, so a POSIX path matches unchanged and a Windows path matches
+    /// with its backslashes doubled (see <see cref="WorkerGit.GitEnvironment.Quote"/>).
+    /// </summary>
+    private static string QuotedWord(string path) => WorkerGit.GitEnvironment.Quote(path)[1..^1];
+
     [Fact]
     public void The_ssh_command_line_is_pinned()
     {
@@ -215,8 +222,14 @@ public sealed class GitSshConstructionTests
         Assert.Contains("IdentityAgent=none", sshCommand, StringComparison.Ordinal);
         Assert.Contains("IdentitiesOnly=yes", sshCommand, StringComparison.Ordinal);
         Assert.Contains("StrictHostKeyChecking=accept-new", sshCommand, StringComparison.Ordinal);
-        Assert.Contains(work.HardeningPath, sshCommand, StringComparison.Ordinal);
-        Assert.Contains(work.TempPath, sshCommand, StringComparison.Ordinal);
+        // The recorded value is the command line as git's own parser receives it, i.e. after
+        // GitEnvironment.Quote() put each path in a double-quoted word and escaped it - a
+        // Windows path therefore appears with every `\` doubled (`C:\\Users\\...\\hardening`) and a
+        // bare path never matches it (B-004's first real Windows run). The expectation is escaped the
+        // same way rather than the command unescaped: borrowing the product's own quoting keeps the
+        // two from drifting, and it is what git will hand the shell, not a re-implementation of it.
+        Assert.Contains(QuotedWord(work.HardeningPath), sshCommand, StringComparison.Ordinal);
+        Assert.Contains(QuotedWord(work.TempPath), sshCommand, StringComparison.Ordinal);
         Assert.Contains(WorkerGit.GitCredentialFiles.SshKeyFileName, sshCommand, StringComparison.Ordinal);
 
         // After the operation: the key file is gone and no file holds the key material.
