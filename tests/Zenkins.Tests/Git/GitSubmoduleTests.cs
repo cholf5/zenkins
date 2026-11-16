@@ -26,13 +26,6 @@ public sealed class GitSubmoduleTests
     public async Task A_submodule_is_fetched_recursively_through_the_runs_credential_channel()
     {
         using var directory = new GitTestDirectory("submodule");
-        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
-        // through, so the fact is named as skipped there rather than silently red or green.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {{
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }}
-
         var environment = GitCli.Environment(directory);
 
         // 1. The submodule's own repository, served as /sub.git.
@@ -78,7 +71,8 @@ public sealed class GitSubmoduleTests
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
         var lines = new List<string>();
         var workspace = new WorkerGit.GitWorkspace(
-            GitTestWorkspace.Options(work, environment, lines.Add, gitExecutable: shim.GitPath));
+            GitTestWorkspace.Options(
+                work, environment, lines.Add, gitExecutable: shim.GitPath, extraEnvironment: shim.Environment));
 
         var result = await workspace.CloneAsync(
             server.Url,
@@ -116,6 +110,6 @@ public sealed class GitSubmoduleTests
             entries.Where(entry => entry.StartsWith("PROMPT:", StringComparison.Ordinal)),
             entry => Assert.Equal("PROMPT:0", entry));
         Assert.Contains(entries, entry => entry.StartsWith("ASKPASS:", StringComparison.Ordinal)
-            && entry.EndsWith(WorkerGit.GitCredentialFiles.AskPassFileName, StringComparison.Ordinal));
+            && entry.EndsWith(GitCli.AskPassFileNameForThisOs, StringComparison.Ordinal));
     }
 }

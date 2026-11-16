@@ -39,6 +39,9 @@
     <!-- F-007: the ArgvEcho test asset is built with the tests but never loaded into the test
          process - the WorkerRuntime tests locate its DLL and run it through `dotnet exec`. -->
     <ProjectReference Include="TestAssets/ArgvEcho/ArgvEcho.csproj" ReferenceOutputAssembly="false" />
+    <!-- B-004: the compiled recording shim, built with the tests but never loaded into the test
+         process - the Git tests locate its binary and start it as the git the worker runs. -->
+    <ProjectReference Include="TestAssets/RecordingShim/RecordingShim.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

@@ -19,13 +19,6 @@ public sealed class GitCredentialSecrecyTests
     public async Task The_HTTPS_token_travels_only_through_the_askpass_helper()
     {
         using var fixture = GitFixtureRepository.Create("https");
-        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
-        // through, so the fact is named as skipped there rather than silently red or green.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {{
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }}
-
         var token = NewToken();
         using var server = LocalHttpGitServer.Start(fixture.BarePath, token);
         using var directory = new GitTestDirectory("https-secret");
@@ -34,7 +27,8 @@ public sealed class GitCredentialSecrecyTests
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
         var lines = new List<string>();
         var workspace = new WorkerGit.GitWorkspace(
-            GitTestWorkspace.Options(work, fixture.Environment, lines.Add, gitExecutable: shim.GitPath));
+            GitTestWorkspace.Options(
+                work, fixture.Environment, lines.Add, gitExecutable: shim.GitPath, extraEnvironment: shim.Environment));
 
         var result = await workspace.CloneAsync(
             server.Url,
@@ -66,7 +60,7 @@ public sealed class GitCredentialSecrecyTests
             .FirstOrDefault(value => !string.IsNullOrEmpty(value));
         Assert.NotNull(askPassPath);
         Assert.StartsWith(work.TempPath, askPassPath, StringComparison.Ordinal);
-        Assert.EndsWith(WorkerGit.GitCredentialFiles.AskPassFileName, askPassPath, StringComparison.Ordinal);
+        Assert.EndsWith(GitCli.AskPassFileNameForThisOs, askPassPath, StringComparison.Ordinal);
 
         // ...and it is gone, along with every other trace of the token under the run's tree.
         Assert.False(File.Exists(askPassPath));
@@ -94,13 +88,6 @@ public sealed class GitCredentialSecrecyTests
     public async Task A_rejected_token_fails_honestly_and_is_deleted_anyway()
     {
         using var fixture = GitFixtureRepository.Create("https-rejected");
-        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
-        // through, so the fact is named as skipped there rather than silently red or green.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {{
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }}
-
         var presentedToken = NewToken();
         var acceptedToken = NewToken();
         using var server = LocalHttpGitServer.Start(fixture.BarePath, acceptedToken);
@@ -110,7 +97,8 @@ public sealed class GitCredentialSecrecyTests
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
         var lines = new List<string>();
         var workspace = new WorkerGit.GitWorkspace(
-            GitTestWorkspace.Options(work, fixture.Environment, lines.Add, gitExecutable: shim.GitPath));
+            GitTestWorkspace.Options(
+                work, fixture.Environment, lines.Add, gitExecutable: shim.GitPath, extraEnvironment: shim.Environment));
 
         var failure = await Assert.ThrowsAsync<WorkerGit.GitException>(() => workspace.CloneAsync(
             server.Url,
@@ -191,7 +179,8 @@ public sealed class GitCredentialSecrecyTests
         using var shim = RecordingGitShim.Create(directory, GitCli.ResolveGitPath());
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
         var workspace = new WorkerGit.GitWorkspace(
-            GitTestWorkspace.Options(work, GitCli.Environment(directory), gitExecutable: shim.GitPath));
+            GitTestWorkspace.Options(
+                work, GitCli.Environment(directory), gitExecutable: shim.GitPath, extraEnvironment: shim.Environment));
 
         var token = NewToken();
         var failure = await Assert.ThrowsAsync<WorkerGit.GitException>(() => workspace.CloneAsync(

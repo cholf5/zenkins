@@ -17,12 +17,21 @@ namespace Zenkins.Tests.Git;
 public sealed class GitTimeoutTests
 {
     /// <summary>
-    /// A <c>git</c> executable that records its own pid and its child <c>sleep</c>'s pid, then waits -
-    /// the fixture both timeout facts hang on (literally).
+    /// A <c>git</c> executable that records its own pid and its long-lived child's pid, then waits -
+    /// the fixture both timeout facts hang on (literally). The POSIX form is a shell script around
+    /// <c>sleep 300 &amp;</c>; on Windows (card B-004) it is the compiled <c>RecordingShim</c> asset in
+    /// its hanging role, which spawns a sleeping copy of itself - Windows cannot start the script, and
+    /// has no <c>sleep</c> binary of its own.
     /// </summary>
-    private static string CreateHangingGit(GitTestDirectory directory, out string pidFile)
+    private static HangingGit CreateHangingGit(GitTestDirectory directory, string pidFile)
     {
-        pidFile = directory.Combine("pids.txt");
+        if (OperatingSystem.IsWindows())
+        {
+            return new HangingGit(
+                RecordingShimAsset.ExecutablePath,
+                RecordingShimAsset.HangingGitEnvironment(pidFile));
+        }
+
         var binDirectory = directory.Combine("bin");
         GitCli.WriteScript(
             binDirectory,
@@ -37,21 +46,20 @@ public sealed class GitTimeoutTests
                 "wait",
                 string.Empty));
 
-        return Path.Combine(binDirectory, "git");
+        return new HangingGit(
+            Path.Combine(binDirectory, "git"),
+            new Dictionary<string, string?>(StringComparer.Ordinal));
     }
+
+    /// <summary>The stub's executable, and the environment that tells the compiled form where to record.</summary>
+    private sealed record HangingGit(string Path, IReadOnlyDictionary<string, string?> Environment);
 
     [Fact]
     public async Task A_clone_that_exceeds_its_budget_is_killed_with_its_process_tree()
     {
         using var directory = new GitTestDirectory("timeout");
-        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
-        // through, so the fact is named as skipped there rather than silently red or green.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {{
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }}
-
-        var gitPath = CreateHangingGit(directory, out var pidFile);
+        var pidFile = directory.Combine("pids.txt");
+        var hangingGit = CreateHangingGit(directory, pidFile);
 
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
         var lines = new List<string>();
@@ -60,7 +68,8 @@ public sealed class GitTimeoutTests
                 work,
                 GitCli.Environment(directory),
                 lines.Add,
-                gitExecutable: gitPath,
+                gitExecutable: hangingGit.Path,
+                extraEnvironment: hangingGit.Environment,
 
                 // Long enough that the stub records both pids before the budget fires even on a loaded
                 // machine, short enough to keep the test quick. The timeout path itself is what is
@@ -99,7 +108,7 @@ public sealed class GitTimeoutTests
         // The kill path collapsed the credential files with the process: nothing is left in temp, and
         // no file under the run's tree carries the token.
         Assert.Empty(Directory.EnumerateFileSystemEntries(work.TempPath));
-        Assert.False(File.Exists(Path.Combine(work.TempPath, WorkerGit.GitCredentialFiles.AskPassFileName)));
+        Assert.False(File.Exists(Path.Combine(work.TempPath, GitCli.AskPassFileNameForThisOs)));
         Assert.False(File.Exists(Path.Combine(work.TempPath, WorkerGit.GitCredentialFiles.SshKeyFileName)));
         foreach (var file in Directory.EnumerateFiles(work.RootPath, "*", SearchOption.AllDirectories))
         {
@@ -111,27 +120,27 @@ public sealed class GitTimeoutTests
     public async Task A_clone_is_bounded_by_the_runs_remaining_budget_not_only_the_operation_timeout()
     {
         using var directory = new GitTestDirectory("timeout-deadline");
-        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
-        // through, so the fact is named as skipped there rather than silently red or green.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {{
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }}
-
-        var gitPath = CreateHangingGit(directory, out var pidFile);
+        var pidFile = directory.Combine("pids.txt");
+        var hangingGit = CreateHangingGit(directory, pidFile);
 
         // The per-operation timeout is generous (90 seconds); the run's own deadline is what must cut
         // the invocation short - AC-9's "exceeds the run's remaining budget" path. 90 s (not minutes)
         // so a regression that ignored the deadline fails the duration assertion in ~1.5 minutes.
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
+        var environment = new Dictionary<string, string?>(GitCli.Environment(directory), StringComparer.Ordinal);
+        foreach (var (name, value) in hangingGit.Environment)
+        {
+            environment[name] = value;
+        }
+
         var workspace = new WorkerGit.GitWorkspace(
             new WorkerGit.GitWorkspaceOptions
             {
                 Work = work,
-                GitExecutable = gitPath,
+                GitExecutable = hangingGit.Path,
                 OperationTimeout = TimeSpan.FromSeconds(90),
                 RunDeadline = DateTimeOffset.UtcNow.AddSeconds(2),
-                EnvironmentOverrides = GitCli.Environment(directory),
+                EnvironmentOverrides = environment,
             });
 
         var stopwatch = Stopwatch.StartNew();

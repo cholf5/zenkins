@@ -48,13 +48,31 @@ public sealed class GitLfsTests
     }
 
     /// <summary>
+    /// The child environment for the shim-run clone: the shim's own variables (the compiled form on
+    /// Windows reads its log and real-git paths from them; empty on POSIX, where the script bakes them)
+    /// plus the <c>PATH</c> that cannot resolve a <c>git-lfs</c>.
+    /// </summary>
+    private static Dictionary<string, string?> ChildEnvironment(RecordingGitShim shim, GitTestDirectory directory)
+    {
+        return new Dictionary<string, string?>(shim.Environment, StringComparer.Ordinal)
+        {
+            ["PATH"] = PathWithoutGitLfs(shim.BinDirectory, directory),
+        };
+    }
+
+    /// <summary>
     /// <paramref name="prefix"/> plus every inherited <c>PATH</c> entry, with a <c>git-lfs</c> that
     /// provably cannot resolve. An entry holding a git-lfs binary is not dropped outright - a CI
-    /// runner's <c>/usr/bin</c> also holds the utilities git's own helper scripts shell out to
+    /// runner's tool directory also holds the utilities git's own helper scripts shell out to
     /// (basename, sed, uname), and dropping it killed the clone with git exit 127 there. Instead the
     /// entry's executables are mirrored into a scratch directory (inside <paramref name="directory"/>,
     /// so it dies with the fixture) minus every <c>git-lfs*</c> binary: the utilities stay reachable
     /// and no git-lfs can be resolved anywhere on the PATH.
+    /// <para>
+    /// Windows names the binary <c>git-lfs.exe</c> and cannot create a symbolic link without a
+    /// privilege a test machine may not grant, so the mirror is by copy there (the entries this touch
+    /// are the git installation's own bin directories, a few hundred files at most).
+    /// </para>
     /// </summary>
     private static string PathWithoutGitLfs(string prefix, GitTestDirectory directory)
     {
@@ -68,7 +86,7 @@ public sealed class GitLfsTests
                 continue;
             }
 
-            if (!File.Exists(Path.Combine(entry, "git-lfs")))
+            if (!HasGitLfs(entry))
             {
                 entries.Add(entry);
                 continue;
@@ -84,7 +102,15 @@ public sealed class GitLfsTests
                     continue;
                 }
 
-                Directory.CreateSymbolicLink(Path.Combine(mirror, name), binary);
+                var target = Path.Combine(mirror, name);
+                if (OperatingSystem.IsWindows())
+                {
+                    File.Copy(binary, target);
+                }
+                else
+                {
+                    Directory.CreateSymbolicLink(target, binary);
+                }
             }
 
             entries.Add(mirror);
@@ -93,16 +119,14 @@ public sealed class GitLfsTests
         return string.Join(Path.PathSeparator, entries);
     }
 
+    /// <summary>Whether <paramref name="directory"/> holds an executable git-lfs for this OS.</summary>
+    private static bool HasGitLfs(string directory) =>
+        File.Exists(Path.Combine(directory, "git-lfs"))
+        || File.Exists(Path.Combine(directory, "git-lfs.exe"));
+
     [Fact]
     public async Task Without_git_lfs_one_warning_names_the_tool_and_the_run_continues()
     {
-        // The recorded skip (Q-009's contract): this fact observes the run through the recording
-        // shim, which Windows cannot exec - the reason is recorded there, never silent.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }
-
         using var fixture = GitLfsFixture.Create();
 
         // The child's PATH is the recording shim's directory plus every inherited entry, with any
@@ -120,10 +144,7 @@ public sealed class GitLfsTests
                 fixture.Environment,
                 lines.Add,
                 gitExecutable: shim.GitPath,
-                extraEnvironment: new Dictionary<string, string?>(StringComparer.Ordinal)
-                {
-                    ["PATH"] = PathWithoutGitLfs(shim.BinDirectory, directory),
-                }));
+                extraEnvironment: ChildEnvironment(shim, directory)));
 
         var result = await workspace.CloneAsync(
             fixture.FileUrl,

@@ -151,20 +151,14 @@ internal static class GitCli
         MustRun(workingDirectory, environment, "rev-parse", revision);
 
     /// <summary>
-    /// Why the shim-observed facts cannot run on this OS, or <see langword="null"/> when they can.
-    /// The recording shims are <c>#!/bin/sh</c> scripts by design: they must observe the child's real
-    /// argv and environment through the exec path. Git for Windows happily runs such scripts when
-    /// <em>git</em> spawns them, but the worker starts the shim itself through <c>Process.Start</c>,
-    /// which on Windows cannot execute a script ("not a valid application for this OS platform").
-    /// The facts skip there with this recorded reason - a named platform fact, never a silent
-    /// exclusion, the same contract Q-009's sshd skip follows.
+    /// The ask-pass helper's file name on this OS. The product writes a <c>.cmd</c> on Windows - a
+    /// shell script is not executable there - so an assertion that hard-coded the POSIX name would
+    /// silently check nothing on the machine the shim-observed facts now also run on (card B-004).
     /// </summary>
-    public static string? RecordingShimUnavailableReason() =>
+    public static string AskPassFileNameForThisOs =>
         OperatingSystem.IsWindows()
-            ? "the recording shims are #!/bin/sh scripts; the worker's Process.Start cannot exec a "
-                + "script on Windows (\"not a valid application for this OS platform\"), so the "
-                + "shim-observed facts are not runnable there."
-            : null;
+            ? WorkerGit.GitCredentialFiles.AskPassWindowsFileName
+            : WorkerGit.GitCredentialFiles.AskPassFileName;
 
     /// <summary>The absolute path of the real <c>git</c> binary (used by the recording shim).</summary>
     public static string ResolveGitPath()
@@ -403,14 +397,28 @@ internal sealed class GitLfsFixture : IDisposable
 /// real child processes the shim is on the PATH for, rather than a claim about our code. It cannot see
 /// git's own submodule children, which exec their own binary - the submodule test proves those inherit
 /// the credential environment by requiring the same token for both repositories instead.
+/// <para>
+/// <b>Two forms, one observation (card B-004).</b> On POSIX the shim stays a shell script - it has to,
+/// to sit inside the exec path - and the script carries the log and real-git paths in its text. On
+/// Windows the worker starts the shim itself through <c>Process.Start</c>, which cannot execute a
+/// shebang script, so the same lines come from the compiled <c>RecordingShim</c> TestAsset, pointed at
+/// the log and the real git through <see cref="Environment"/>.
+/// </para>
 /// </summary>
 internal sealed class RecordingGitShim : IDisposable
 {
-    private RecordingGitShim(GitTestDirectory directory, string binDirectory, string logPath)
+    private RecordingGitShim(
+        GitTestDirectory directory,
+        string binDirectory,
+        string logPath,
+        string gitPath,
+        IReadOnlyDictionary<string, string?> environment)
     {
         Directory = directory;
         BinDirectory = binDirectory;
         LogPath = logPath;
+        GitPath = gitPath;
+        Environment = environment;
     }
 
     public GitTestDirectory Directory { get; }
@@ -419,15 +427,57 @@ internal sealed class RecordingGitShim : IDisposable
 
     public string LogPath { get; }
 
-    /// <summary>argv[0] for <see cref="WorkerGit.GitWorkspaceOptions.GitExecutable"/>.</summary>
-    public string GitPath => Path.Combine(BinDirectory, "git");
+    /// <summary>argv[0] for <see cref="WorkerGit.GitWorkspaceOptions.GitExecutable"/>: the script on
+    /// POSIX, the compiled asset on Windows (where the file name must be one this OS executes).</summary>
+    public string GitPath { get; }
+
+    /// <summary>
+    /// The extra child environment the chosen form needs. Empty on POSIX, where the script bakes the
+    /// log and real-git paths into its own text; on Windows the compiled shim is parameterised by these
+    /// variables, so the tests pass them through <see cref="GitTestWorkspace.Options"/>'s
+    /// <c>extraEnvironment</c>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> Environment { get; }
 
     public static RecordingGitShim Create(GitTestDirectory directory, string realGitPath)
     {
+        ArgumentNullException.ThrowIfNull(directory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(realGitPath);
+
         var binDirectory = directory.Combine("shim-bin");
         var logPath = directory.Combine("git-argv.log");
+        System.IO.Directory.CreateDirectory(binDirectory);
 
-        var script = string.Join(
+        if (OperatingSystem.IsWindows())
+        {
+            return new RecordingGitShim(
+                directory,
+                binDirectory,
+                logPath,
+                RecordingShimAsset.ExecutablePath,
+                RecordingShimAsset.GitShimEnvironment(logPath, realGitPath));
+        }
+
+        var scriptPath = GitCli.WriteScript(binDirectory, "git", PosixScript(logPath, realGitPath));
+        return new RecordingGitShim(
+            directory,
+            binDirectory,
+            logPath,
+            scriptPath,
+            new Dictionary<string, string?>(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The POSIX form's text. A method rather than a literal inside <see cref="Create"/> so
+    /// <see cref="RecordingShimAssetTests"/> can run this exact script beside the compiled shim and
+    /// compare the two logs line for line - card B-004's "the shim log format stays identical".
+    /// </summary>
+    internal static string PosixScript(string logPath, string realGitPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(logPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(realGitPath);
+
+        return string.Join(
             '\n',
             // Composed so no absolute interpreter path appears in the source.
             "#!" + "/" + "bin" + "/" + "sh",
@@ -448,9 +498,6 @@ internal sealed class RecordingGitShim : IDisposable
             $"printf '%s\\n' '-----' >> '{logPath}'",
             $"exec '{realGitPath}' \"$@\"",
             string.Empty);
-
-        GitCli.WriteScript(binDirectory, "git", script);
-        return new RecordingGitShim(directory, binDirectory, logPath);
     }
 
     /// <summary>Every recorded invocation's lines, or an empty array when git never ran.</summary>

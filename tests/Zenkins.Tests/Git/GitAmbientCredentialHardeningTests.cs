@@ -63,13 +63,6 @@ public sealed class GitAmbientCredentialHardeningTests
     public async Task With_no_credential_assigned_a_credential_helper_on_the_host_is_not_used()
     {
         using var fixture = GitFixtureRepository.Create("f018-ambient");
-        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
-        // through, so the fact is named as skipped there rather than silently red or green.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {{
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }}
-
         var token = NewToken();
         using var server = AuthenticatedHttpsGitServer.Start(fixture.BarePath, token);
         using var directory = new GitTestDirectory("f018-ambient-run");
@@ -109,7 +102,8 @@ public sealed class GitAmbientCredentialHardeningTests
             work,
             ServerEnvironment(directory, server),
             lines.Add,
-            gitExecutable: shim.GitPath));
+            gitExecutable: shim.GitPath,
+            extraEnvironment: shim.Environment));
 
         var failure = await Assert.ThrowsAsync<WorkerGit.GitException>(() => workspace.CloneAsync(
             server.Url,
@@ -211,9 +205,11 @@ public sealed class GitAmbientCredentialHardeningTests
             + "echo 'username=ambient-worker'\n"
             + $"echo 'password={token}'\n");
 
+        // git runs the helper through its own shell, and there a Windows path's backslashes are
+        // escapes; forward slashes are the same path on both OSes (and unchanged on POSIX).
         File.WriteAllText(
             Path.Combine(homePath, ".gitconfig"),
-            "[credential]\n\thelper = " + helper + "\n");
+            "[credential]\n\thelper = " + helper.Replace('\\', '/') + "\n");
     }
 
     /// <summary>The file the synthetic helper appends one line to per invocation.</summary>

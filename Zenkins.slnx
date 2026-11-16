@@ -12,5 +12,9 @@
          Release` produced bin/Debug output the WorkerRuntime E2E (which needs bin/Release) never
          saw - the CI gate failed on all three OSes for exactly this. -->
     <Project Path="tests/Zenkins.Tests/TestAssets/ArgvEcho/ArgvEcho.csproj" />
+    <!-- B-004: the compiled recording shim, for the Windows half of the F-013 Git facts. Same rule as
+         ArgvEcho above: a build-only ProjectReference still has to be a solution project so a
+         configuration-specific `dotnet build`/`dotnet test` output is the one the tests locate. -->
+    <Project Path="tests/Zenkins.Tests/TestAssets/RecordingShim/RecordingShim.csproj" />
   </Folder>
 </Solution>

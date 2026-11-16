@@ -164,13 +164,6 @@ public sealed class GitSshConstructionTests
     public async Task An_ssh_clone_uses_the_key_file_and_deletes_it_afterwards()
     {
         using var directory = new GitTestDirectory("ssh-clone");
-        // The recorded skip (Q-009's contract): Windows cannot exec the shim this fact observes
-        // through, so the fact is named as skipped there rather than silently red or green.
-        if (GitCli.RecordingShimUnavailableReason() is { } reason)
-        {{
-            throw Xunit.Sdk.SkipException.ForSkip(reason);
-        }}
-
         using var shim = RecordingGitShim.Create(directory, GitCli.ResolveGitPath());
         var work = GitTestWorkspace.CreateWork(directory.RootPath);
         var material = new WorkerGit.GitCredentialMaterial(WorkerGit.GitCredentialKind.SshKey, PrivateKey);
@@ -181,7 +174,8 @@ public sealed class GitSshConstructionTests
                 GitCli.Environment(directory),
                 lines.Add,
                 gitExecutable: shim.GitPath,
-                operationTimeout: TimeSpan.FromSeconds(30)));
+                operationTimeout: TimeSpan.FromSeconds(30),
+                extraEnvironment: shim.Environment));
 
         // Port 1 is closed: ssh fails immediately, which is all the construction pin needs. The key
         // file is still written, wired into GIT_SSH_COMMAND and cleaned up on the failure path.
@@ -244,7 +238,8 @@ public sealed class GitSshConstructionTests
                 work,
                 GitCli.Environment(directory),
                 gitExecutable: shim.GitPath,
-                knownHostsPath: directory.Combine("missing_known_hosts")));
+                knownHostsPath: directory.Combine("missing_known_hosts"),
+                extraEnvironment: shim.Environment));
 
         var failure = await Assert.ThrowsAsync<WorkerGit.GitException>(() => workspace.CloneAsync(
             "ssh://git@127.0.0.1:1/repo.git",

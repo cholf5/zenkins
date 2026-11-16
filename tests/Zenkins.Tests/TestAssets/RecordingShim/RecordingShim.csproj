@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Card B-004: the compiled stand-in for the POSIX recording shims. The POSIX facts keep using the
+    shebang shell scripts (they observe argv through the exec path); Windows cannot start such a script
+    from its own Process.Start, so the same observation is made by this console asset there.
+
+    InvariantGlobalization keeps the asset's output independent of the machine's culture; the log lines
+    are compared byte for byte against the shell shim's.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Zenkins.Tests.TestAssets.RecordingShim</RootNamespace>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>
