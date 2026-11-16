@@ -4,7 +4,7 @@ title: A fresh Windows machine cannot restore the solution — NU1903 on ILCompi
 type: bug
 priority: P2
 size: S
-status: review
+status: done
 created: 2026-11-16
 updated: 2026-11-16
 blocked: windows+linux: local (macOS) verification only; the rule is enforced by a build error, the other platforms are not run here
@@ -192,3 +192,26 @@ Environment note for anyone publishing AOT on Windows (unrelated to this reposit
 the change): the first publish attempt failed with `MSB3073` because `findvcvarsall.bat` captured
 `'vswhere.exe' is not recognized` into the linker path. Adding the Visual Studio Installer directory to
 `PATH` fixed it; the compile itself was fine.
+
+## Result 2026-11-16 — green on all three runners
+
+Run `43920303337` (`fb3c55f`) finished with **success** on ubuntu-latest (10m31s), windows-latest
+(16m49s) and macos-latest (16m15s, after a capacity-cancelled first attempt was rerun — that
+cancellation was infrastructure, zero steps ran and the job logs 404'd, not a code failure).
+
+Each platform ran the same seven suites to **1268** — fast 1242, Milestone 12, Recovery 4,
+PublishSmoke 2, **PublishAot 2**, GitSshd 3, Postgres 3 skipped by design — and `PublishAot` really
+published for `linux-x64`, `win-x64` and `osx-arm64`, which is what the first attempt at this card
+broke. `ZENKINS000x` appears nowhere in any log, so no runner's band disagreed with the derived value
+or fell below the floor.
+
+What that means for the original complaint: the Windows box that could not restore now builds with no
+`NuGetAudit=false` anywhere, its stock compiler was `10.0.11`, and the repository's floor moved it to a
+patched release — while the runners, whose band is newer, keep their own pairing instead of being
+forced onto our floor. The version is no longer a number someone must remember to bump; a mismatch is
+`ZENKINS0002` at restore.
+
+One limit worth stating: on a successful publish the logs do not echo the pack versions, so the
+"compiler equals runtime pack" pairing is proven by the three AOT publishes succeeding rather than by
+quoting two version strings. Reading them would need a binary restore log or a `verify.sh` line that
+prints them on success — a small improvement for whoever next investigates a mismatch.

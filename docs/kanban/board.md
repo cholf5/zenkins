@@ -32,7 +32,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | S | | none |
 | [Q-019](issues/q-019-tenant-scan-escapde-base64-collision.md) | A short organization name collides with machine-generated base64 in the tenant page scan | P2 | S | | none |
 | [Q-021](issues/q-021-theme-cascade-model-blind-spots.md) | The theme cascade model counts element selectors as zero and ignores @layer, so it can pass what a browser rejects | P2 | S | | none |
-| [B-009](issues/b-009-ilcompiler-audit-blocks-fresh-build.md) | A fresh Windows machine cannot restore — NU1903 on ILCompiler 10.0.11, and warnings are errors | P2 | S | windows: reproducible there; not on macOS | none |
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | S | | none |
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Duplicate choice entries accepted; a Freestyle row's inherited pipeline path | P3 | S | | none |
 
@@ -103,4 +102,5 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-013](issues/q-013-theme-shell-test-strength.md) | The theme shell tests do not pin the load order, the trigger wiring or the cookie's negative cases | P2 | 2026-11-16 |
 | [B-004](issues/b-004-windows-shim-facts-skip.md) | Nine shim-observed Git facts skip on Windows — a compiled shim TestAsset would run them there | P3 | 2026-11-16 |
 | [Q-020](issues/q-020-concurrency-offline-window-margin.md) | The concurrency mass trigger gives the offline window no margin, so a stalled heartbeat reads as a product failure | P2 | 2026-11-16 |
+| [B-009](issues/b-009-ilcompiler-audit-blocks-fresh-build.md) | A fresh Windows machine cannot restore — NU1903 on ILCompiler, and warnings are errors | P2 | 2026-11-16 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | 2026-11-16 |
