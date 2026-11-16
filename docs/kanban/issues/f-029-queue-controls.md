@@ -185,6 +185,20 @@ is F-027's — see the AC note above.
 - **Validation bounds.** Concurrency 1..100, quiet period 0..86400 s, queue cap 1..1000;
   the same ranges are restated as database check constraints so a row written out of
   band cannot declare a limit no claim could satisfy.
+- **An `Idempotency-Key` replay wins over the queue cap (card B-008, 2026-11-16).** The
+  three cards never decided which came first; the audit found replay won by accident.
+  It is now decided, implemented and documented: a **replay wins**, because a retry of a
+  request the server already accepted must answer the run it queued — and that run is
+  already in the queue (or already finished), so the cap is not what the caller is
+  asking about. A request with a **new** key is refused with `409 queue-full` exactly as
+  before, and an unknown project id is a bare `404` first. Implemented in
+  `RunService.CreateQueuedRunAsync` (the replay lookup sits after the project read and
+  before the queue-cap count in `StageQueuedRunAsync`), written into `docs/api-v1.md`.
+  Evidence, honestly split: the **disabled** half is pinned by
+  `ApiV1RunApiTests.A_replay_wins_over_the_disabled_gate_and_a_new_key_reads_the_refusal`;
+  the **queue-cap** half is pinned by code order alone — no fact fills a queue and then
+  replays (`The_idempotency_key_queues_one_run_for_a_retried_post` never sets
+  `MaxQueuedRuns`), so a fact covering it is recorded as Q-017.
 
 ## Development Log
 
@@ -288,3 +302,34 @@ does the committed regression actually pin the project row lock?
   says so instead of over-claiming.
 - AC3 was the API's 409, now closed by F-027. Existing projects keep their unlimited defaults;
   the trigger form, the webhook delivery row and the settings page all echo the observed values.
+
+### 2026-11-16 — Q-016: the trigger path gets the claim path's standard
+
+The integration audit found this card's review standard was applied to half the feature: the **claim**
+cap had a `Category=Postgres` fact that discriminates, the **trigger** cap had none — deleting
+`RunService.StageQueuedRunAsync`'s project row lock (keeping the count) left every committed SQLite
+`queue-full` fact green. The fact now exists, in the same collection and on the same provider.
+
+- **The committed fact.** `PostgresProjectCapTests.Concurrent_triggers_never_overfill_the_queue_and_the_naive_sequence_would`
+  (same `PostgresCollection`, same disposable-database prerequisite and skip reason): a project with
+  `MaxQueuedRuns = 1` and an empty queue takes **six concurrent triggers** (the real start-run form,
+  through the real endpoint) per round, **three rounds** — exactly **one** run is queued and five
+  triggers read `?runError=queue-full`; the verdict is read from the rows, and the admitted count is
+  asserted to equal the queued count so a green cannot come from "no trigger worked".
+- **Its negative control.** Two contexts count the project's queued runs (both read 0 — the cap of one
+  is not reached) and then both insert a run through the product's own context and entity: **two
+  queued runs in a one-run queue**. Same role as the claim fact's control: the count is load-bearing,
+  and it is the lock that makes the count trustworthy. It is a sequence, so it is deterministic.
+- **The mutation, run both ways.** Deleting only `StageQueuedRunAsync`'s `LockProjectForTriggerAsync`
+  call (the count kept) makes the PostgreSQL fact **red in round 1** — "the MaxQueuedRuns=1 project
+  holds 2 queued runs (2 of 6 concurrent triggers admitted) on PostgreSQL — the cap was decided
+  check-then-act" — while the same tree keeps the SQLite facts **green**: `QueueControlTests` (8 facts,
+  including `A_full_queue_refuses_the_next_trigger_before_any_row_exists`) and
+  `ConcurrencyProjectCapTests` (1 fact), 9/9 passed. Restoring the lock returns the PostgreSQL suite to
+  3/3 green. Logs: `artifacts/logs/q016-postgres-m1-mutant-trigger-lock-deleted.log` (red),
+  `artifacts/logs/q016-sqlite-same-mutant-green.log` (green on the same mutant),
+  `artifacts/logs/q016-postgres-restored-green.log` (green after restore). The cluster was a throwaway
+  PostgreSQL 16.15 started with `initdb` in a temp directory and stopped and deleted afterwards.
+- **Filter unchanged.** The new fact carries `Trait("Category", "Postgres")`, so it is excluded from the
+  fast filter and `scripts/verify.sh` is byte-for-byte unchanged; the counts in `docs/development.md` §2
+  were re-recorded (Postgres 2 → 3).

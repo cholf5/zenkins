@@ -26,6 +26,15 @@ namespace Zenkins.Server.Api;
 /// same code the form and the webhook delivery record.
 /// </para>
 /// <para>
+/// <b>The idempotency key is the trigger's, not this layer's (card B-008).</b> The optional
+/// <c>Idempotency-Key</c> is handed to <c>RunService.TriggerForApiAsync</c> as a scope; the trigger reads
+/// the project first (an unknown id is a bare 404 with or without a key), compares the remembered project
+/// and payload hash before it replays anything, writes the binding in the same transaction as the run it
+/// queues, and answers <c>Replayed</c> so this layer can say 200 instead of 201. A key that already names a
+/// different request is a 409 (<c>idempotency-key-reused</c>) with nothing queued. The rules a client may
+/// rely on are in <c>docs/api-v1.md</c>.
+/// </para>
+/// <para>
 /// <b>No secrets, no parameter values.</b> The run resource carries status, steps, failure reason, numbers
 /// and links - never a secret, never a credential, and deliberately no build-parameter values (F-041's
 /// password-typed parameters do not exist yet, so the safe answer is to never echo a parameter value here;
@@ -87,7 +96,6 @@ public static class ApiEndpoints
         [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] ApiTriggerRequest? request,
         HttpContext httpContext,
         RunService runs,
-        ApiTokenService tokens,
         CancellationToken cancellationToken)
     {
         if (request is null)
@@ -109,33 +117,31 @@ public static class ApiEndpoints
             return idempotencyError;
         }
 
-        if (idempotencyKey is not null
-            && await tokens.FindIdempotentRunAsync(tokenId.Value, idempotencyKey, cancellationToken) is { } remembered)
-        {
-            // A retried post (the caller lost the first response): answer the run that already exists.
-            return await RunResponseAsync(remembered, StatusCodes.Status200OK, replayed: true, runs, cancellationToken);
-        }
+        // Cards F-027 + B-008: the key travels into the trigger as a scope, not as a lookup this layer
+        // performs. The trigger needs the project read first (an unknown or foreign id stays a bare 404
+        // even when a key is presented), compares the project and the payload hash before it replays, and
+        // writes the binding in the same transaction as the run it queues.
+        var idempotency = idempotencyKey is null
+            ? null
+            : new RunTriggerIdempotency(tokenId.Value, idempotencyKey);
 
-        var result = await runs.TriggerForApiAsync(projectId, request.ToInput(), cancellationToken);
+        var result = await runs.TriggerForApiAsync(
+            projectId,
+            request.ToInput(),
+            idempotency,
+            cancellationToken);
         if (result.Status != RunOperationStatus.Success)
         {
             return MapRunRefusal(result);
         }
 
         var runId = result.RunId!.Value;
-        if (idempotencyKey is not null)
-        {
-            var bound = await tokens.RememberIdempotentRunAsync(tokenId.Value, idempotencyKey, runId, cancellationToken);
-            if (bound != runId)
-            {
-                // Two posts raced with the same key: the database remembered the other one. This run was
-                // created before the race was detected - report the remembered run (the key's answer) and
-                // say so instead of pretending nothing happened.
-                return await RunResponseAsync(bound, StatusCodes.Status200OK, replayed: true, runs, cancellationToken);
-            }
-        }
-
-        return await RunResponseAsync(runId, StatusCodes.Status201Created, replayed: false, runs, cancellationToken);
+        return await RunResponseAsync(
+            runId,
+            result.Replayed ? StatusCodes.Status200OK : StatusCodes.Status201Created,
+            result.Replayed,
+            runs,
+            cancellationToken);
     }
 
     private static async Task<IResult> ListProjectsAsync(
@@ -518,7 +524,8 @@ public static class ApiEndpoints
     public sealed record ApiFieldError(string Field, string Code);
 
     /// <summary>The error body of every JSON refusal: a stable <c>error</c> code, the operator's sentence
-    /// when there is one, and the field errors a 400 carries.</summary>
+    /// when there is one, and the field errors a 400 <b>or a 409</b> carries (<c>queue-full</c>,
+    /// <c>project-disabled</c>, <c>idempotency-key-reused</c> - card B-008 made the 409's shape explicit).</summary>
     public sealed record ApiErrorBody(
         string Error,
         string? Message = null,

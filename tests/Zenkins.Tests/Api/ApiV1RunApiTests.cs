@@ -215,6 +215,218 @@ public sealed class ApiV1RunApiTests
     }
 
     [Fact]
+    public async Task A_reused_key_cannot_straddle_projects_or_payloads_and_an_unknown_project_stays_a_bare_404()
+    {
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectA, owner) = await host.CreateProjectAsync("project-a");
+        var organizationId = await host.Inner.OrganizationIdAsync();
+        var projectB = await host.Inner.Inner.Inner.AddProjectAsync(organizationId, "project-b");
+        var token = await host.MintTokenPlaintextAsync(owner, "scoped-key");
+        using var api = host.CreateApiClient(token);
+
+        using (var first = await ApiV1TestHost.TriggerAsync(api, projectA, new { branch = "main" }, idempotencyKey: "deploy-1"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        }
+
+        var firstRun = Assert.Single(await host.ReadProjectRunsAsync(projectA));
+
+        // (a) Same key, another project: a refusal - never project A's run id or Location.
+        using (var crossed = await ApiV1TestHost.TriggerAsync(api, projectB, new { branch = "main" }, idempotencyKey: "deploy-1"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, crossed.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(crossed);
+            Assert.Equal("idempotency-key-reused", body.RootElement.GetProperty("error").GetString());
+
+            // The 409 carries the field errors a form refusal carries (documented shape).
+            var fieldErrors = body.RootElement.GetProperty("fieldErrors");
+            Assert.Equal("idempotency-key", fieldErrors[0].GetProperty("field").GetString());
+            Assert.Equal("idempotency-key-reused", fieldErrors[0].GetProperty("code").GetString());
+            Assert.False(crossed.Headers.Contains("Idempotency-Replayed"));
+        }
+
+        // Nothing was queued for B, and A still owns exactly its one run.
+        Assert.Empty(await host.ReadProjectRunsAsync(projectB));
+        Assert.Single(await host.ReadProjectRunsAsync(projectA));
+
+        // (b) Same key, same project, a different payload: refused rather than replaying the old branch.
+        using (var changedBranch = await ApiV1TestHost.TriggerAsync(api, projectA, new { branch = "hotfix" }, idempotencyKey: "deploy-1"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, changedBranch.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(changedBranch);
+            Assert.Equal("idempotency-key-reused", body.RootElement.GetProperty("error").GetString());
+        }
+
+        using (var changedTimeout = await ApiV1TestHost.TriggerAsync(
+            api, projectA, new { branch = "main", timeoutMinutes = "30" }, idempotencyKey: "deploy-1"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, changedTimeout.StatusCode);
+        }
+
+        Assert.Single(await host.ReadProjectRunsAsync(projectA));
+
+        // The identical retry is still the replay it was (the key names this request; nothing changed).
+        using (var retried = await ApiV1TestHost.TriggerAsync(api, projectA, new { branch = "main" }, idempotencyKey: "deploy-1"))
+        {
+            Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+            Assert.Equal("true", Assert.Single(retried.Headers.GetValues("Idempotency-Replayed")));
+            Assert.Equal($"/api/v1/runs/{firstRun.Id}", retried.Headers.Location!.OriginalString);
+        }
+
+        // (c) Same key, an unknown project: the bare 404 the page promises, never a 200 replay.
+        using (var unknown = await ApiV1TestHost.TriggerAsync(api, Guid.NewGuid(), new { branch = "main" }, idempotencyKey: "deploy-1"))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+            Assert.Empty(await unknown.Content.ReadAsStringAsync(CancellationToken));
+        }
+
+        // One record per key, bound to the project and the payload that created it.
+        var record = Assert.Single(await host.ReadIdempotencyRecordsAsync());
+        Assert.Equal("deploy-1", record.Key);
+        Assert.Equal(projectA, record.ProjectId);
+        Assert.Equal(firstRun.Id, record.RunId);
+        Assert.Equal(64, record.RequestHash.Length);
+    }
+
+    [Fact]
+    public async Task A_replay_wins_over_the_disabled_gate_and_a_new_key_reads_the_refusal()
+    {
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync();
+        var token = await host.MintTokenPlaintextAsync(owner, "replay-vs-gate");
+        using var api = host.CreateApiClient(token);
+
+        using (var first = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "nightly"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        }
+
+        var firstRun = Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        using (var disabled = await RunTestHost.DisableProjectAsync(owner, projectId))
+        {
+            Assert.True((int)disabled.StatusCode is 302 or 303);
+        }
+
+        // The decided precedence (docs/api-v1.md): a replay is the idempotency semantic itself, so the
+        // retry answers the run it queued even though the project is disabled now.
+        using (var replay = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "nightly"))
+        {
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+            Assert.Equal("true", Assert.Single(replay.Headers.GetValues("Idempotency-Replayed")));
+            using var body = await ApiV1TestHost.ReadJsonAsync(replay);
+            Assert.Equal(firstRun.Id, body.RootElement.GetProperty("id").GetGuid());
+        }
+
+        // A *new* key is a new trigger, and the gate answers it: 409 project-disabled, nothing queued.
+        using (var fresh = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "nightly-2"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, fresh.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(fresh);
+            Assert.Equal("project-disabled", body.RootElement.GetProperty("error").GetString());
+        }
+
+        Assert.Single(await host.ReadProjectRunsAsync(projectId));
+    }
+
+    [Fact]
+    public async Task An_expired_key_queues_a_new_run_instead_of_replaying_forever()
+    {
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync();
+        var token = await host.MintTokenPlaintextAsync(owner, "nightly");
+        using var api = host.CreateApiClient(token);
+
+        using (var first = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "nightly"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        }
+
+        var firstRunId = Assert.Single(await host.ReadProjectRunsAsync(projectId)).Id;
+
+        // A day and a minute later (the deterministic stand-in for waiting out the retention).
+        await host.AgeIdempotencyRecordAsync("nightly", ApiIdempotencyRecord.Retention + TimeSpan.FromMinutes(1));
+
+        using (var second = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "nightly"))
+        {
+            Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+            Assert.False(second.Headers.Contains("Idempotency-Replayed"));
+            using var body = await ApiV1TestHost.ReadJsonAsync(second);
+            Assert.NotEqual(firstRunId, body.RootElement.GetProperty("id").GetGuid());
+        }
+
+        // A second run exists, and the binding now names it - one record, re-pointed by a fresh insert.
+        Assert.Equal(2, (await host.ReadProjectRunsAsync(projectId)).Count);
+        var record = Assert.Single(await host.ReadIdempotencyRecordsAsync());
+        Assert.NotEqual(firstRunId, record.RunId);
+    }
+
+    [Fact]
+    public async Task A_replay_still_spends_the_token_s_budget()
+    {
+        using var host = await ApiV1TestHost.CreateAsync(builder => builder.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Api:RateLimitPerMinute"] = "2",
+            }));
+
+        var (projectId, owner) = await host.CreateProjectAsync();
+        var token = await host.MintTokenPlaintextAsync(owner, "replay-budget");
+        using var api = host.CreateApiClient(token);
+
+        using (var first = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "budget-1"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        }
+
+        // The replay is a request like any other: it spends the token's second (last) slot.
+        using (var replay = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "budget-1"))
+        {
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        }
+
+        using var limited = await ApiV1TestHost.TriggerAsync(api, projectId, new { branch = "main" }, idempotencyKey: "budget-1");
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        using var body = await ApiV1TestHost.ReadJsonAsync(limited);
+        Assert.Equal("rate-limited", body.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Concurrent_posts_with_the_same_new_key_queue_exactly_one_run()
+    {
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync();
+        var token = await host.MintTokenPlaintextAsync(owner, "racing");
+        using var api = host.CreateApiClient(token);
+
+        const int posts = 4;
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = Enumerable.Range(0, posts)
+            .Select(_ => Task.Run(async () =>
+            {
+                await start.Task.WaitAsync(CancellationToken);
+                using var response = await ApiV1TestHost.TriggerAsync(
+                    api, projectId, new { branch = "main" }, idempotencyKey: "race-1");
+                using var body = await ApiV1TestHost.ReadJsonAsync(response);
+                return (
+                    Status: response.StatusCode,
+                    Replayed: response.Headers.Contains("Idempotency-Replayed"),
+                    RunId: body.RootElement.GetProperty("id").GetGuid());
+            }))
+            .ToArray();
+
+        start.SetResult();
+        var answers = await Task.WhenAll(calls);
+
+        // Exactly one post queued the run; the others answered that same run as a replay. The counting
+        // guarantee is the point: a key never queues two runs, not even when the posts overlap.
+        Assert.Single(answers, answer => !answer.Replayed);
+        Assert.Equal(posts - 1, answers.Count(answer => answer.Replayed));
+        Assert.All(answers, answer => Assert.Equal(answers[0].RunId, answer.RunId));
+        Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        Assert.Single(await host.ReadIdempotencyRecordsAsync());
+    }
+
+    [Fact]
     public async Task The_api_lists_projects_and_runs_with_paging()
     {
         using var host = await ApiV1TestHost.CreateAsync();

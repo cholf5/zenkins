@@ -57,6 +57,13 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only project, the id a cross-tenant probe substitutes.</summary>
     public static readonly Guid ProjectBId = new("b0000000-0000-4000-8000-000000000012");
 
+    /// <summary>
+    /// Card B-008: the payload hash the fixture's idempotency records carry. It is a real (lowercase hex
+    /// SHA-256 shaped) value so a probe reads the same column the product writes.
+    /// </summary>
+    public const string FixtureRequestHash =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+
     /// <summary>A's owner membership row.</summary>
     public static readonly Guid OrgAOwnerMembershipId = new("a0000000-0000-4000-8000-000000000021");
 
@@ -463,13 +470,16 @@ public sealed class TwoOrgsFixture : IDisposable
             });
 
         // F-027: one idempotency record per organization (the token + run it queued), so the entity's
-        // tenant filter has a row on each side.
+        // tenant filter has a row on each side. Card B-008 added the project and the payload hash the
+        // key is bound to.
         context.ApiIdempotencyRecords.AddRange(
             new ApiIdempotencyRecord
             {
                 OrganizationId = OrgAId,
                 ApiTokenId = ApiTokenAId,
                 Key = "fixture-key",
+                ProjectId = ProjectAId,
+                RequestHash = FixtureRequestHash,
                 RunId = BuildRunAId,
             },
             new ApiIdempotencyRecord
@@ -477,6 +487,8 @@ public sealed class TwoOrgsFixture : IDisposable
                 OrganizationId = OrgBId,
                 ApiTokenId = ApiTokenBId,
                 Key = "fixture-key",
+                ProjectId = ProjectBId,
+                RequestHash = FixtureRequestHash,
                 RunId = BuildRunBId,
             });
 

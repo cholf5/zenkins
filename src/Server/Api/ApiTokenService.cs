@@ -1,3 +1,4 @@
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
@@ -107,6 +108,13 @@ public sealed class ApiTokenService(
     ISystemDataScope systemDataScope,
     ILogger<ApiTokenService> logger)
 {
+    /// <summary>
+    /// How long the best-effort last-used stamp may spend on the database (card Q-015). Short on purpose:
+    /// the stamp must never turn a polled request into a long wait, and the provider default (30 s) made
+    /// one locked-database request cost exactly that.
+    /// </summary>
+    public static readonly TimeSpan StampCommandTimeout = TimeSpan.FromSeconds(3);
+
     /// <summary>
     /// Mints one token: the plaintext is generated here, only the hash is stored, and the answer carries
     /// the plaintext - this is the only time it exists outside the caller's memory.
@@ -329,72 +337,27 @@ public sealed class ApiTokenService(
     }
 
     /// <summary>
-    /// The run an <c>Idempotency-Key</c> already queued for this token, or <see langword="null"/> when
-    /// the key is new. Read through the tenant filter, so a key of another organization's token is
-    /// simply not found (the (token, key) index is already scoped by the token id).
-    /// </summary>
-    public async Task<Guid?> FindIdempotentRunAsync(
-        Guid apiTokenId,
-        string key,
-        CancellationToken cancellationToken = default)
-    {
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        return await context.ApiIdempotencyRecords
-            .AsNoTracking()
-            .Where(record => record.ApiTokenId == apiTokenId && record.Key == key)
-            .Select(record => (Guid?)record.RunId)
-            .SingleOrDefaultAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Remembers that <paramref name="key"/> queued <paramref name="runId"/>. The unique
-    /// <c>(ApiTokenId, Key)</c> index is the guard: when a concurrent post with the same key won, this
-    /// call answers the run that won instead of pretending to have stored anything.
-    /// </summary>
-    /// <returns>The run id the key is now bound to.</returns>
-    public async Task<Guid> RememberIdempotentRunAsync(
-        Guid apiTokenId,
-        string key,
-        Guid runId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        context.ApiIdempotencyRecords.Add(new ApiIdempotencyRecord
-        {
-            ApiTokenId = apiTokenId,
-            Key = key,
-            RunId = runId,
-        });
-
-        try
-        {
-            await context.SaveChangesAsync(cancellationToken);
-            return runId;
-        }
-        catch (DbUpdateException exception) when (DatabaseErrors.IsUniqueViolation(exception, "ApiIdempotencyRecords"))
-        {
-            // The key was claimed between the lookup and this insert: the stored binding is the answer.
-            context.ChangeTracker.Clear();
-            return await context.ApiIdempotencyRecords
-                .AsNoTracking()
-                .Where(record => record.ApiTokenId == apiTokenId && record.Key == key)
-                .Select(record => record.RunId)
-                .SingleAsync(cancellationToken);
-        }
-    }
-
-    /// <summary>
     /// Stamps the token's last-used instant. The mark is <b>best effort and never vetoes the request</b>:
-    /// the token has already authenticated by the time this runs, so no write failure here - a concurrent
-    /// revoke losing the row, a SQLite busy timeout, a full disk - may turn an authenticated call into a
-    /// 500. Any <see cref="DbUpdateException"/> (the concurrency one included) is logged as a warning and
-    /// swallowed; a revoke that won the row still takes effect on the token's next request.
+    /// the token has already authenticated by the time this runs, so no failure here - a concurrent revoke
+    /// losing the row, a locked database, a missing table, a full disk - may turn an authenticated call
+    /// into a 500 (card Q-015). Every database or provider failure is logged once as a warning and
+    /// swallowed; a cancellation is <b>not</b> - the caller asked to stop, and pretending otherwise would
+    /// hide it.
+    /// <para>
+    /// <b>Its own, short timeout.</b> The stamp's context takes
+    /// <see cref="StampCommandTimeout"/> instead of the request's command timeout: a locked database must
+    /// cost this best-effort write seconds, not the provider default (30 s) that would make every polled
+    /// trigger wait it out. The mark is written at most once a minute, so a slow mark is never worth a
+    /// stall.
+    /// </para>
     /// </summary>
     private async Task TouchLastUsedAsync(Guid tokenId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         try
         {
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+            context.Database.SetCommandTimeout(StampCommandTimeout);
+
             var token = await context.ApiTokens.SingleOrDefaultAsync(
                 candidate => candidate.Id == tokenId,
                 cancellationToken);
@@ -406,9 +369,13 @@ public sealed class ApiTokenService(
             token.LastUsedAt = now;
             await context.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException failure)
+        catch (Exception failure)
+            when (failure is not OperationCanceledException
+                && failure is DbUpdateException or DbException or InvalidOperationException)
         {
-            // Best effort by contract: the request proceeds, and the next one retries the mark.
+            // Best effort by contract: the request proceeds, and the next one retries the mark. The catch
+            // covers the read as well as the write (a missing table or a closing connection throws from
+            // the read, outside what DbUpdateException describes) while a cancellation still propagates.
             logger.LogWarning(
                 failure,
                 "Stamping the API token's last-used time failed; the authenticated request proceeds. TokenId={TokenId}",

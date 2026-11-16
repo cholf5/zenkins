@@ -23,8 +23,9 @@ public sealed class ApiV1TestHost : IDisposable
     public RunTestHost Inner { get; }
 
     public static Task<ApiV1TestHost> CreateAsync(
-        Action<IConfigurationBuilder>? configureAppConfiguration = null) =>
-        CreateCoreAsync(RunTestHost.CreateAsync(configureAppConfiguration));
+        Action<IConfigurationBuilder>? configureAppConfiguration = null,
+        Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>? configureTestServices = null) =>
+        CreateCoreAsync(RunTestHost.CreateAsync(configureAppConfiguration, configureTestServices));
 
     private static async Task<ApiV1TestHost> CreateCoreAsync(Task<RunTestHost> inner) =>
         new(await inner);
@@ -160,6 +161,25 @@ public sealed class ApiV1TestHost : IDisposable
 
     public Task<List<ApiToken>> ReadApiTokensAsync() =>
         Inner.InSystemScopeAsync(context => context.SystemQueryAsync<ApiToken>(token => true));
+
+    /// <summary>Card B-008: every idempotency record, read across tenants (the assertion side).</summary>
+    public Task<List<ApiIdempotencyRecord>> ReadIdempotencyRecordsAsync() =>
+        Inner.InSystemScopeAsync(context => context.SystemQueryAsync<ApiIdempotencyRecord>(record => true));
+
+    /// <summary>
+    /// Card B-008: ages one key past its retention - the deterministic stand-in for waiting a day
+    /// (<see cref="ApiIdempotencyRecord.Retention"/> is 24 hours; the clock is not).
+    /// </summary>
+    public Task AgeIdempotencyRecordAsync(string key, TimeSpan age) =>
+        Inner.InSystemScopeAsync(async context =>
+        {
+            var record = (await context.SystemQueryAsync<ApiIdempotencyRecord>(candidate => candidate.Key == key))
+                .Single();
+            record.CreatedAt = DateTimeOffset.UtcNow - age;
+            record.ExpiresAt = record.CreatedAt + ApiIdempotencyRecord.Retention;
+            await context.SaveChangesAsync();
+            return true;
+        });
 
     public void Dispose() => Inner.Dispose();
 }

@@ -77,6 +77,13 @@ public static class RunFields
     public const string Queue = "queue";
 
     /// <summary>
+    /// Card B-008: the <c>Idempotency-Key</c> header. The key itself is optional, but when it is
+    /// presented it names one request - a second, different request under it is refused against this
+    /// field rather than replayed.
+    /// </summary>
+    public const string IdempotencyKey = "idempotency-key";
+
+    /// <summary>
     /// Card F-037: a refusal of the re-run itself (the original did not finish, recorded no commit, its
     /// definition is unreadable, its project's kind changed, or a repository pipeline cannot be replayed).
     /// Form-level for the same reason <see cref="Queue"/> is: the person clicked one button on a finished
@@ -95,13 +102,26 @@ public sealed record RunTriggerInput(
     IReadOnlyDictionary<string, string>? Parameters = null);
 
 /// <summary>Result of triggering a run. <see cref="RunId"/> is the redirect target on success.</summary>
+/// <param name="Replayed">
+/// Card B-008: <see langword="true"/> when nothing was queued because the caller's
+/// <c>Idempotency-Key</c> already names this request - <see cref="RunId"/> is then the run that key
+/// queued earlier (a retried post, answered without a second run).
+/// </param>
 public sealed record RunTriggerResult(
     RunOperationStatus Status,
     Guid? RunId = null,
     string? Message = null,
-    IReadOnlyList<RunFieldError>? FieldErrors = null)
+    IReadOnlyList<RunFieldError>? FieldErrors = null,
+    bool Replayed = false)
 {
     public static RunTriggerResult Success(Guid runId) => new(RunOperationStatus.Success, runId);
+
+    /// <summary>
+    /// Card B-008: the answer to a retried trigger - the run the key already queued. Nothing was written
+    /// by this call.
+    /// </summary>
+    public static RunTriggerResult ReplayedRun(Guid runId) =>
+        new(RunOperationStatus.Success, runId, Replayed: true);
 
     public static RunTriggerResult NotFound() => new(RunOperationStatus.NotFound);
 
@@ -134,6 +154,17 @@ public sealed record RunTriggerResult(
             RunOperationStatus.Refused,
             Message: message,
             FieldErrors: [new RunFieldError(RunFields.Rebuild, code)]);
+
+    /// <summary>
+    /// Card B-008: the caller's <c>Idempotency-Key</c> already names a <b>different</b> request (another
+    /// project, or another payload). Nothing was written, and nothing is replayed: answering the first
+    /// request's run would tell the caller a build exists that was never asked for.
+    /// </summary>
+    public static RunTriggerResult IdempotencyKeyReused(string message) =>
+        new(
+            RunOperationStatus.Refused,
+            Message: message,
+            FieldErrors: [new RunFieldError(RunFields.IdempotencyKey, RunErrorCodes.IdempotencyKeyReused)]);
 }
 
 /// <summary>A run as the pages display it. Records keep disposed contexts out of the UI.</summary>
@@ -612,6 +643,7 @@ public sealed class RunService(
             input,
             BuildRunTriggerType.Manual,
             actingUserId,
+            idempotency: null,
             cancellationToken);
     }
 
@@ -628,9 +660,16 @@ public sealed class RunService(
     /// routine a tenant and a trigger type.
     /// </para>
     /// </summary>
+    /// <param name="idempotency">
+    /// Cards F-027 + B-008: the token and <c>Idempotency-Key</c> this post carries, or
+    /// <see langword="null"/> when it carries none. The key's decision is made <b>here</b>, after the
+    /// project lookup and before the project's gates, so a replay can never answer with another
+    /// project's run and an unknown project id stays a bare 404.
+    /// </param>
     public async Task<RunTriggerResult> TriggerForApiAsync(
         Guid projectId,
         RunTriggerInput input,
+        RunTriggerIdempotency? idempotency = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -649,6 +688,7 @@ public sealed class RunService(
             input,
             BuildRunTriggerType.Api,
             actingUserId: null,
+            idempotency,
             cancellationToken);
     }
 
@@ -663,6 +703,7 @@ public sealed class RunService(
         RunTriggerInput input,
         string triggerType,
         string? actingUserId,
+        RunTriggerIdempotency? idempotency,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -672,8 +713,50 @@ public sealed class RunService(
             cancellationToken);
         if (project is null)
         {
-            // Foreign or unknown id: the same 404, no existence oracle.
+            // Foreign or unknown id: the same 404, no existence oracle - and it stays the answer even
+            // when the caller presents an Idempotency-Key (card B-008): the key's lookup runs below,
+            // after this read, so a remembered key can never turn a 404 into a 200.
             return RunTriggerResult.NotFound();
+        }
+
+        // Cards F-027 + B-008: the idempotency decision, and it is taken here - after the project
+        // exists, before the project's own gates and before field validation.
+        //
+        //   * Precedence: a replay wins over F-028's disabled gate and F-029's queue cap. A replay is
+        //     the idempotency semantic itself ("this request already happened"), not a new trigger, so
+        //     a retried deploy answers the run it queued even if the project has been disabled since -
+        //     the alternative is a caller that loses the answer to a request the server did accept.
+        //     Written down in docs/api-v1.md and on both cards instead of left to be discovered.
+        //   * Scope: the record is looked up by (token, key) and then compared against this project and
+        //     this payload's hash; a mismatch is a refusal and writes nothing (the audit's finding).
+        PendingIdempotency? pending = null;
+        if (idempotency is not null)
+        {
+            var fingerprint = RunTriggerFingerprint.Of(input);
+            var remembered = await FindIdempotencyRecordAsync(context, idempotency, cancellationToken);
+            if (remembered is not null)
+            {
+                if (remembered.ProjectId != projectId
+                    || !string.Equals(remembered.RequestHash, fingerprint, StringComparison.Ordinal))
+                {
+                    logger.LogInformation(
+                        "Trigger refused: the Idempotency-Key already names a different request. OrganizationId={OrganizationId} TokenId={TokenId} ProjectId={ProjectId} RememberedProjectId={RememberedProjectId}",
+                        organizationId,
+                        idempotency.ApiTokenId,
+                        projectId,
+                        remembered.ProjectId);
+                    return RunTriggerResult.IdempotencyKeyReused(IdempotencyKeyReusedMessage);
+                }
+
+                return RunTriggerResult.ReplayedRun(remembered.RunId);
+            }
+
+            pending = new PendingIdempotency(
+                idempotency.ApiTokenId,
+                idempotency.Key,
+                projectId,
+                fingerprint,
+                DateTimeOffset.UtcNow);
         }
 
         // F-028: a disabled project refuses the trigger here - before its own field validation - because
@@ -768,8 +851,9 @@ public sealed class RunService(
 
         // F-028 + F-029: the project's own gate (disabled / queue cap) is applied inside the staging
         // routine, under the project row lock, in the same transaction as the insert - never as a
-        // separate pre-flight check here.
-        return await QueueStagedRunAsync(context, run, triggerType, actingUserId, cancellationToken);
+        // separate pre-flight check here. Cards F-027 + B-008: the idempotency record rides in that same
+        // transaction, so "one key, one run" cannot be broken by a crash between two units of work.
+        return await QueueStagedRunAsync(context, run, triggerType, actingUserId, pending, cancellationToken);
     }
 
     /// <summary>
@@ -782,15 +866,44 @@ public sealed class RunService(
     /// </summary>
     /// <param name="context">The caller's context. The transaction is this method's own entirely: a
     /// refusal changes nothing and a failed commit leaves no run behind.</param>
+    /// <param name="idempotency">
+    /// Card B-008: the resolved <c>Idempotency-Key</c> binding to write in the same transaction, or
+    /// <see langword="null"/> for a trigger that carries no key. It also decides what a unique-index
+    /// refusal means: a concurrent post won the key, this transaction rolls back (so its run is never
+    /// queued) and the winner's run is the answer.
+    /// </param>
     private async Task<RunTriggerResult> QueueStagedRunAsync(
         ZenkinsDbContext context,
         BuildRun run,
         string triggerType,
         string? actingUserId,
+        PendingIdempotency? idempotency,
         CancellationToken cancellationToken)
     {
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
-        var staged = await StageQueuedRunAsync(context, run, cancellationToken);
+
+        RunTriggerResult staged;
+        try
+        {
+            staged = await StageQueuedRunAsync(context, run, idempotency, cancellationToken);
+        }
+        catch (DbUpdateException failure)
+            when (idempotency is not null && DatabaseErrors.IsUniqueViolation(failure, "ApiIdempotencyRecords"))
+        {
+            // Two posts carried the same new key: the other one's record committed first. Rolling back
+            // the whole transaction is what makes "one key, one run" true even under the race - this
+            // call's run is discarded, and the key's answer (the winner's run) is returned instead.
+            await transaction.RollbackAsync(cancellationToken);
+            logger.LogInformation(
+                "Idempotency-Key claimed by a concurrent post; answering its run. OrganizationId={OrganizationId} TokenId={TokenId} ProjectId={ProjectId}",
+                run.OrganizationId,
+                idempotency.ApiTokenId,
+                run.ProjectId);
+
+            return await ResolveRacedIdempotencyAsync(context, idempotency, cancellationToken)
+                ?? Rethrow(failure);
+        }
+
         if (staged.Status != RunOperationStatus.Success)
         {
             return staged;
@@ -822,9 +935,9 @@ public sealed class RunService(
     }
 
     /// <summary>
-    /// Cards F-028 + F-029 + F-036: the one place a trigger's run is staged, used by <b>every</b> trigger
-    /// source (the manual form, the API, the webhook, and F-037's rebuild/replay). The caller owns the
-    /// transaction; this method owns the decision and the run's build number.
+    /// Cards F-028 + F-029 + F-036 + B-008: the one place a trigger's run is staged, used by <b>every</b>
+    /// trigger source (the manual form, the API, the webhook, and F-037's rebuild/replay). The caller owns
+    /// the transaction; this method owns the decision and the run's build number.
     /// <para>
     /// <b>Why a project row lock.</b> The gate's facts are the project's own state, and two writers change
     /// them concurrently with a trigger: the disable mutation and every other trigger of the same
@@ -849,6 +962,7 @@ public sealed class RunService(
     private async Task<RunTriggerResult> StageQueuedRunAsync(
         ZenkinsDbContext context,
         BuildRun staged,
+        PendingIdempotency? idempotency,
         CancellationToken cancellationToken)
     {
         if (await context.LockProjectForTriggerAsync(staged.ProjectId, cancellationToken) == 0)
@@ -897,11 +1011,124 @@ public sealed class RunService(
 
         context.BuildRuns.Add(staged);
         await SaveStagedRunAsync(context, staged, cancellationToken);
+
+        if (idempotency is not null)
+        {
+            // Card B-008: the binding is written inside the same transaction (and through a second
+            // SaveChanges, so the run row - and its build number - exist before the foreign key to it).
+            context.ApiIdempotencyRecords.Add(new ApiIdempotencyRecord
+            {
+                OrganizationId = staged.OrganizationId,
+                ApiTokenId = idempotency.ApiTokenId,
+                Key = idempotency.Key,
+                ProjectId = idempotency.ProjectId,
+                RequestHash = idempotency.RequestHash,
+                RunId = staged.Id,
+                CreatedAt = idempotency.CreatedAt,
+                ExpiresAt = idempotency.ExpiresAt,
+            });
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
         return RunTriggerResult.Success(staged.Id);
     }
 
     /// <summary>The name of the savepoint the numbering retry rolls back to.</summary>
     private const string BuildNumberSavepoint = "build-number";
+
+    /// <summary>Card B-008: the one sentence a reused key answers with (refusal, nothing written).</summary>
+    private const string IdempotencyKeyReusedMessage =
+        "This Idempotency-Key was already used for a different request (another project, or a different "
+        + "branch, tag set, timeout or parameter value). Send a new key, or repeat the original request "
+        + "exactly. Nothing was queued.";
+
+    /// <summary>
+    /// Card B-008: the binding a trigger writes in the same transaction as its run. Resolved before the
+    /// gates (the key's decision is taken there); written only when the trigger actually queues a run.
+    /// </summary>
+    /// <param name="RequestHash">The payload hash (<see cref="RunTriggerFingerprint"/>).</param>
+    /// <param name="CreatedAt">When the request arrived; <see cref="ExpiresAt"/> is this plus the retention.</param>
+    private sealed record PendingIdempotency(
+        Guid ApiTokenId,
+        string Key,
+        Guid ProjectId,
+        string RequestHash,
+        DateTimeOffset CreatedAt)
+    {
+        public DateTimeOffset ExpiresAt => CreatedAt + ApiIdempotencyRecord.Retention;
+    }
+
+    /// <summary>
+    /// Card B-008: the live binding of one key, or <see langword="null"/> when the key is new <b>or its
+    /// binding has outlived <see cref="ApiIdempotencyRecord.Retention"/>.</b> An expired binding is
+    /// deleted here (one statement, before the trigger's transaction) so the key may name a fresh request
+    /// without a second sweeper - the retention is enforced where it is read, not only by a background job.
+    /// </summary>
+    private async Task<ApiIdempotencyRecord?> FindIdempotencyRecordAsync(
+        ZenkinsDbContext context,
+        RunTriggerIdempotency scope,
+        CancellationToken cancellationToken)
+    {
+        var record = await context.ApiIdempotencyRecords
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                candidate => candidate.ApiTokenId == scope.ApiTokenId && candidate.Key == scope.Key,
+                cancellationToken);
+        if (record is null)
+        {
+            return null;
+        }
+
+        if (record.ExpiresAt > DateTimeOffset.UtcNow)
+        {
+            return record;
+        }
+
+        await context.ApiIdempotencyRecords
+            .Where(candidate => candidate.Id == record.Id)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Idempotency-Key expired and was forgotten. OrganizationId={OrganizationId} TokenId={TokenId} ProjectId={ProjectId} ExpiredAt={ExpiredAt}",
+            record.OrganizationId,
+            record.ApiTokenId,
+            record.ProjectId,
+            record.ExpiresAt);
+        return null;
+    }
+
+    /// <summary>
+    /// Card B-008: what a concurrent post's winning record means for this one - the winner's run when the
+    /// two requests agree, a refusal when they do not, and <see langword="null"/> when the record is gone
+    /// (an expiry racing the insert, which is a real error for the caller, not a replay).
+    /// </summary>
+    private async Task<RunTriggerResult?> ResolveRacedIdempotencyAsync(
+        ZenkinsDbContext context,
+        PendingIdempotency idempotency,
+        CancellationToken cancellationToken)
+    {
+        context.ChangeTracker.Clear();
+        var winner = await context.ApiIdempotencyRecords
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                candidate => candidate.ApiTokenId == idempotency.ApiTokenId
+                    && candidate.Key == idempotency.Key,
+                cancellationToken);
+        if (winner is null || winner.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            return null;
+        }
+
+        return winner.ProjectId == idempotency.ProjectId
+            && string.Equals(winner.RequestHash, idempotency.RequestHash, StringComparison.Ordinal)
+                ? RunTriggerResult.ReplayedRun(winner.RunId)
+                : RunTriggerResult.IdempotencyKeyReused(IdempotencyKeyReusedMessage);
+    }
+
+    /// <summary>Re-raises a caught exception from a helper's null answer (the caller's catch block cannot).</summary>
+    private static RunTriggerResult Rethrow(DbUpdateException failure) =>
+        throw new InvalidOperationException(
+            "The idempotency record vanished between the failed insert and the read-back.",
+            failure);
 
     /// <summary>
     /// Card F-036: assigns <paramref name="staged"/> its build number and inserts it, retrying once if the
@@ -1165,7 +1392,7 @@ public sealed class RunService(
             RebuiltFromRunId = original.Id,
         };
 
-        return await QueueStagedRunAsync(context, run, triggerType, actingUserId, cancellationToken);
+        return await QueueStagedRunAsync(context, run, triggerType, actingUserId, idempotency: null, cancellationToken);
     }
 
     /// <summary>
@@ -1273,7 +1500,7 @@ public sealed class RunService(
             // definitions' defaults - the honest answer for a headless trigger.
             parametersJson: SerializeParameters(
                 ProjectParameters.ResolveValues(ReadParameterDefinitions(project.ParametersJson), null, out _)));
-        var staged = await StageQueuedRunAsync(context, run, cancellationToken);
+        var staged = await StageQueuedRunAsync(context, run, idempotency: null, cancellationToken);
         if (staged.Status != RunOperationStatus.Success)
         {
             // Cards F-028 + F-029: the project's own gate refused this trigger (disabled, or the queue

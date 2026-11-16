@@ -29,6 +29,12 @@ public static class RunErrorCodes
     /// <summary>F-021: a supplied parameter value does not fit its type (boolean, choice, length).</summary>
     public const string ParameterInvalid = "parameter-invalid";
 
+    /// <summary>
+    /// Card B-008: the caller's <c>Idempotency-Key</c> already names a different request - another
+    /// project, or another payload - so it is refused instead of replaying that request's run.
+    /// </summary>
+    public const string IdempotencyKeyReused = "idempotency-key-reused";
+
     // Card F-037: a re-run the original's own state refused (nothing was written).
 
     /// <summary>The run has not finished, so it is not a re-run input yet.</summary>

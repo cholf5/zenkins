@@ -42,22 +42,26 @@ authorizes a page.
 | `404` | the project or run does not exist **in the token's organization** (a foreign id is the same answer) | empty, no existence oracle |
 | `429` | the token's per-minute budget is spent | `{"error":"rate-limited"}`, `Retry-After: <seconds>` |
 | `400` | a malformed request | `{"error":"<code>","message":…,"fieldErrors":[{"field":…,"code":…}]}` |
-| `409` | the project refused the trigger (`project-disabled`, `queue-full`) | `{"error":"<code>","message":…}` |
+| `409` | the project refused the trigger (`project-disabled`, `queue-full`), or the `Idempotency-Key` already names a different request (`idempotency-key-reused`) | `{"error":"<code>","message":…,"fieldErrors":[{"field":…,"code":…}]}` |
 
 The `400` and `409` codes are the **form's own codes** (`branch-invalid`, `tag-invalid`, `tag-unknown`,
 `timeout-invalid`, `parameter-unknown`, `parameter-invalid`, `steps-missing`, `project-disabled`,
-`queue-full`), because both surfaces call the same validation. The remaining API-only codes are
-`request-invalid`, `idempotency-key-invalid`, `from-invalid`, `page-invalid`, `rate-limited`, plus the
-token-management codes (`name-required`, `name-invalid`, `name-taken`, `scope-required`,
-`scope-invalid`, `token-already-revoked`) on the forms.
+`queue-full`), because both surfaces call the same validation. A `409` carries `fieldErrors` exactly as a
+`400` does - `queue-full` and `project-disabled` are reported as a form-level `queue` field, a reused
+`Idempotency-Key` as an `idempotency-key` field - and its `message` quotes the observed numbers where a refusal has any. The
+remaining API-only codes are `request-invalid`, `idempotency-key-invalid`, `idempotency-key-reused`,
+`from-invalid`, `page-invalid`, `rate-limited`, plus the token-management codes (`name-required`,
+`name-invalid`, `name-taken`, `scope-required`, `scope-invalid`, `token-already-revoked`) on the forms.
 
 One documented exception to "every 400 carries a body": a request whose JSON **does not parse at all**
-never reaches a handler - the framework's body binder answers `400` with an empty body, which is the
-existing, global behaviour of every JSON endpoint in this server (the worker API included), not a
-choice of this route. Every 400 a handler produces carries the body shape above.
+never reaches a handler - the framework's body binder refuses it. In **Production** that answer is `400`
+with an empty body; in **Development** the same request answers `400` with the developer exception page's
+HTML instead. Both are the existing, global behaviour of every JSON endpoint in this server (the worker
+API included), not a choice of this route. Every 400 a handler produces carries the body shape above.
 
 The budget defaults to 120 requests per minute per token (`Api:RateLimitPerMinute`). It is spent before
-any project or run is looked up, so a `429` says nothing about whether an id exists.
+any project or run is looked up, so a `429` says nothing about whether an id exists, and a **replay spends
+a slot like any other request** (a retried post is still a request).
 
 ## Routes
 
@@ -88,10 +92,42 @@ curl -sS -X POST https://zenkins.example.com/api/v1/projects/<project-id>/runs \
   JSON binder error).
 - An optional `Idempotency-Key` (≤200 characters) makes a retried post answer the run the first one
   queued: the retry gets `200` with `Idempotency-Replayed: true` and the same `id`, instead of queueing
-  a second run. Keys are scoped to the token.
+  a second run. The header's full contract - its scope, its refusals, its retention - is the next
+  section.
 - The `201`/`200` body is the run resource (below); `id` is the run's reference. `number` is the
   project-scoped build number (card F-036), the same `#N` the UI prints - additive, so `id` remains the
   value every route takes.
+
+#### The `Idempotency-Key`, in full
+
+The header is optional. Presented, it names **one request**, and these are the rules a client can rely on
+(card B-008):
+
+- **Scope: the token, then one project and one payload.** Two tokens may use the same key without
+  colliding. One token's key is bound to the project it first triggered and to that request's payload -
+  the branch, `requiredTags`, `timeoutMinutes` and the parameter values (tags compared as a set, the rest
+  trimmed, parameters by name).
+- **A retry is a replay.** The identical request again answers `200`, `Idempotency-Replayed: true`, the
+  same `id`, and a `Location` pointing at that run. Nothing is queued and nothing is spent but the
+  rate-limit slot.
+- **A different request is a refusal.** The same key against **another project**, or with a changed
+  branch/tags/timeout/parameter value, answers `409 idempotency-key-reused` (with `fieldErrors` on
+  `idempotency-key`) and queues nothing. It never answers another project's run id.
+- **An unknown or foreign project is still a bare `404`.** The project is looked up first, so a key can
+  never turn a `404` into a `200`.
+- **A replay wins over the project's gate.** If the project was disabled, or its queue filled up, after
+  the first post, the retry still answers the run it queued - a replay is the idempotency semantic itself,
+  not a new trigger. A **new** key reads those gates and gets `409 project-disabled` / `409 queue-full`.
+  (Decided with cards F-028 and F-029 and recorded on both.) One consequence, stated because it is the
+  one an operator will meet: a run the **disable** cancelled is still the answer a retry of its key gets
+  (status `Canceled`, and the resource's `projectDisabled` shows the live state) until that key expires -
+  to build again the same day, send a new key.
+- **A key expires.** The binding lives 24 hours (`ApiIdempotencyRecord.Retention`); after that it is
+  forgotten and the same key queues a fresh run - a nightly job with a fixed key cannot pin its first run
+  forever.
+- **Concurrent posts with one new key queue one run.** Two requests carrying the same new key race inside
+  one transaction: the database's unique `(token, key)` index picks the winner, the loser's transaction is
+  rolled back (its run is never queued), and it answers the winner's run as a replay.
 
 ### The run resource
 
@@ -125,6 +161,11 @@ curl -sS -X POST https://zenkins.example.com/api/v1/projects/<project-id>/runs \
 Deliberately absent: **build-parameter values** (F-041's password-typed parameters do not exist yet,
 and the API never echoes a parameter value), secrets, credentials, and any artifact URL. The status,
 steps, failure reason and numbers are the record.
+
+`projectDisabled` is the project's **live** state, read when the resource was rendered - not a snapshot
+of the run's own moment. A run that was queued while the project was enabled reads `true` after the
+project is disabled, which is exactly the question an operator asks ("did this stop because the project
+is disabled?").
 
 `number` is the run's build number inside its project (card F-036): assigned once, at trigger time, and
 never reused - the value the UI shows as `#N` and the permalinks carry. It is not unique across projects,
@@ -170,6 +211,7 @@ what the run's history will say about who stopped the build.
   same body and its own `Idempotency-Key`.
 - No token expiry UI (the column exists), no per-project scoping (a token covers its organization).
 - No `?token=` query-string credential, ever.
-- Two concurrent posts carrying the same new `Idempotency-Key` can both queue a run before the unique
-  index decides the winner; the answer names the remembered one. The guarantee this release makes is
-  the one the card names: a **retried** post (a lost response) queues one run.
+- The guarantee an `Idempotency-Key` makes is the one the paragraph above spells out: a **retried** post
+  queues one run, and two posts carrying the same new key still queue exactly one (the loser's
+  transaction is rolled back and answers the winner's run). A key is not a lock on the project: two
+  *different* keys queue two runs, which is what a client asking twice means.

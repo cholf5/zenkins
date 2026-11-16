@@ -12,8 +12,9 @@ using Zenkins.Tests.Runs;
 namespace Zenkins.Tests.Concurrency;
 
 /// <summary>
-/// F-029's concurrency fact on a real PostgreSQL server, plus the control that keeps the fact honest about
-/// what it does and does not prove.
+/// F-029's and Q-016's concurrency facts on a real PostgreSQL server - the <b>claim</b> cap and the
+/// <b>trigger</b> queue cap - plus the controls that keep each fact honest about what it does and does not
+/// prove.
 /// <para>
 /// <b>Why a suite of its own.</b> On SQLite the race cannot be observed: every claim begins with a write
 /// (the worker-row no-op <c>UPDATE</c>), so the database's single writer serializes the statements even
@@ -34,6 +35,13 @@ namespace Zenkins.Tests.Concurrency;
 /// this control: deleting the claim's project-row lock (keeping the count) turns fact 1 red on
 /// PostgreSQL, and the card records that run. Keep the two apart when reading either of them.</item>
 /// </list>
+/// <para>
+/// <b>The trigger half (card Q-016).</b> <c>Concurrent_triggers_never_overfill_the_queue_and_the_naive_sequence_would</c>
+/// holds the trigger path to the same standard: one <c>MaxQueuedRuns = 1</c> project, six concurrent real
+/// trigger posts, three rounds, exactly one admission per round - with its own count-then-insert control.
+/// Deleting <c>RunService.StageQueuedRunAsync</c>'s project row lock (the count kept) turns it red in round
+/// 1 while every SQLite <c>queue-full</c> fact stays green.
+/// </para>
 /// <para>
 /// <b>Prerequisite and skip.</b> The suite needs a disposable PostgreSQL database: set
 /// <c>ZENKINS_TEST_POSTGRES</c> to a connection string (for example
@@ -268,6 +276,176 @@ public sealed class PostgresProjectCapTests
         context.BuildRuns.CountAsync(run => run.ProjectId == projectId
             && (run.Status == BuildRunStatus.Running
                 || (run.Status == BuildRunStatus.Queued && run.WorkerId != null)));
+
+    /// <summary>
+    /// Card Q-016: the <b>trigger</b> side of the same standard the claim side is held to. Six concurrent
+    /// triggers against a project whose queue cap is one admit exactly one run per round - and the
+    /// negative control shows what the same database does when the count is trusted without the lock.
+    /// <para>
+    /// <b>Why it needs PostgreSQL.</b> On SQLite every trigger's first write serializes the whole
+    /// transaction, so the queue-control facts in the fast suite prove the cap <em>exists</em>; they
+    /// cannot prove the project row lock in <c>RunService.StageQueuedRunAsync</c> is what enforces it.
+    /// Deleting that one call (keeping the count) leaves the SQLite facts green and turns this fact red in
+    /// round 1 - the mutation record is on card F-029.
+    /// </para>
+    /// </summary>
+    [Fact(Timeout = 10 * 60 * 1000)]
+    public async Task Concurrent_triggers_never_overfill_the_queue_and_the_naive_sequence_would()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var skipReason = UnavailabilityReason();
+        if (skipReason is not null)
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(skipReason);
+        }
+
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringVariable)!;
+        await ResetDatabaseAsync(connectionString, cancellationToken);
+
+        using var host = await RunTestHost.CreateAsync(
+            configureAppConfiguration: configuration => configuration.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["Database:Provider"] = "Postgres",
+                    ["ConnectionStrings:Default"] = connectionString,
+                    ["Database:ApplyMigrationsOnStartup"] = "true",
+                }),
+            configureTestServices: services =>
+            {
+                services.RemoveAll<ZenkinsDataOptions>();
+                services.AddSingleton(new ZenkinsDataOptions(DatabaseProvider.Postgres, connectionString));
+            });
+
+        var organizationId = await host.OrganizationIdAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+
+        // Every read below goes through a context that carries the organization: the tenant filter is
+        // what makes a project's rows visible, and the product's system scope is for cross-tenant reads
+        // (the drain), not for a verdict about one project.
+        var tenant = new TenantContext { OrganizationId = organizationId };
+        var options = new DbContextOptionsBuilder<ZenkinsDbContext>()
+            .UseZenkinsDatabase(new ZenkinsDataOptions(DatabaseProvider.Postgres, connectionString))
+            .Options;
+        await using var counter = new ZenkinsDbContext(options, tenant, new SystemDataScope());
+
+        // ---- Fact 1: the trigger path (the AC's property), three rounds, verdict read from the rows ----
+        const int rounds = 3;
+        const int triggersPerRound = 6;
+        const int cap = 1;
+        var admittedPerRound = new List<int>();
+        var worstQueued = 0;
+
+        for (var round = 1; round <= rounds; round++)
+        {
+            var projectId = await host.Inner.Inner.AddProjectAsync(organizationId, $"pg-trigger-cap-{round}");
+            Assert.Equal(
+                HttpStatusCode.Redirect,
+                (await RunTestHost.SaveLimitsAsync(owner, projectId, maxQueuedRuns: cap)).StatusCode);
+
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = Enumerable.Range(0, triggersPerRound)
+                .Select(_ => Task.Run(async () =>
+                {
+                    await start.Task.WaitAsync(cancellationToken);
+                    using var response = await RunTestHost.StartRunAsync(owner, projectId);
+                    return (
+                        Status: response.StatusCode,
+                        Location: response.Headers.Location?.OriginalString ?? string.Empty);
+                }))
+                .ToArray();
+            start.SetResult();
+            var answers = await Task.WhenAll(calls);
+
+            var queued = await QueuedRunCountAsync(counter, projectId, cancellationToken);
+            var admitted = answers.Count(answer =>
+                (int)answer.Status is 302 or 303
+                && !answer.Location.Contains("runError=", StringComparison.Ordinal));
+            var refused = answers.Count(answer =>
+                answer.Location.Contains("runError=queue-full", StringComparison.Ordinal));
+            worstQueued = Math.Max(worstQueued, queued);
+            admittedPerRound.Add(admitted);
+
+            Assert.True(
+                queued <= cap,
+                $"round {round}: the MaxQueuedRuns=1 project holds {queued} queued runs ({admitted} of "
+                + $"{triggersPerRound} concurrent triggers admitted) on PostgreSQL - the cap was decided "
+                + "check-then-act.");
+            Assert.True(
+                queued == admitted,
+                $"round {round}: {admitted} of {triggersPerRound} triggers reported a queued run but the "
+                + $"project holds {queued}. Answers: {string.Join(
+                    " | ",
+                    answers.Select(answer => $"{(int)answer.Status} {answer.Location}"))}");
+            Assert.Equal(triggersPerRound - admitted, refused);
+
+            await DrainProjectAsync(host, projectId);
+        }
+
+        // The ceiling was exercised, not skirted: every round admitted exactly one run and refused five.
+        Assert.Equal(1, worstQueued);
+        Assert.All(admittedPerRound, admitted => Assert.Equal(1, admitted));
+
+        // ---- Fact 2: the negative control ----------------------------------------------------------
+        // Count, then insert - the two statements a non-lock implementation would run, against the same
+        // database, through the product's own context and entity. Both counts read zero (the queue is
+        // empty, the cap of one is not reached) and both inserts then succeed, leaving two queued runs in
+        // a one-run queue: the anomaly fact 1 shows the trigger path never produces. A sequence, not a
+        // race, so it is deterministic - it fails loudly if the provider ever stops exposing the window,
+        // which is exactly when fact 1 would stop meaning anything.
+        var controlProjectId = await host.Inner.Inner.AddProjectAsync(organizationId, "pg-trigger-control");
+        Assert.Equal(
+            HttpStatusCode.Redirect,
+            (await RunTestHost.SaveLimitsAsync(owner, controlProjectId, maxQueuedRuns: cap)).StatusCode);
+
+        await using var first = new ZenkinsDbContext(options, tenant, new SystemDataScope());
+        await using var second = new ZenkinsDbContext(options, tenant, new SystemDataScope());
+
+        // The check each trigger would do first - and both read zero, cap not reached.
+        Assert.Equal(0, await QueuedRunCountAsync(first, controlProjectId, cancellationToken));
+        Assert.Equal(0, await QueuedRunCountAsync(second, controlProjectId, cancellationToken));
+
+        // ...then both insert their run: the check-then-act window, reproduced deterministically.
+        await InsertQueuedRunAsync(first, controlProjectId, organizationId, number: 1, cancellationToken);
+        await InsertQueuedRunAsync(second, controlProjectId, organizationId, number: 2, cancellationToken);
+
+        Assert.Equal(2, await QueuedRunCountAsync(first, controlProjectId, cancellationToken));
+
+        await DrainProjectAsync(host, controlProjectId);
+    }
+
+    /// <summary>The queue cap's own predicate, counted the way the staging routine counts it.</summary>
+    private static Task<int> QueuedRunCountAsync(
+        ZenkinsDbContext context,
+        Guid projectId,
+        CancellationToken cancellationToken = default) =>
+        context.BuildRuns.CountAsync(
+            run => run.ProjectId == projectId && run.Status == BuildRunStatus.Queued,
+            cancellationToken);
+
+    /// <summary>
+    /// One queued run inserted through the product's own context and entity (the negative control's
+    /// "insert" half). The build number is supplied by the caller: card F-036's unique
+    /// <c>(ProjectId, Number)</c> index must not be what this control trips over.
+    /// </summary>
+    private static async Task InsertQueuedRunAsync(
+        ZenkinsDbContext context,
+        Guid projectId,
+        Guid organizationId,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        context.BuildRuns.Add(new BuildRun
+        {
+            OrganizationId = organizationId,
+            ProjectId = projectId,
+            Number = number,
+            RequiredTags = string.Empty,
+            TriggerType = BuildRunTriggerType.Manual,
+            GitBranch = "main",
+            PipelinePath = "pipeline.lua",
+        });
+        await context.SaveChangesAsync(cancellationToken);
+    }
 
     /// <summary>
     /// Finishes/cancels every run of one project so the next round starts from an empty queue (the verdict

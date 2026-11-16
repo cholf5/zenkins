@@ -28,12 +28,16 @@ loop (`dotnet run` from a clone).
 > migration/backfill fact, 8 rebuild/replay facts, 2 worker-layer pin facts, 3 `ZENKINS_BUILD_*`
 > composition facts, 3 Q-006 permalink and re-run probes) plus 1 `Category=Postgres` fact for the
 > numbering retry - no new category and no new exclusion, so the sextuple filter is unchanged.
+> B-008, Q-015 and Q-016 followed on 2026-11-16: 7 tests in the fast suite (5 facts for the
+> `Idempotency-Key`'s project and payload scope, 2 for the token stamp's best-effort bound and the
+> token list's Owner check) plus 1 `Category=Postgres` fact for the trigger-side queue cap. Still no new
+> category and no new exclusion.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines against a real run: **fast 1165, all seven 1190** (Milestone 12, Recovery 4,
-> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 2). Every command in the POSIX
+> and re-baselines against a real run: **fast 1172, all seven 1198** (Milestone 12, Recovery 4,
+> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 3). Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -163,8 +167,13 @@ that prove the product end to end instead of proving its parts:
   the product picks `#2` too and its INSERT blocks on the unique index; the fact commits the rival only
   after it observes that lock wait in `pg_stat_activity`, then requires the product to answer success with
   `#3` - which is only reachable through the savepoint rollback and re-read (deleting the retry turns the
-  fact red, the mutation record is on the card). Postgres also has to be in the fast filter's exclusion
-  list for exactly this reason: the retry is unreachable on SQLite, where every write serializes.
+  fact red, the mutation record is on the card). Q-016 adds (d) the **trigger-side queue cap**: six
+  concurrent real trigger posts against `MaxQueuedRuns = 1` admit exactly one run per round, three
+  rounds, with a count-then-insert control that leaves two queued runs in the same provider - and
+  deleting the staging routine's project row lock turns it red in round 1 while every SQLite `queue-full`
+  fact stays green (the mutation is recorded on F-029). Postgres also has to be in the fast filter's
+  exclusion list for exactly this reason: the retry is unreachable on SQLite, where every write
+  serializes.
 
 None of the harnesses is part of the fast loop, so the fast filter has to exclude **six**
 categories. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix
@@ -196,17 +205,17 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~2½ min on the reference machine (1165 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~4½ min on the reference machine (1172 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
 | GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
-| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~10 s warm, plus one migration run on a fresh schema (2 tests) |
+| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus one migration run on a fresh schema (3 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1190 at the time of writing) but
+filter runs **all seven** (1198 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

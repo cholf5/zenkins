@@ -16,6 +16,10 @@ public static class ApiModelConfiguration
     /// Adds both entities: the globally unique token hash (the authentication lookup key), the
     /// unique <c>(OrganizationId, Name)</c> label, the unique <c>(ApiTokenId, Key)</c> idempotency
     /// guard, the tenant filters, and the cascades from the organization, the token and the run.
+    /// <para>
+    /// The idempotency record also carries the project and a payload hash (card B-008), so a key can
+    /// only ever name one request, and an expiry so it does not pin the first run forever.
+    /// </para>
     /// </summary>
     public static void ConfigureApi(this ModelBuilder modelBuilder, ZenkinsDbContext context)
     {
@@ -55,11 +59,18 @@ public static class ApiModelConfiguration
             entity.HasKey(record => record.Id);
             entity.Property(record => record.Key).IsRequired()
                 .HasMaxLength(ApiTokenLimits.MaxIdempotencyKeyLength);
+            entity.Property(record => record.RequestHash).IsRequired().HasMaxLength(64);
 
             // The replay guard: one key per token. The database decides the winner of two concurrent
-            // posts carrying the same key, exactly like the webhook dedupe index.
+            // posts carrying the same key, exactly like the webhook dedupe index. The project and the
+            // request hash are compared after this lookup finds the row (card B-008), not indexed: a
+            // key names one request, and a second, different request with it is refused.
             entity.HasIndex(record => new { record.ApiTokenId, record.Key }).IsUnique();
             entity.HasIndex(record => record.RunId);
+
+            // The retention bound (card B-008): the lookup asks "is this binding still live?" and a
+            // future sweeper would scan by this column, never by an unindexed timestamp.
+            entity.HasIndex(record => record.ExpiresAt);
 
             entity.HasOne<Organization>().WithMany().HasForeignKey(record => record.OrganizationId)
                 .OnDelete(DeleteBehavior.Cascade);

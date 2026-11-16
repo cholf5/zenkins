@@ -174,6 +174,22 @@ and the next trigger queues exactly one run) plus the webhook half in
   Identity id with no FK; the settings page resolves it to an e-mail and says
   "not recorded" when it no longer resolves — an account deletion never rewrites a
   project's history.
+- **An `Idempotency-Key` replay wins over this gate (card B-008, 2026-11-16).** The
+  three cards never decided which came first, so B-008's audit found the answer was
+  "replay" by accident. It is now decided, implemented and documented: a **replay
+  wins**, because a replay is the idempotency semantic itself ("this request already
+  happened") rather than a new trigger — refusing it would make a client that lost the
+  first response lose the run it did queue, and the run itself stays in history with
+  its `project-disabled` state visible on the resource. A request with a **new** key is
+  a new trigger and reads this card's `409 project-disabled` exactly as before; an
+  unknown project id is still a bare `404` before either question is asked. Implemented
+  in `RunService.CreateQueuedRunAsync` (the replay lookup sits after the project read
+  and before `ProjectTriggerGuard.DisabledRefusal`), written into `docs/api-v1.md`, and
+  pinned by
+  `ApiV1RunApiTests.A_replay_wins_over_the_disabled_gate_and_a_new_key_reads_the_refusal`
+  (the retried post answers `200 Idempotency-Replayed: true` with the same run id; a
+  fresh key on the same disabled project answers `409 project-disabled` and queues
+  nothing).
 
 ## Development Log
 
