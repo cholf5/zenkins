@@ -72,3 +72,62 @@ Steps:
 Expected:
 - `--primary`, `--background`, `--border` all resolve to real colors; the primary element's
   `background-color` is not transparent; the dark pass differs from the light pass.
+
+## Development Log
+
+### 2026-11-16
+
+- **The tokens.** `src/Server/wwwroot/styles/theme.css` now carries the whole base set on `:root`
+  and `.dark`, copied from the package's own `[data-base-color="zinc"]` pair in
+  `_content/BlazorBlueprint.Components/css/themes.css` — which is exactly what the package README's
+  "Theming" section tells an app to put in `wwwroot/styles/theme.css`, and the sheet order
+  `App.razor` already had (`styles/theme.css` first, then the package CSS). Zinc with no
+  `data-primary-color` *is* the library's default primary: `[data-base-color="zinc"]` defines
+  `--primary` / `--primary-foreground` / `--ring` itself, and the palette sheet says so in a comment
+  ("the 'default' primary inherits from the base color"). So "picks nothing" and "picks zinc" are the
+  same rendering by construction rather than by a second, hand-tuned palette.
+- **Why the cascade still works.** `theme.css` is unlayered and loads first; the palette sheet loads
+  later and its attribute rules are more specific (`.dark[data-base-color=…]` is two classes,
+  `.dark` / `:root` are one). The `.dark` block is deliberately the bare `.dark`, not `html.dark`,
+  so this file never becomes the most specific rule on the page and a picked base or accent keeps
+  winning — the file's header comment states the rule, and a test now pins it.
+- **The comment.** `app.css` claimed `--destructive` "comes from the BlazorBlueprint token set". That
+  was false in both directions (`blazorblueprint.css` defines no color token at all — zero
+  `--background:`/`--primary:`/`--border:` hits — and the palette sheet defines none without an
+  attribute), so it now points at `styles/theme.css` and says why.
+- **The test.** `tests/Zenkins.Tests/Theme/BaseTokenPaletteTests.cs` plus
+  `Theme/ServedThemeCascade.cs`. The test fetches the stylesheets the served page's own `<head>`
+  links, in that order, and resolves the cascade for a document with no `data-*` attributes: the
+  winning declaration per custom property (specificity, then document order — the browser's rule for
+  these selectors), one level of `var()` substitution, and an alpha check. It then asserts the three
+  things the Background measured, in both modes: every base token resolves to a real color,
+  `body`'s `background-color: var(--background)` is not transparent, and `.bb\:bg-primary`'s
+  `background-color: var(--primary)` is not transparent and differs between the passes.
+  - A real headless Chromium was the alternative and was rejected on cost, not on rigour: the gate is
+    `dotnet test` with no Node.js and no browser download (docs/development.md §1). The probe fails
+    closed — an unmodelled selector answers "no match", an unknown color syntax answers "not a
+    color" — so a stylesheet it cannot read cannot pass it.
+  - Two sibling facts use the same probe to pin this card's second criterion: the default state's
+    tokens equal the library's own `data-base-color="zinc"` run, token for token in both directions,
+    and `data-primary-color="violet"` still overrides `--primary` while leaving `--background` alone.
+    Together they are the "not a third theme" guarantee, and they fail if this file ever wins the
+    cascade over the palette sheet.
+- **Radius and dark mode are untouched.** `ThemeOptions` / `Program.cs` were not edited, so
+  `DefaultDarkMode` stays off and `detectSystemPreference` stays `false`; the new `:root` block keeps
+  the existing `--radius: 0.5rem` line untouched and the test asserts it.
+
+## Verification
+
+- `dotnet build Zenkins.slnx -c Release` — clean, 0 warnings / 0 errors.
+- `scripts/verify.sh`, all seven suites green on 2026-11-16: fast **1241**, Milestone 12, Recovery 4,
+  PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 3 (**3 skipped — no `ZENKINS_TEST_POSTGRES`**, by
+  design), **all seven 1267**. Logs: `artifacts/logs/b007-q013-fast.log`,
+  `artifacts/logs/b007-q013-<Suite>.log`, `artifacts/logs/b007-q013-verify.log`.
+- Mutation evidence that the new facts bite (both reverted immediately):
+  - `styles/theme.css` back to HEAD (no token block) — all three `BaseTokenPaletteTests` facts go red
+    with `light: --background is undefined with no data attributes`.
+  - `theme-init.js` moved out of `<head>` into `<body>` — the shell test's ordering fact goes red with
+    `'…/js/theme-init.js' is referenced after </head>`.
+- What it cannot see: a browser's actual paint (fonts, compositing, `color-mix` support), and
+  `@layer` precedence — the latter is argued in the probe's doc comment (every sheet declaring these
+  tokens is unlayered) rather than measured.
