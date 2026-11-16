@@ -11,9 +11,101 @@
  * the UI pops to rounded later. Keep the value equal to ThemeOptions.DefaultRadius (0.5); the
  * inline `--radius` ThemeService writes afterwards wins over this rule, which is what should
  * happen — it carries the user's chosen radius.
+ *
+ * The base token set below is the package's **zinc base with the default primary** — copied from
+ * `_content/BlazorBlueprint.Components/css/themes.css` (`[data-base-color="zinc"]` and its `.dark`
+ * twin), which is also what the package README's "Theming" section tells an app to put in
+ * `wwwroot/styles/theme.css`. It is here because `blazorblueprint.css` defines no `--background` /
+ * `--primary` / `--border` at all and `themes.css` defines them only *under* the
+ * `data-base-color` attribute the theme switcher writes: without this block every user who never
+ * opens the popover — i.e. most of them — resolves `--primary` to the empty string, so a
+ * `bb:bg-primary` button paints `rgba(0, 0, 0, 0)` and `class="dark"` only flips `color-scheme`
+ * instead of the colors.
+ *
+ * Do not turn this into a third, Zenkins-specific palette: keep the values byte-identical to the
+ * zinc/default pair above it, so a browser that picks nothing renders exactly like one that picks
+ * zinc, and the palette stylesheet (loaded later, and more specific: `.dark[data-base-color=…]`)
+ * still overrides every token as soon as the user chooses.
  */
 :root {
     --radius: 0.5rem;
     --sidebar-width: 15rem;
     --sidebar-width-mobile: 18rem;
+
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.1410 0.004 285.82);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.1410 0.004 285.82);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.1410 0.004 285.82);
+    --primary: oklch(0.2100 0.006 285.88);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.9670 0.001 286.38);
+    --secondary-foreground: oklch(0.2100 0.006 285.88);
+    --muted: oklch(0.9670 0.001 286.38);
+    --muted-foreground: oklch(0.5520 0.016 285.94);
+    --accent: oklch(0.9670 0.001 286.38);
+    --accent-foreground: oklch(0.2100 0.006 285.88);
+    --destructive: oklch(0.5770 0.245 27.33);
+    --destructive-foreground: oklch(1 0 0);
+    --border: oklch(0.9200 0.004 286.32);
+    --input: oklch(0.9200 0.004 286.32);
+    --ring: oklch(0.5520 0.016 285.94);
+    --chart-1: oklch(0.646 0.222 41.116);
+    --chart-2: oklch(0.6 0.118 184.714);
+    --chart-3: oklch(0.398 0.07 227.392);
+    --chart-4: oklch(0.828 0.189 84.429);
+    --chart-5: oklch(0.769 0.188 70.08);
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.1410 0.004 285.82);
+    --sidebar-primary: oklch(0.2100 0.006 285.88);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.9670 0.001 286.38);
+    --sidebar-accent-foreground: oklch(0.2100 0.006 285.88);
+    --sidebar-border: oklch(0.9200 0.004 286.32);
+    --sidebar-ring: oklch(0.5520 0.016 285.94);
+}
+
+/* The `.dark` half of the same zinc pair. `html.dark` is what App.razor renders from the cookie,
+   so it has to lose nothing at first paint — this block is the whole point of B-007 for a browser
+   that has a dark preference and never touches the switcher.
+
+   The selector is the bare `.dark` on purpose, not `html.dark`: it keeps this file's specificity
+   ranking identical to the palette sheet's (base rules are one class, the attribute-qualified dark
+   rules are two), so order stays the only tiebreaker and `[data-base-color=…]` /
+   `[data-primary-color=…]` keep winning the moment the user chooses. Nothing here should ever be
+   the most specific rule on the page. */
+.dark {
+    --background: oklch(0.1410 0.004 285.82);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.1410 0.004 285.82);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.1410 0.004 285.82);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.985 0 0);
+    --primary-foreground: oklch(0.2100 0.006 285.88);
+    --secondary: oklch(0.2740 0.006 286.03);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.2740 0.006 286.03);
+    --muted-foreground: oklch(0.7050 0.015 286.07);
+    --accent: oklch(0.2740 0.006 286.03);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.2740 0.006 286.03);
+    --input: oklch(0.2740 0.006 286.03);
+    --ring: oklch(0.5520 0.016 285.94);
+    --chart-1: oklch(0.488 0.243 264.376);
+    --chart-2: oklch(0.696 0.17 162.48);
+    --chart-3: oklch(0.769 0.188 70.08);
+    --chart-4: oklch(0.627 0.265 303.9);
+    --chart-5: oklch(0.645 0.246 16.439);
+    --sidebar: oklch(0.1410 0.004 285.82);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.2740 0.006 286.03);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(0.2740 0.006 286.03);
+    --sidebar-ring: oklch(0.5520 0.016 285.94);
 }

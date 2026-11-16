@@ -4,7 +4,7 @@ title: The theme shell tests do not pin the load order, the trigger wiring or th
 type: test
 priority: P2
 size: S
-status: review
+status: done
 created: 2026-11-16
 updated: 2026-11-16
 blocked: none
@@ -102,3 +102,22 @@ real host, still `Category=Theme`, but each one now fails on the regression it n
   or a trigger without the wiring fails by construction rather than by status code.
 - Not covered: nothing was asserted about the trigger's rendered geometry (the 4px mismatch above) or
   about `theme-persistence.js`'s own behaviour — both stay out of this card's scope.
+
+## Review
+
+2026-11-16 — independent review: **PASS**, five of five, every assertion verified by mutation rather
+than by reading.
+
+- Moving `theme-init.js` into `<body>` turns the ordering fact red — `is referenced after </head>
+  (offset 30771, head ends at 1752)` — which is the hole the old test had and the reason this card
+  exists.
+- Emptying `themes.css` (still serving 200) turns two facts red on body content, so a 200 alone no
+  longer passes.
+- Deleting `TriggerClass` turns the trigger fact red; the icon-only assertion is now the positive form
+  (the element's own text nodes must be whitespace), not "the old label is absent".
+- Flipping the cookie parse to `OrdinalIgnoreCase` turns the negatives red, so `Dark` and `light` are
+  genuinely pinned as "no preference" and "light".
+
+One accepted gap, recorded rather than hidden: `aria-haspopup` and `aria-label` are the package's own
+defaults, so deleting `AdditionalAttributes` still passes — the wiring this fact really pins is
+`TriggerClass`, and Q-021 carries the rest of that story.

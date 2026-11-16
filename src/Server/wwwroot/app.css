@@ -18,7 +18,8 @@ html.dark {
 }
 
 /* Server-side form validation messages (account pages are static SSR; there is no client-side
-   validation script). `--destructive` comes from the BlazorBlueprint token set. */
+   validation script). `--destructive` comes from styles/theme.css, which now carries the full base
+   token set (B-007); the package's blazorblueprint.css defines no color token at all. */
 .validation-message {
   color: var(--destructive);
   font-size: 0.875rem;

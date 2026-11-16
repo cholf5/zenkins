@@ -4,7 +4,7 @@ title: The app never defines the base token palette — dark/light changes nothi
 type: bug
 priority: P1
 size: M
-status: review
+status: done
 created: 2026-11-16
 updated: 2026-11-16
 blocked: none
@@ -131,3 +131,27 @@ Expected:
 - What it cannot see: a browser's actual paint (fonts, compositing, `color-mix` support), and
   `@layer` precedence — the latter is argued in the probe's doc comment (every sheet declaring these
   tokens is unlayered) rather than measured.
+
+## Review
+
+2026-11-16 — independent review: **PASS**, five of five, with the reviewer cross-checking the home-made
+cascade model against real Chromium rather than trusting it.
+
+The token set is the library's own: parsed directly from both files, `:root` and `.dark` each carry 32
+tokens and every one matches `themes.css`'s `[data-base-color="zinc"]` pair in both directions, so
+"picked nothing" and "picked zinc" are the same palette by construction, not a third one. In a real
+browser the rendered output of those two states is byte-identical in light and in dark — which is the
+claim that actually matters and the one the model alone could not have made.
+
+Default behaviour is untouched: `Program.cs`'s `DetectSystemPreference = false` is still there,
+`ThemeOptions` and `MainLayout` are not in the diff, `--radius` is still `0.5rem`, and reverting
+`theme.css` to HEAD turns all three palette facts red with `light: --background is undefined with no
+data attributes` — so the facts really are load-bearing.
+
+The reviewer's browser pass also settled the cascade question the card's reasoning rests on: with
+`data-base-color="slate"` (a palette whose values differ from zinc) the palette wins in every
+combination, including dark + base colour, and a lone `data-primary-color` overrides `--primary`
+without moving `--background`.
+
+One caveat carried to Q-021: the resolver models element selectors as zero specificity and ignores
+`@layer`, so it is trustworthy for these four values and not as a general oracle.
