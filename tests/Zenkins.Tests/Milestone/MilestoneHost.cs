@@ -25,7 +25,8 @@ internal sealed record MilestoneRun(
     string? FailureReason,
     string? GitCommit,
     string? PipelineSpecJson,
-    DateTimeOffset? EndedAt);
+    DateTimeOffset? EndedAt,
+    string? ParametersJson = null);
 
 /// <summary>
 /// One run's stored execution window: <c>StartedAt</c> is stamped at the accept edge, <c>EndedAt</c>
@@ -648,6 +649,66 @@ internal class MilestoneHost : IDisposable
     }
 
     /// <summary>
+    /// Creates a <b>Freestyle</b> project (card F-020) through the real project form - no repository
+    /// fields posted, the kind selector set - and returns its id.
+    /// </summary>
+    public async Task<Guid> CreateFreestyleProjectAsync(string name)
+    {
+        var response = await OrganizationTestHost.PostFormAsync(
+            Owner,
+            "/projects/new",
+            "/projects/create",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = name,
+                ["Kind"] = Zenkins.Shared.Projects.ProjectKinds.Freestyle,
+            });
+        var location = response.Headers.Location!.OriginalString;
+        Assert.True(
+            (int)response.StatusCode is 302 or 303 && location.StartsWith("/projects/", StringComparison.Ordinal)
+                && !location.Contains("error=", StringComparison.Ordinal),
+            $"Creating the Freestyle project failed with {(int)response.StatusCode} -> {location}: {await response.Content.ReadAsStringAsync()}");
+        return Guid.Parse(location["/projects/".Length..].Split('?')[0]);
+    }
+
+    /// <summary>
+    /// Saves a Freestyle project's steps through the editor's real endpoint; asserts the PRG success
+    /// redirect, so a refused payload fails the test here instead of confusing the run below.
+    /// </summary>
+    public async Task SaveFreestyleStepsAsync(Guid projectId, string stepsJson)
+    {
+        var response = await OrganizationTestHost.PostFormAsync(
+            Owner,
+            $"/projects/{projectId}",
+            $"/projects/{projectId}/freestyle/steps",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["StepsJson"] = stepsJson,
+            });
+        Assert.True(
+            (int)response.StatusCode is 302 or 303,
+            $"Saving the Freestyle steps failed with {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+        Assert.Contains("notice=steps-saved", response.Headers.Location!.OriginalString, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Saves a project's build parameters (card F-021) through the editor's real endpoint; asserts the
+    /// PRG success redirect, so a refused definition fails the test here.
+    /// </summary>
+    public async Task SaveParametersAsync(Guid projectId, string parametersJson)
+    {
+        var response = await OrganizationTestHost.PostFormAsync(
+            Owner,
+            $"/projects/{projectId}",
+            $"/projects/{projectId}/parameters",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ParametersJson"] = parametersJson,
+            });
+        Assert.Contains("notice=parameters-saved", response.Headers.Location!.OriginalString, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Points an existing project row at the fixture repository. The project form refuses a
     /// <c>file://</c> URL on purpose (it would make the server read its own disk), and a test needs a
     /// repository the worker can really clone, so the row is seeded - the same thing a deployment would
@@ -662,17 +723,27 @@ internal class MilestoneHost : IDisposable
     }
 
     /// <summary>Triggers a manual run through the real trigger form and returns the new run's id.</summary>
-    public async Task<Guid> TriggerRunAsync(Guid projectId, string branch = "")
+    public async Task<Guid> TriggerRunAsync(
+        Guid projectId,
+        string branch = "",
+        IReadOnlyDictionary<string, string>? parameters = null)
     {
+        var form = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Branch"] = branch,
+            ["RequiredTags"] = string.Empty,
+        };
+        foreach (var (name, value) in parameters ?? new Dictionary<string, string>())
+        {
+            // F-021: the same input names the project page renders for its definitions.
+            form[$"Parameters[{name}]"] = value;
+        }
+
         var response = await OrganizationTestHost.PostFormAsync(
             Owner,
             $"/projects/{projectId}",
             $"/projects/{projectId}/runs/start",
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["Branch"] = branch,
-                ["RequiredTags"] = string.Empty,
-            });
+            form);
         Assert.True(
             (int)response.StatusCode is 302 or 303,
             $"Triggering the run failed with {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
@@ -866,8 +937,8 @@ internal class MilestoneHost : IDisposable
     {
         var rows = await ReadAsync(
             "SELECT \"Id\", \"ProjectId\", \"Status\", \"TriggerType\", \"WorkerId\", \"ExitCode\", "
-            + "\"FailureReason\", \"GitCommit\", \"PipelineSpecJson\", \"EndedAt\" FROM \"BuildRuns\" "
-            + $"WHERE \"Id\" = '{runId.ToString("D").ToUpperInvariant()}'",
+            + "\"FailureReason\", \"GitCommit\", \"PipelineSpecJson\", \"EndedAt\", \"ParametersJson\" "
+            + $"FROM \"BuildRuns\" WHERE \"Id\" = '{runId.ToString("D").ToUpperInvariant()}'",
             MapRun);
         Assert.Single(rows);
         return rows[0];
@@ -877,8 +948,8 @@ internal class MilestoneHost : IDisposable
     public Task<IReadOnlyList<MilestoneRun>> ReadProjectRunsAsync(Guid projectId) =>
         ReadAsync(
             "SELECT \"Id\", \"ProjectId\", \"Status\", \"TriggerType\", \"WorkerId\", \"ExitCode\", "
-            + "\"FailureReason\", \"GitCommit\", \"PipelineSpecJson\", \"EndedAt\" FROM \"BuildRuns\" "
-            + $"WHERE \"ProjectId\" = '{projectId.ToString("D").ToUpperInvariant()}' ORDER BY \"CreatedAt\"",
+            + "\"FailureReason\", \"GitCommit\", \"PipelineSpecJson\", \"EndedAt\", \"ParametersJson\" "
+            + $"FROM \"BuildRuns\" WHERE \"ProjectId\" = '{projectId.ToString("D").ToUpperInvariant()}' ORDER BY \"CreatedAt\"",
             MapRun);
 
     /// <summary>Maps one <c>BuildRuns</c> row (the projection every run read shares).</summary>
@@ -892,7 +963,8 @@ internal class MilestoneHost : IDisposable
         reader.IsDBNull(6) ? null : reader.GetString(6),
         reader.IsDBNull(7) ? null : reader.GetString(7),
         reader.IsDBNull(8) ? null : reader.GetString(8),
-        reader.IsDBNull(9) ? null : reader.GetDateTimeOffset(9));
+        reader.IsDBNull(9) ? null : reader.GetDateTimeOffset(9),
+        reader.IsDBNull(10) ? null : reader.GetString(10));
 
     /// <summary>
     /// The stored execution windows of the given runs. Sampled counters can miss a

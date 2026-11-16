@@ -16,8 +16,20 @@ public sealed class PipelineRunOptions
     /// <summary>The run's directory trio: the checkout lives in <c>repository/</c>.</summary>
     public required RunWorkDirectory Work { get; init; }
 
-    /// <summary>The project's repository URL, from the claim payload.</summary>
-    public required string RepositoryUrl { get; init; }
+    /// <summary>
+    /// The project's repository URL, from the claim payload. <see langword="null"/> for a Freestyle run
+    /// (card F-020) - there is no repository, the clone is skipped and the frozen spec below is what
+    /// executes.
+    /// </summary>
+    public required string? RepositoryUrl { get; init; }
+
+    /// <summary>
+    /// The Freestyle run's frozen spec, handed over by the claim (card F-020): the server validated and
+    /// froze it at trigger time, and the Worker re-checks the envelope before executing it - the same
+    /// check its own definitions go through. <see langword="null"/> for a Pipeline run, whose spec
+    /// comes from the definition phase; a non-null value <b>is</b> what makes a run Freestyle.
+    /// </summary>
+    public string? PipelineSpecJson { get; init; }
 
     /// <summary>The branch this run clones: the trigger's branch, or the project's default.</summary>
     public required string Branch { get; init; }
@@ -135,8 +147,9 @@ public sealed record PipelineRunOutcome(
     bool Canceled = false,
     bool Abandoned = false)
 {
-    /// <summary>A successful run: every non-skipped step succeeded.</summary>
-    public static PipelineRunOutcome Succeeded(string commit) => new(0, null, commit);
+    /// <summary>A successful run: every non-skipped step succeeded. <paramref name="commit"/> is
+    /// <see langword="null"/> for a Freestyle run (no repository, card F-020).</summary>
+    public static PipelineRunOutcome Succeeded(string? commit) => new(0, null, commit);
 
     /// <summary>The run answered a cancellation; the caller reports it through F-009's endpoint.</summary>
     public static PipelineRunOutcome Cancellation(string? commit = null) =>
@@ -146,8 +159,9 @@ public sealed record PipelineRunOutcome(
     public static PipelineRunOutcome Failed(string reason, string? commit = null) =>
         new(null, reason, commit);
 
-    /// <summary>A failing step: its own exit code is recorded, never an invented one.</summary>
-    public static PipelineRunOutcome StepFailed(int exitCode, string commit) =>
+    /// <summary>A failing step: its own exit code is recorded, never an invented one. The commit is
+    /// <see langword="null"/> for a Freestyle run (no repository, card F-020).</summary>
+    public static PipelineRunOutcome StepFailed(int exitCode, string? commit) =>
         new(exitCode, PipelineFailureReasons.StepFailed, commit);
 
     /// <summary>
@@ -249,6 +263,15 @@ public sealed class PipelineRunner
     /// </summary>
     public async Task<PipelineRunOutcome> RunAsync(CancellationToken cancellationToken)
     {
+        // F-020: a Freestyle run has no repository and no definition phase - the claim carried the
+        // frozen spec, so this run executes it directly in the run's workspace. The step loop, the
+        // environment composition, the secrets, the artifacts, the cancellation and the deadline are
+        // exactly the Pipeline run's: only the clone and the definition phase are skipped.
+        if (_options.PipelineSpecJson is not null)
+        {
+            return await RunFreestyleAsync(_options.PipelineSpecJson, cancellationToken);
+        }
+
         // 1. Clone at the run's branch (F-013). The credential is fetched per run and never travels in
         //    the claim payload; the clone refuses a non-empty target, so a retried run cannot inherit
         //    a previous tree. The credential is registered with the run's redaction filter the instant it
@@ -389,13 +412,44 @@ public sealed class PipelineRunner
     }
 
     /// <summary>
-    /// The step loop (card F-015). One pass per declared step: evaluate its condition, compose its
-    /// environment, resolve the references in its argv and env, report <c>Running</c>, run the process,
-    /// report the terminal state - then decide whether the run continues.
+    /// A Freestyle run (card F-020): re-check the server-frozen spec with the same envelope the Worker's
+    /// own definitions go through, prepare the run's workspace, and execute the steps in it. The commit
+    /// is <see langword="null"/> - there is no repository, so there is nothing to report and nothing to
+    /// pin; the run's log still says what it is executing and where.
+    /// <para>
+    /// A refused spec is <see cref="PipelineFailureReasons.PipelineInvalid"/>, not a crash: the server
+    /// and the Worker could only disagree here through a version skew or a bug, and the honest terminal
+    /// state (with the envelope's reason in the log) beats a run left <c>Running</c> forever.
+    /// </para>
     /// </summary>
+    private async Task<PipelineRunOutcome> RunFreestyleAsync(string specJson, CancellationToken cancellationToken)
+    {
+        if (!PipelineSpecJson.TryRead(specJson, out var spec, out var error) || spec is null)
+        {
+            Log($"zenkins: the claim's frozen step list was refused: {error}");
+            return PipelineRunOutcome.Failed(PipelineFailureReasons.PipelineInvalid);
+        }
+
+        Log($"zenkins: freestyle run - the steps were configured on the server and travel with this "
+            + $"run; no repository is cloned.");
+
+        // The workspace is a Freestyle-only directory (the prepared trio stays PRD §3.4.6's), created
+        // here because preparation is idempotent and only a Freestyle run ever needs it.
+        Directory.CreateDirectory(_options.Work.WorkspacePath);
+
+        return await ExecuteStepsAsync(spec, commit: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// The step loop (card F-015). One pass per declared step: evaluate its condition, compose its
+    /// environment, resolve the references in its argv/script text and env, report <c>Running</c>, run
+    /// the process, report the terminal state - then decide whether the run continues.
+    /// </summary>
+    /// <param name="commit">The commit a Pipeline run cloned; <see langword="null"/> for a Freestyle
+    /// run, which has no repository (card F-020). It is the record, never invented.</param>
     private async Task<PipelineRunOutcome> ExecuteStepsAsync(
         PipelineSpec spec,
-        string commit,
+        string? commit,
         CancellationToken cancellationToken)
     {
         var steps = spec.Steps;
@@ -447,14 +501,18 @@ public sealed class PipelineRunner
 
             // 5c. Resolve the deferred references: env references against the composed environment, secret
             //     references through the run's per-run cache (each decrypted value is registered with the
-            //     redaction filter at this instant, before the step exists to log it).
+            //     redaction filter at this instant, before the step exists to log it). A script step
+            //     (F-020) resolves its text the same way, then lands in a per-step file the platform
+            //     shell executes; an argv step resolves its argv entries as F-015 always did.
             string[] argv;
             Dictionary<string, string?> childEnvironment;
             try
             {
                 var resolver = new StepValueResolver(_options.Redactor, _options.Secrets);
-                argv = await ResolveArgvAsync(resolver, step.Argv, environment, cancellationToken);
                 childEnvironment = await ResolveEnvironmentAsync(resolver, environment, cancellationToken);
+                argv = step.IsScript
+                    ? ScriptCommand(WriteScriptFile(i, await resolver.ResolveAsync(step.Script!, environment, cancellationToken)))
+                    : await ResolveArgvAsync(resolver, step.Argv, environment, cancellationToken);
             }
             catch (StepPreparationException failure)
             {
@@ -491,7 +549,21 @@ public sealed class PipelineRunner
             }
 
             SetCurrentStep(running);
-            Log($"zenkins: step {position} \"{step.Name}\" started: {Render(argv)}");
+
+            // F-020: a script step's header echoes the script verbatim (references stay references -
+            // names are not values) instead of the useless "shell + temp file" command line. The file
+            // that actually runs holds the resolved text; the redactor covers the resolved lines here
+            // as it covers everything else.
+            if (step.IsScript)
+            {
+                Log($"zenkins: step {position} \"{step.Name}\" started: script ({step.Script!.Length} "
+                    + $"characters, {(OperatingSystem.IsWindows() ? "cmd" : "sh")}).");
+                LogScript(step.Script);
+            }
+            else
+            {
+                Log($"zenkins: step {position} \"{step.Name}\" started: {Render(argv)}");
+            }
 
             var stopwatch = Stopwatch.StartNew();
             int exitCode;
@@ -502,7 +574,12 @@ public sealed class PipelineRunner
                     {
                         FileName = argv[0],
                         Arguments = [.. argv.Skip(1)],
-                        WorkingDirectory = _options.Work.RepositoryPath,
+
+                        // F-020: a Freestyle run's steps execute in the run's workspace - there is no
+                        // checkout, so the repository directory stays empty and unused.
+                        WorkingDirectory = _options.PipelineSpecJson is not null
+                            ? _options.Work.WorkspacePath
+                            : _options.Work.RepositoryPath,
 
                         // The composed environment, in full: the child sees exactly the map env() reports, so
                         // the two can never disagree about a value or its precedence.
@@ -847,6 +924,59 @@ public sealed class PipelineRunner
         }
 
         return string.Join(' ', parts);
+    }
+
+    /// <summary>
+    /// The cap on a script's echoed lines (card F-020). The echo is debugging aid, not a copy: a
+    /// pathological script still logs what it starts with and says how much was skipped.
+    /// </summary>
+    private const int MaxEchoedScriptLines = 100;
+
+    /// <summary>
+    /// Writes the resolved script text to a per-step file in the run's <c>temp/</c> (card F-020) and
+    /// returns its path. The file - not a command line - is the step's payload: it sidesteps every
+    /// command-line length limit and every quoting question, the way Jenkins's own batch/shell steps
+    /// do. UTF-8 without a BOM, because a BOM's characters become the first command on Windows and a
+    /// stray token on Unix.
+    /// </summary>
+    private string WriteScriptFile(int stepIndex, string script)
+    {
+        var extension = OperatingSystem.IsWindows() ? "cmd" : "sh";
+        var path = Path.Combine(_options.Work.TempPath, $"step-{stepIndex + 1}.{extension}");
+        File.WriteAllText(path, script, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        return path;
+    }
+
+    /// <summary>
+    /// The command line that executes a written script file (card F-020): <c>cmd /d /s /c</c> on
+    /// Windows (the <c>/s</c> quote handling makes a path with spaces safe), <c>sh -e</c> on Unix so a
+    /// failing command fails the step the way a pipeline author expects. Still pure argv, handed to
+    /// <see cref="ProcessRunner"/> verbatim - the script text itself is the only thing the shell ever
+    /// interprets, and it is exactly what the project's Member configured.
+    /// </summary>
+    private static string[] ScriptCommand(string scriptFile) =>
+        OperatingSystem.IsWindows()
+            ? ["cmd.exe", "/d", "/s", "/c", scriptFile]
+            : ["/bin/sh", "-e", scriptFile];
+
+    /// <summary>
+    /// Echoes a script step's declared text into the run log, one line at a time (the log is line-
+    /// addressed, so a multi-line blob would break per-step grouping and the resume cursor). Bounded:
+    /// past <see cref="MaxEchoedScriptLines"/> the echo summarizes rather than continues.
+    /// </summary>
+    private void LogScript(string script)
+    {
+        var lines = script.Replace("\r\n", "\n").Split('\n');
+        var echoed = Math.Min(lines.Length, MaxEchoedScriptLines);
+        for (var i = 0; i < echoed; i++)
+        {
+            Log($"zenkins: | {lines[i]}");
+        }
+
+        if (lines.Length > echoed)
+        {
+            Log($"zenkins: | … the script continues for {lines.Length - echoed} more line(s).");
+        }
     }
 
     /// <summary>One captured output line, redacted before it leaves this layer.</summary>

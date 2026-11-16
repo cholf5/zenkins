@@ -30,8 +30,9 @@
             <BbCardHeader>
                 <BbCardTitle As="h2">Project details</BbCardTitle>
                 <BbCardDescription>
-                    A project is the Git repository, the default branch to build and the pipeline file
-                    inside it. Cloning and builds are not part of v0.1.
+                    A Pipeline project is the Git repository, the default branch to build and the
+                    pipeline file inside it. A Freestyle project (F-020) needs no repository: its
+                    steps are configured on the server after it is created.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -39,6 +40,7 @@
                                  SubmitLabel="Create project"
                                  CancelHref="/projects"
                                  Name="@Name"
+                                 Kind="@Kind"
                                  RepositoryUrl="@RepositoryUrl"
                                  DefaultBranch="@(DefaultBranch ?? "main")"
                                  PipelinePath="@(PipelinePath ?? ProjectValidation.DefaultPipelinePath)"
@@ -56,6 +58,9 @@
 
     [SupplyParameterFromQuery(Name = "name")]
     private string? Name { get; set; }
+
+    [SupplyParameterFromQuery(Name = "kind")]
+    private string? Kind { get; set; }
 
     [SupplyParameterFromQuery(Name = "repositoryUrl")]
     private string? RepositoryUrl { get; set; }

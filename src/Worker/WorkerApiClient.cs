@@ -41,9 +41,10 @@ public sealed record WorkerHeartbeatResponse(
     WorkerCancelRequest[]? CancelRequestedRuns = null);
 
 /// <summary>
-/// A queued run handed over by the claim endpoint (F-006 contract, extended by F-014 and F-017; camelCase
-/// on the wire). Everything the worker needs to execute a pipeline: where the repository is, which branch
-/// this run builds, and which pipeline file inside it declares the steps.
+/// A queued run handed over by the claim endpoint (F-006 contract, extended by F-014, F-017 and F-020;
+/// camelCase on the wire). Everything the worker needs to execute a run: for a Pipeline run, where the
+/// repository is, which branch it builds and which pipeline file inside it declares the steps; for a
+/// Freestyle run, the frozen spec the server snapshotted at trigger time.
 /// </summary>
 /// <param name="Commit">
 /// F-017 (review M1): the exact commit this run must build, when the trigger already named one (a webhook
@@ -51,14 +52,31 @@ public sealed record WorkerHeartbeatResponse(
 /// tip and report what you checked out", the manual behaviour. A non-null value is pinned with
 /// <c>checkout()</c> after the clone, because the branch may have moved between the push and now.
 /// </param>
+/// <param name="RepositoryUrl">
+/// F-020: the repository Pipeline runs clone. <see langword="null"/> for a Freestyle run - there is no
+/// repository, and the Worker skips the clone entirely.
+/// </param>
+/// <param name="PipelineSpecJson">
+/// F-020: the Freestyle run's frozen spec, snapshotted on the server at trigger time. <see langword="null"/>
+/// (and absent from the JSON of an older server) for a Pipeline run, whose spec comes from the Worker's
+/// own definition phase - the claim's presence is what makes a run Freestyle.
+/// </param>
+/// <param name="Parameters">
+/// F-021: the run's resolved build-parameter values (name → value). <see langword="null"/> (and absent
+/// from the JSON of an older server) when the project declares no parameters. They join the
+/// server-provided environment layer - the same precedence the <c>ZENKINS_*</c> variables occupy -
+/// so every step of both kinds reads them by name.
+/// </param>
 public sealed record WorkerClaimResponse(
     Guid RunId,
     Guid ProjectId,
-    string RepositoryUrl,
+    string? RepositoryUrl,
     string Branch,
     string PipelinePath,
     DateTimeOffset LeaseExpiresAt,
-    string? Commit = null);
+    string? Commit = null,
+    string? PipelineSpecJson = null,
+    IReadOnlyDictionary<string, string>? Parameters = null);
 
 /// <summary>
 /// The accepted report's answer (card F-014 extends the bodyless answer): the run's execution deadline,

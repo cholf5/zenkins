@@ -1,0 +1,127 @@
+@page "/projects/{ProjectId:guid}/parameters"
+@attribute [Authorize]
+@using System.Text.Json
+@using Zenkins.Shared.Projects
+@inject UserSession UserSession
+@inject ProjectService ProjectsService
+
+@* Card F-021: the Parameters tab, both kinds. The definitions are project data; a run carries the
+   values it was triggered with, so editing here never moves a queued or running run. *@
+<PageTitle>Parameters · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
+    @if (_project is null)
+    {
+        @* Foreign tenant id == missing id: the service reads through the tenant filter and the
+           response is a real 404 (same pattern as the other project tabs). *@
+        <NotFoundPage />
+    }
+    else
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">Parameters · @_project.Name</BbCardTitle>
+            </div>
+        </div>
+
+        <ProjectTabs ProjectId="@_project.Id" Active="parameters" Kind="@_project.Kind" />
+
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Build parameters</BbCardTitle>
+                <BbCardDescription>
+                    The inputs a trigger fills in. Every step of a run - Pipeline or Freestyle - reads
+                    a parameter's value as an environment variable under its own name; a trigger
+                    without user input (a webhook) resolves the defaults. Values are visible on the
+                    run page: a sensitive value belongs in the organization's Secrets, not here.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <ProjectParametersEditor Action="@($"/projects/{_project.Id}/parameters")"
+                                         Parameters="@_parameters"
+                                         ErrorCode="@ErrorCode" />
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid ProjectId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    /// <summary>The parameters save's PRG outcome (F-021), on the route that owns the editor.</summary>
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        "parameters-saved" => "The parameters were saved; the trigger form now shows them.",
+        _ => null,
+    };
+
+    private ProjectView? _project;
+    private IReadOnlyList<ProjectParameter> _parameters = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read. Never rely on the layout having done it first.
+        var session = await UserSession.GetAsync();
+        if (session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is null)
+        {
+            SetNotFound();
+            return;
+        }
+
+        // The saved definitions render as the editor's rows; the stored JSON was validated at save,
+        // so a parse here only fails on a corrupted row - the editor renders empty rather than guessing.
+        if (_project.ParametersJson is { } saved)
+        {
+            try
+            {
+                _parameters = JsonSerializer.Deserialize(saved, ProjectParameterJsonContext.Default.ProjectParameterArray)
+                    ?? [];
+            }
+            catch (JsonException)
+            {
+                _parameters = [];
+            }
+        }
+    }
+
+    private void SetNotFound()
+    {
+        if (HttpContext is null)
+        {
+            return;
+        }
+
+        // A real 404 for a foreign or missing id. The status-code-pages middleware must not
+        // re-execute /not-found in this same request: the component renderer already owns the
+        // NavigationManager, and re-execution fails with "already initialized" (F-003 bug B1).
+        HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+        if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+        {
+            statusCodePages.Enabled = false;
+        }
+    }
+}

@@ -16,6 +16,19 @@ public static class RunErrorCodes
     public const string TagInvalid = "tag-invalid";
     public const string TimeoutInvalid = "timeout-invalid";
 
+    /// <summary>F-020: a Freestyle project's steps were never saved, so the trigger has nothing to run.</summary>
+    public const string StepsMissing = "steps-missing";
+
+    /// <summary>F-020: the target project is not a Pipeline project, and this operation needs a
+    /// repository (defence in depth - the webhook create path already refuses Freestyle projects).</summary>
+    public const string NotPipeline = "not-pipeline";
+
+    /// <summary>F-021: the trigger supplied a parameter name the project does not define.</summary>
+    public const string ParameterUnknown = "parameter-unknown";
+
+    /// <summary>F-021: a supplied parameter value does not fit its type (boolean, choice, length).</summary>
+    public const string ParameterInvalid = "parameter-invalid";
+
     // Worker run-API conflicts (409).
     public const string RunNotAssignedToWorker = "run-not-assigned-to-worker";
     public const string LeaseExpired = "lease-expired";

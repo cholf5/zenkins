@@ -55,7 +55,7 @@ public sealed class ProjectUiPipelinesTests
         Assert.Contains("pipeline.lua", page, StringComparison.Ordinal);
         Assert.Contains(Commit, page, StringComparison.Ordinal);
         Assert.Contains("build-pipeline", page, StringComparison.Ordinal);
-        Assert.Contains("schema v1", page, StringComparison.Ordinal);
+        Assert.Contains($"schema v{PipelineSpecSchema.Version}", page, StringComparison.Ordinal);
         Assert.Contains("3 step(s)", page, StringComparison.Ordinal);
         Assert.DoesNotContain("No pipeline definition was reported", page, StringComparison.Ordinal);
 
@@ -117,7 +117,7 @@ public sealed class ProjectUiPipelinesTests
 
         // The page renders nothing that looks like a parsed spec.
         Assert.DoesNotContain("pipelines-steps", page, StringComparison.Ordinal);
-        Assert.DoesNotContain("schema v1", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("schema v", page, StringComparison.Ordinal);
     }
 
     [Fact]

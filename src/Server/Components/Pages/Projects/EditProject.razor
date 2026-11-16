@@ -38,10 +38,15 @@
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
+                @* F-020: the kind is immutable after create, so the edit form locks it (badge, no
+                   radio) and a Freestyle project renders no repository fields at all - the service
+                   keeps them untouched for that kind. *@
                 <ProjectFormCard Action="@($"/projects/{_project.Id}/edit")"
                                  SubmitLabel="Save changes"
                                  CancelHref="@($"/projects/{_project.Id}")"
                                  Name="@EffectiveName"
+                                 Kind="@_project.Kind"
+                                 KindLocked="true"
                                  RepositoryUrl="@EffectiveRepositoryUrl"
                                  DefaultBranch="@EffectiveDefaultBranch"
                                  PipelinePath="@EffectivePipelinePath"

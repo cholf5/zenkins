@@ -218,6 +218,22 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
             new Dictionary<string, string>());
         Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
 
+        // F-020/F-021: the two definition editors resolve the project through the tenant filter,
+        // so a foreign id is the same 404 the read paths answer - never a write to B's row.
+        var steps = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/freestyle/steps",
+            new Dictionary<string, string> { ["StepsJson"] = "[]" });
+        Assert.Equal(HttpStatusCode.NotFound, steps.StatusCode);
+
+        var parameters = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/parameters",
+            new Dictionary<string, string> { ["ParametersJson"] = "[]" });
+        Assert.Equal(HttpStatusCode.NotFound, parameters.StatusCode);
+
         var beta = (await _host.Data.ReadAcrossTenantsAsync<Project>(
             project => project.Id == TwoOrgsFixture.ProjectBId,
             CancellationToken)).Single();
@@ -279,6 +295,7 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
         yield return $"/projects/{projectId}";
         yield return $"/projects/{projectId}/edit";
         yield return $"/projects/{projectId}/delete/confirm";
+        yield return $"/projects/{projectId}/parameters";
     }
 
     private async Task<HttpClient> SignInAsync(string email)

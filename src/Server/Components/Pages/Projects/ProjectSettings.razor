@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @using Zenkins.Server.Git
 @using Zenkins.Server.Secrets
+@using Zenkins.Shared.Projects
 @using Zenkins.Server.Webhooks
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
@@ -35,7 +36,7 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="settings" />
+        <ProjectTabs ProjectId="@_project.Id" Active="settings" Kind="@_project.Kind" />
 
         @if (Notice is { } notice)
         {
@@ -62,28 +63,49 @@
             <BbCardHeader>
                 <BbCardTitle As="h2">Project basics</BbCardTitle>
                 <BbCardDescription>
-                    The repository, its default branch and the pipeline file. Members and Owners may
-                    edit a project.
+                    @if (_project.Kind == ProjectKinds.Freestyle)
+                    {
+                        @:A Freestyle project: no repository, no branch and no pipeline file - its steps live on the server (the Steps tab). Members and Owners may edit a project.
+                    }
+                    else
+                    {
+                        @:The repository, its default branch and the pipeline file. Members and Owners may edit a project.
+                    }
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
-                    <div class="bb:sm:col-span-3">
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository URL</dt>
-                        <dd class="bb:break-all">@_project.RepositoryUrl</dd>
-                    </div>
+                    @if (_project.Kind != ProjectKinds.Freestyle)
+                    {
+                        <div class="bb:sm:col-span-3">
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository URL</dt>
+                            <dd class="bb:break-all">@_project.RepositoryUrl</dd>
+                        </div>
+                    }
                     <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Name</dt>
                         <dd>@_project.Name</dd>
                     </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
-                        <dd>@_project.DefaultBranch</dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
-                        <dd class="bb:break-all">@_project.PipelinePath</dd>
-                    </div>
+                    @if (_project.Kind == ProjectKinds.Freestyle)
+                    {
+                        @* F-020: the three repository fields do not exist for this kind, so the card
+                           states the kind instead of rendering empty rows. *@
+                        <div class="bb:sm:col-span-2">
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Kind</dt>
+                            <dd>Freestyle (steps configured on the server)</dd>
+                        </div>
+                    }
+                    else
+                    {
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
+                            <dd>@_project.DefaultBranch</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                            <dd class="bb:break-all">@_project.PipelinePath</dd>
+                        </div>
+                    }
                 </dl>
                 <div class="bb:mt-4">
                     @* The edit form keeps its own route, so basics editing works exactly as before. *@
@@ -92,6 +114,11 @@
             </BbCardContent>
         </BbCard>
 
+        @* F-020: webhooks and git credentials both exist only for a Pipeline project - a webhook
+           triggers on git pushes and a credential materializes a clone, and a Freestyle project has
+           neither. The whole section is hidden (and the endpoints refuse) for that kind. *@
+        @if (_project.Kind != ProjectKinds.Freestyle)
+        {
         @* F-017: the webhook configuration, moved verbatim from the overview. Create and rotate
            answer with a standalone show-once document (the plaintext has to be copied into the git
            host), so no plaintext is ever rendered here. *@
@@ -511,6 +538,7 @@
                     }
                 </BbCardContent>
             </BbCard>
+        }
         }
 
         @if (_canDelete)

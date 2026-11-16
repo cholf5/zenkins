@@ -145,6 +145,14 @@ public sealed class BuildRun : ITenantOwned
     /// </summary>
     public string? PipelineSpecJson { get; set; }
 
+    /// <summary>
+    /// The resolved build-parameter values of this run (card F-021): a JSON object of parameter name
+    /// → value, snapshotted at trigger time (a later definition edit never moves a queued run) and
+    /// handed to the worker in the claim payload, where it joins the server-provided environment
+    /// layer. Null when the project declares no parameters.
+    /// </summary>
+    public string? ParametersJson { get; set; }
+
     /// <summary>Set when the run reaches a terminal state. Duration is derived on display.</summary>
     public DateTimeOffset? EndedAt { get; set; }
 

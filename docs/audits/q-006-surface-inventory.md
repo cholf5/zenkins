@@ -33,6 +33,7 @@ side value (cookie session, token row, ticket or webhook row), never a client-co
 | GET/POST | /projects/{ProjectId:guid} | cookie session → active organization | foreign/unknown id = 404, no existence leak | Foreign_tenant_pages_answer_404_without_existence_leaks |
 | GET/POST | /projects/{ProjectId:guid}/runs | cookie session → active organization | foreign/unknown id = 404 | Foreign_tenant_pages_answer_404_without_existence_leaks |
 | GET/POST | /projects/{ProjectId:guid}/pipelines | cookie session → active organization | foreign/unknown id = 404 | Foreign_tenant_pages_answer_404_without_existence_leaks |
+| GET/POST | /projects/{ProjectId:guid}/parameters | cookie session → active organization | foreign/unknown id = 404; renders this project's parameter definitions only | Foreign_tenant_pages_answer_404_without_existence_leaks |
 | GET/POST | /projects/{ProjectId:guid}/settings | cookie session → active organization | foreign/unknown id = 404; renders this project's webhook/credential forms only | Foreign_tenant_pages_answer_404_without_existence_leaks |
 | GET/POST | /projects/{ProjectId:guid}/edit | cookie session → active organization | foreign/unknown id = 404 | Foreign_tenant_pages_answer_404_without_existence_leaks |
 | GET/POST | /projects/{ProjectId:guid}/delete/confirm | cookie session → active organization | foreign/unknown id = 404 | Foreign_tenant_pages_answer_404_without_existence_leaks |
@@ -52,6 +53,8 @@ side value (cookie session, token row, ticket or webhook row), never a client-co
 | POST | /projects/create | cookie session → active organization | creates inside the active org only | — |
 | POST | /projects/{projectId:guid}/edit | cookie session → active organization; route id is authoritative | foreign/unknown id = 404, no existence leak | Foreign_tenant_pages_answer_404_without_existence_leaks |
 | POST | /projects/{projectId:guid}/delete | cookie session → active organization; route id is authoritative | foreign/unknown id = 404 | Foreign_tenant_pages_answer_404_without_existence_leaks |
+| POST | /projects/{projectId:guid}/freestyle/steps | cookie session → active organization; route id is authoritative | foreign/unknown id = 404, row untouched | Member_of_a_cannot_read_or_mutate_bs_project |
+| POST | /projects/{projectId:guid}/parameters | cookie session → active organization; route id is authoritative | foreign/unknown id = 404, row untouched | Member_of_a_cannot_read_or_mutate_bs_project |
 | POST | /secrets/create | cookie session → active organization (Owner-only) | stores ciphertext in the active org only | Secret_mutations_cannot_reach_another_tenants_secret |
 | POST | /secrets/{secretId:guid}/rotate | cookie session → active organization (Owner-only); id resolved through the tenant filter | foreign/unknown id = bodyless 404, row untouched | Secret_mutations_cannot_reach_another_tenants_secret |
 | POST | /secrets/{secretId:guid}/delete | cookie session → active organization (Owner-only); id resolved through the tenant filter | foreign/unknown id = bodyless 404, row untouched | Secret_mutations_cannot_reach_another_tenants_secret |

@@ -11,6 +11,7 @@ using Zenkins.Server.Artifacts;
 using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
+using Zenkins.Shared.Projects;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Data;
@@ -613,11 +614,31 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // pass a "does it exist" check; ProjectService translates the violation into a
             // field-level error.
             entity.HasIndex(project => new { project.OrganizationId, project.Name }).IsUnique();
-            entity.Property(project => project.RepositoryUrl).IsRequired().HasMaxLength(2048);
-            entity.Property(project => project.DefaultBranch).IsRequired().HasMaxLength(200);
-            entity.Property(project => project.PipelinePath).IsRequired().HasMaxLength(512);
+
+            // F-020: the project's kind. The repository fields were required since F-003; a Freestyle
+            // project has none of them, so they became nullable - the validation layer (not the data
+            // layer) enforces them for Pipeline projects, and a null repository URL never reaches a
+            // clone because the Freestyle path skips it.
+            entity.Property(project => project.Kind).IsRequired().HasMaxLength(16);
+            entity.Property(project => project.RepositoryUrl).HasMaxLength(2048);
+            entity.Property(project => project.DefaultBranch).HasMaxLength(200);
+            entity.Property(project => project.PipelinePath).HasMaxLength(512);
+
+            // F-020: the Freestyle project's frozen steps. No max length on purpose (the column is
+            // text): the size cap is enforced when the spec is saved (PipelineSpecSchema.MaxJsonBytes),
+            // the same rule the run's frozen spec follows.
+            entity.Property(project => project.FreestyleSpecJson);
+
+            // F-021: the project's parameter definitions, bounded by ProjectParameterLimits when the
+            // definitions are saved (the same discipline the caps elsewhere follow).
+            entity.Property(project => project.ParametersJson);
             entity.HasOne<Organization>().WithMany().HasForeignKey(project => project.OrganizationId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Belt and braces for the string kind, same shape as the run status check below.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_Projects_Kind",
+                $"\"Kind\" IN ('{ProjectKinds.Pipeline}', '{ProjectKinds.Freestyle}')"));
 
             entity.HasQueryFilter(project => project.OrganizationId == CurrentOrganizationId);
         });
@@ -705,6 +726,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // enforced when the definition is accepted (PipelineSpecSchema.MaxJsonBytes), where an
             // over-long spec is a clear 400 rather than a storage error.
             entity.Property(run => run.PipelineSpecJson);
+
+            // F-021: the run's resolved parameter values (a name → value object), bounded by
+            // ProjectParameterLimits when both the definitions and the supplied values are validated.
+            entity.Property(run => run.ParametersJson);
             entity.Property(run => run.FailureReason).HasMaxLength(200);
 
             // F-009: the reason a cancellation was requested (canceled-by-user <user>, timeout),

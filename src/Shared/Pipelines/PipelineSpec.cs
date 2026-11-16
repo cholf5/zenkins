@@ -4,8 +4,8 @@ using System.Text.Json.Serialization;
 namespace Zenkins.Shared.Pipelines;
 
 /// <summary>
-/// The frozen shape of a validated <c>pipeline.lua</c> definition (card F-014, spec schema v1 of
-/// <c>docs/lua-runtime.md</c> §6.1).
+/// The frozen shape of a validated pipeline definition (card F-014, spec schema of
+/// <c>docs/lua-runtime.md</c> §6.1; v2 adds the Freestyle <c>script</c> step, card F-020).
 /// <para>
 /// <b>Two phases, one record.</b> The Worker runs the script once (the definition phase), validates
 /// the table it built and serialises it into this record; the Server stores that JSON verbatim as
@@ -43,9 +43,13 @@ public sealed record PipelineSpec(
     string[]? SecretReferences = null);
 
 /// <summary>
-/// One step of a frozen spec. Exactly one of <see cref="Run"/> / <see cref="Shell"/> is set, and its
-/// first element is the program (pure argv, <b>never</b> a shell command line: PRD §8 constraint 6 -
-/// no quoting interpretation exists anywhere in the pipeline).
+/// One step of a frozen spec. Exactly one of <see cref="Run"/> / <see cref="Shell"/> / <see cref="Script"/>
+/// is set. <see cref="Run"/> and <see cref="Shell"/> are pure argv whose first element is the program
+/// (<b>never</b> a shell command line: PRD §8 constraint 6 - no quoting interpretation exists anywhere in
+/// the pipeline). <see cref="Script"/> is a multi-line shell text (card F-020): the Worker resolves its
+/// references, writes it to a per-step file in the run's <c>temp/</c> and executes that file with the
+/// platform shell. A <c>pipeline.lua</c> never produces <see cref="Script"/> - it is the frozen spelling
+/// of a Freestyle job's step, configured in the Server UI and frozen into the spec there.
 /// <para>
 /// <see cref="Env"/>, <see cref="ContinueOnError"/> and <see cref="When"/> are frozen by the definition
 /// phase and honoured by the C# executor (F-015): the step list is data, so a script cannot skip the
@@ -56,6 +60,7 @@ public sealed record PipelineStep(
     string Name,
     string[]? Run = null,
     string[]? Shell = null,
+    string? Script = null,
     SortedDictionary<string, string>? Env = null,
     bool ContinueOnError = false,
     PipelineCondition? When = null,
@@ -69,7 +74,14 @@ public sealed record PipelineStep(
     [JsonIgnore]
     public bool IsShell => Shell is not null;
 
-    /// <summary>The argv actually executed: <c>run</c>, or <c>shell</c>'s program + argv.</summary>
+    /// <summary>Whether the step was declared with a multi-line <c>script</c> (card F-020, Freestyle only).</summary>
+    [JsonIgnore]
+    public bool IsScript => Script is not null;
+
+    /// <summary>
+    /// The argv actually executed: <c>run</c>, or <c>shell</c>'s program + argv. Empty for a
+    /// <see cref="Script"/> step - its command line is built at execution time (shell + step file).
+    /// </summary>
     [JsonIgnore]
     public string[] Argv => Run ?? Shell ?? [];
 
@@ -134,8 +146,21 @@ public sealed record PipelineCondition(
 /// </summary>
 public static class PipelineSpecSchema
 {
-    /// <summary>The only schema version v1 knows: an unknown version is refused, never guessed.</summary>
-    public const int Version = 1;
+    /// <summary>
+    /// The schema version newly frozen specs carry (v2, card F-020: the <c>script</c> step). An unknown
+    /// version is refused, never guessed; v1 documents - everything frozen before F-020 - stay readable.
+    /// </summary>
+    public const int Version = 2;
+
+    /// <summary>The schema versions <see cref="PipelineSpecJson.TryRead"/> accepts. Only v2 is produced today.</summary>
+    public static readonly int[] AcceptedVersions = [1, 2];
+
+    /// <summary>
+    /// An upper bound on one <c>script</c> step's text (card F-020). A Freestyle step is a hand-written
+    /// command sequence, not a data channel; the bound keeps the frozen JSON bounded and the temp file
+    /// reasonable.
+    /// </summary>
+    public const int MaxScriptChars = 32_768;
 
     /// <summary>
     /// An upper bound on the entries of one <c>when.env</c> map (card F-015). A condition is a hand-written
@@ -262,9 +287,10 @@ public static class PipelineSpecJson
     }
 
     /// <summary>
-    /// Reads and defensively validates a frozen spec: parseable JSON, schema version 1, a bounded
-    /// size, 1..200 steps with non-empty unique names, and exactly one of <c>run</c>/<c>shell</c> per
-    /// step. Returns <see langword="false"/> with a one-line reason when a rule fails.
+    /// Reads and defensively validates a frozen spec: parseable JSON, a schema version in
+    /// <see cref="PipelineSpecSchema.AcceptedVersions"/>, a bounded size, 1..200 steps with non-empty
+    /// unique names, and exactly one of <c>run</c>/<c>shell</c>/<c>script</c> per step. Returns
+    /// <see langword="false"/> with a one-line reason when a rule fails.
     /// </summary>
     public static bool TryRead(string? json, out PipelineSpec? spec, out string? error)
     {
@@ -290,7 +316,7 @@ public static class PipelineSpecJson
         }
         catch (JsonException)
         {
-            error = "the pipeline spec is not valid JSON for schema version 1.";
+            error = "the pipeline spec is not valid JSON for the frozen schema.";
             return false;
         }
 
@@ -300,9 +326,9 @@ public static class PipelineSpecJson
             return false;
         }
 
-        if (parsed.Version != PipelineSpecSchema.Version)
+        if (Array.IndexOf(PipelineSpecSchema.AcceptedVersions, parsed.Version) < 0)
         {
-            error = $"pipeline.version must be {PipelineSpecSchema.Version}.";
+            error = $"pipeline.version must be one of {string.Join(" or ", PipelineSpecSchema.AcceptedVersions)}.";
             return false;
         }
 
@@ -341,13 +367,32 @@ public static class PipelineSpecJson
                 return false;
             }
 
-            if ((step.Run is null) == (step.Shell is null))
+            var declared = (step.Run is null ? 0 : 1)
+                + (step.Shell is null ? 0 : 1)
+                + (step.Script is null ? 0 : 1);
+            if (declared != 1)
             {
-                error = $"{path} must declare exactly one of run or shell.";
+                error = $"{path} must declare exactly one of run, shell or script.";
                 return false;
             }
 
-            if (step.Argv.Length == 0)
+            if (step.Script is { } script)
+            {
+                // F-020: a script step carries text instead of argv - non-empty and bounded, or it is a
+                // mistake the executor could only fail later and less clearly.
+                if (string.IsNullOrWhiteSpace(script))
+                {
+                    error = $"{path}.script must be a non-empty script text.";
+                    return false;
+                }
+
+                if (script.Length > PipelineSpecSchema.MaxScriptChars)
+                {
+                    error = $"{path}.script must be at most {PipelineSpecSchema.MaxScriptChars} characters.";
+                    return false;
+                }
+            }
+            else if (step.Argv.Length == 0)
             {
                 error = $"{path} has an empty argv.";
                 return false;

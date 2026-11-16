@@ -169,15 +169,23 @@ public sealed class WebhookDeliveryService(
         //    copy taken when the webhook was created).
         var project = await context.Projects
             .Where(candidate => candidate.Id == webhook.ProjectId)
-            .Select(candidate => new { candidate.Id, candidate.DefaultBranch })
+            .Select(candidate => new { candidate.Id, candidate.Kind, candidate.DefaultBranch })
             .SingleOrDefaultAsync(cancellationToken);
         if (project is null)
         {
             return WebhookDeliveryResult.NotFound();
         }
 
+        // F-020, defence in depth: a Freestyle project has no repository to push to. Webhook creation
+        // refuses that kind and a project's kind is immutable, so this is unreachable in practice - the
+        // delivery is still recorded honestly instead of queueing a run nothing can execute.
+        if (project.Kind == Zenkins.Shared.Projects.ProjectKinds.Freestyle)
+        {
+            outcome = WebhookOutcomes.IgnoredNoRepository;
+        }
+
         if (outcome == WebhookOutcomes.Queued
-            && !WebhookBranchFilter.Matches(webhook.BranchFilter, branch, project.DefaultBranch))
+            && !WebhookBranchFilter.Matches(webhook.BranchFilter, branch, project.DefaultBranch ?? string.Empty))
         {
             outcome = WebhookOutcomes.IgnoredBranch;
         }

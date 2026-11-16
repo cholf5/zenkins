@@ -9,7 +9,9 @@ using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Workers;
+using System.Text.Json;
 using Zenkins.Shared.LogStreaming;
+using Zenkins.Shared.Projects;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.RunCancellation;
 using Zenkins.Shared.Tenancy;
@@ -47,10 +49,22 @@ public static class RunFields
     public const string Branch = "branch";
     public const string RequiredTags = "requiredTags";
     public const string Timeout = "timeoutMinutes";
+
+    /// <summary>F-020: the Freestyle step list (its own trigger error field).</summary>
+    public const string Steps = "steps";
+
+    /// <summary>F-021: one build parameter value, keyed by the parameter's name.</summary>
+    public const string Parameter = "parameters";
 }
 
-/// <summary>The raw trigger-form values, before trimming and validation.</summary>
-public sealed record RunTriggerInput(string? Branch, string? RequiredTags, string? TimeoutMinutes = null);
+/// <summary>The raw trigger-form values, before trimming and validation. <see cref="Parameters"/>
+/// carries the trigger's build-parameter values (F-021); absent entries resolve to the definitions'
+/// defaults, unknown names are refused.</summary>
+public sealed record RunTriggerInput(
+    string? Branch,
+    string? RequiredTags,
+    string? TimeoutMinutes = null,
+    IReadOnlyDictionary<string, string>? Parameters = null);
 
 /// <summary>Result of triggering a run. <see cref="RunId"/> is the redirect target on success.</summary>
 public sealed record RunTriggerResult(
@@ -103,7 +117,8 @@ public sealed record RunView(
     int? TimeoutSeconds = null,
     DateTimeOffset? DeadlineAt = null,
     IReadOnlyList<RunStepView>? Steps = null,
-    bool? GitCredentialAssigned = null)
+    bool? GitCredentialAssigned = null,
+    IReadOnlyDictionary<string, string>? Parameters = null)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -205,7 +220,14 @@ public sealed record RunClaimResult(
     // payload carried no usable commit (never happens today - the parser refuses that payload).
     string? Commit = null,
     string? PipelinePath = null,
-    DateTimeOffset? LeaseExpiresAt = null)
+    DateTimeOffset? LeaseExpiresAt = null,
+
+    // F-020: the Freestyle run's frozen spec, snapshotted at trigger time. Null for a Pipeline run -
+    // its spec comes from the Worker's definition phase, never from the claim.
+    string? PipelineSpecJson = null,
+
+    // F-021: the run's resolved build-parameter values. Null when the project declares none.
+    IReadOnlyDictionary<string, string>? Parameters = null)
 {
     /// <summary>The 204 answer: nothing eligible right now. Same for every other rejection reason -
     /// a worker polls again, it never learns why it got nothing.</summary>
@@ -365,10 +387,23 @@ public sealed class RunService(
             return RunTriggerResult.NotFound();
         }
 
-        var branchError = RunValidation.ValidateBranch(input.Branch, out var requestedBranch);
-        if (branchError is not null)
+        // F-020: a Freestyle project runs its frozen spec and has no branch to name. The branch input
+        // is ignored on this path (the form does not render it), and the run must already have a spec -
+        // a Freestyle project whose steps were never saved cannot run anything.
+        var isFreestyle = project.Kind == ProjectKinds.Freestyle;
+        if (isFreestyle && project.FreestyleSpecJson is null)
         {
-            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Branch, branchError));
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.StepsMissing));
+        }
+
+        var requestedBranch = string.Empty;
+        if (!isFreestyle)
+        {
+            var branchError = RunValidation.ValidateBranch(input.Branch, out requestedBranch);
+            if (branchError is not null)
+            {
+                return RunTriggerResult.Invalid(new RunFieldError(RunFields.Branch, branchError));
+            }
         }
 
         var tagsError = RunValidation.ValidateRequiredTags(input.RequiredTags, out var requiredTags);
@@ -397,6 +432,18 @@ public sealed class RunService(
             }
         }
 
+        // F-021: resolve the trigger's parameter values against the project's definitions - every
+        // defined name gets exactly one value (supplied, or default, or the type's neutral default),
+        // and the snapshot below is what the run and every step see. Works for both kinds.
+        var values = ProjectParameters.ResolveValues(
+            ReadParameterDefinitions(project.ParametersJson),
+            input.Parameters,
+            out var parameterError);
+        if (values is null)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Parameter, parameterError!));
+        }
+
         var run = BuildQueuedRun(
             activeOrganizationId.Value,
             project,
@@ -405,7 +452,11 @@ public sealed class RunService(
             timeoutMinutes is { } minutes ? minutes * 60 : null,
             BuildRunTriggerType.Manual,
             actingUserId,
-            gitCommit: null);
+            gitCommit: null,
+            // F-020: a Freestyle run freezes the project's spec at trigger time - the same snapshot
+            // discipline the branch and pipeline path follow (a later edit cannot move this run).
+            pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
+            parametersJson: SerializeParameters(values));
         context.BuildRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken);
 
@@ -493,6 +544,15 @@ public sealed class RunService(
             return RunTriggerResult.NotFound();
         }
 
+        // F-020, defence in depth: a webhook triggers on git pushes, and a Freestyle project has no
+        // repository to push to. Webhook creation already refuses this kind, and a project's kind is
+        // immutable, so this line should be unreachable - it exists so a future caller of this method
+        // cannot queue a run nothing can execute.
+        if (project.Kind == ProjectKinds.Freestyle)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.NotPipeline));
+        }
+
         var run = BuildQueuedRun(
             activeOrganizationId.Value,
             project,
@@ -501,7 +561,12 @@ public sealed class RunService(
             timeoutSeconds: null,
             BuildRunTriggerType.Webhook,
             triggerUserId: null,
-            gitCommit);
+            gitCommit,
+            pipelineSpecJson: null,
+            // F-021: a webhook run has no user to fill the form, so the parameters resolve to the
+            // definitions' defaults - the honest answer for a headless trigger.
+            parametersJson: SerializeParameters(
+                ProjectParameters.ResolveValues(ReadParameterDefinitions(project.ParametersJson), null, out _)));
         context.BuildRuns.Add(run);
 
         logger.LogInformation(
@@ -525,12 +590,14 @@ public sealed class RunService(
     private static BuildRun BuildQueuedRun(
         Guid organizationId,
         Project project,
-        string branch,
+        string? branch,
         string requiredTags,
         int? timeoutSeconds,
         string triggerType,
         string? triggerUserId,
-        string? gitCommit) =>
+        string? gitCommit,
+        string? pipelineSpecJson,
+        string? parametersJson) =>
         new()
         {
             OrganizationId = organizationId,
@@ -540,15 +607,42 @@ public sealed class RunService(
             RequiredTags = requiredTags,
 
             // F-014 snapshots: the branch the trigger chose and the project's pipeline path. Both are
-            // copies, so editing the project later never moves this run.
-            GitBranch = branch,
-            PipelinePath = project.PipelinePath,
+            // copies, so editing the project later never moves this run. A Freestyle run (F-020) has
+            // neither a branch nor a pipeline file - the empty branch is the honest record, and the
+            // frozen spec below is what executes.
+            GitBranch = branch ?? string.Empty,
+            PipelinePath = project.PipelinePath ?? string.Empty,
             TimeoutSeconds = timeoutSeconds,
+
+            // F-020: the Freestyle run's frozen spec, snapshotted by the trigger source. A Pipeline
+            // run leaves it null - its Worker reports the spec through the definition endpoint.
+            PipelineSpecJson = pipelineSpecJson,
+
+            // F-021: the resolved parameter values, frozen with everything else the run builds.
+            ParametersJson = parametersJson,
 
             // F-017: a webhook delivery already names the commit; a manual trigger leaves it to the
             // worker's accepted report (F-013).
             GitCommit = gitCommit,
         };
+
+    /// <summary>The definitions a project declared, parsed from its row (F-021); null for none.</summary>
+    private static ProjectParameter[]? ReadParameterDefinitions(string? parametersJson) =>
+        string.IsNullOrWhiteSpace(parametersJson)
+            ? null
+            : JsonSerializer.Deserialize(parametersJson, ProjectParameterJsonContext.Default.ProjectParameterArray);
+
+    /// <summary>Serializes the resolved values for the run row (F-021); an empty set stays null.</summary>
+    private static string? SerializeParameters(IReadOnlyDictionary<string, string>? values) =>
+        values is not { Count: > 0 }
+            ? null
+            : JsonSerializer.Serialize(new Dictionary<string, string>(values), ProjectParameterJsonContext.Default.DictionaryStringString);
+
+    /// <summary>The values a claim hands to the worker (F-021); a row without parameters stays null.</summary>
+    private static IReadOnlyDictionary<string, string>? ReadParameters(string? parametersJson) =>
+        string.IsNullOrWhiteSpace(parametersJson)
+            ? null
+            : JsonSerializer.Deserialize(parametersJson, ProjectParameterJsonContext.Default.DictionaryStringString);
 
     /// <summary>Runs of one project in the active organization, newest first.</summary>
     public async Task<IReadOnlyList<RunView>> GetProjectRunsAsync(
@@ -798,7 +892,9 @@ public sealed class RunService(
                 // F-014: the claim carries what the pipeline layer executes - the repository, the
                 // branch this run snapshotted and the pipeline path it snapshotted. F-017 adds the exact
                 // commit when the trigger already named one (a webhook push): the worker pins that commit
-                // instead of trusting the branch tip, which may have moved by now.
+                // instead of trusting the branch tip, which may have moved by now. F-020: a Freestyle
+                // run carries its frozen spec (and no repository - the claim's URL is null and the
+                // Worker skips the clone entirely).
                 return new RunClaimResult(
                     RunOperationStatus.Success,
                     candidate.Id,
@@ -807,7 +903,9 @@ public sealed class RunService(
                     candidate.GitBranch,
                     candidate.GitCommit,
                     candidate.PipelinePath,
-                    leaseExpiresAt);
+                    leaseExpiresAt,
+                    candidate.PipelineSpecJson,
+                    ReadParameters(candidate.ParametersJson));
             }
         }
 
@@ -2044,7 +2142,10 @@ public sealed class RunService(
                 run.TimeoutSeconds,
                 run.DeadlineAt,
                 BuildStepViews(pipeline, [.. stepsByRun[run.Id]]),
-                credentialAssigned.TryGetValue(run.ProjectId, out var assigned) ? assigned : null);
+                credentialAssigned.TryGetValue(run.ProjectId, out var assigned) ? assigned : null,
+                // F-021: the values this run was triggered with (the snapshot, not the project's
+                // current definitions). Null when the project declared no parameters.
+                ReadParameters(run.ParametersJson));
         }).ToList();
     }
 

@@ -195,30 +195,35 @@ Member 可以：
 
 ### 3.2 Project 管理
 
-Project 代表一个 Git Repository。
+Project 是 Zenkins 的作业单元，分两种 Kind：
+
+- **Pipeline**（原有 Kind）：Project 代表一个 Git Repository，构建定义来自仓库中的 `pipeline.lua`。
+- **Freestyle**（v1.1 新增，见 §3.10）：不要求 Git Repository，构建步骤在服务端 UI 中配置为脚本。
 
 每个 Project 包含：
 
 | 字段 | 说明 |
 |---|---|
 | Name | 项目名称 |
-| Repository URL | Git 仓库地址 |
-| Default Branch | 默认分支 |
-| Credentials | Git 认证信息 |
-| Pipeline Path | Pipeline 文件路径，默认 `pipeline.lua` |
+| Kind | 项目类型：`pipeline` 或 `freestyle`，创建后不可变更 |
+| Repository URL | Git 仓库地址（仅 Pipeline；Freestyle 为空） |
+| Default Branch | 默认分支（仅 Pipeline；Freestyle 为空） |
+| Credentials | Git 认证信息（仅 Pipeline） |
+| Pipeline Path | Pipeline 文件路径，默认 `pipeline.lua`（仅 Pipeline） |
 | Created At | 创建时间 |
 | Updated At | 更新时间 |
 
 #### 功能要求
 
 - 创建、编辑、删除 Project。
-- 支持 HTTPS 和 SSH Git Repository。
+- 支持 HTTPS 和 SSH Git Repository（Pipeline）。
 - 支持 Private Repository。
 - 支持配置 Git Credentials。
 - 支持指定默认分支。
 - 支持指定 Pipeline 文件路径。
 - 支持手动触发构建。
-- 支持 Git Webhook 触发构建。
+- 支持 Git Webhook 触发构建（仅 Pipeline；Freestyle 无仓库可推送）。
+- 支持参数化构建（两种 Kind 通用，见 §3.11）。
 
 Git 操作由 Worker 执行，Server 不负责在本地 Clone 项目。
 
@@ -533,6 +538,7 @@ worker/
 - Trigger Type
 - Trigger User
 - Worker
+- Build Parameters（触发时的值快照）
 - Start Time
 - End Time
 - Duration
@@ -635,6 +641,72 @@ Organization 可以维护构建所需的敏感信息。
 
 不需要第一版就分别开发 GitHub、GitLab、Gitea 的完整集成管理模块。
 
+### 3.10 Freestyle Job（无仓库作业）
+
+Freestyle 是 v1.1 新增的 Project Kind：不需要关联 Git Repository，构建步骤在服务端 UI 中配置，
+直接执行脚本（例如运行一个 Python 脚本）。
+
+#### 3.10.1 定义
+
+一个 Freestyle Project 包含一组有序的步骤（Steps），每个步骤包含：
+
+| 字段 | 说明 |
+|---|---|
+| Name | 步骤名称，必须唯一 |
+| Script | 多行脚本文本（Windows 由 `cmd /d /s /c` 执行，Unix 由 `/bin/sh -e` 执行） |
+| Env | 步骤级环境变量（`NAME=value`） |
+| Continue On Error | 失败后是否继续执行后续步骤 |
+| Artifacts | 该步骤成功后收集的产物路径（相对于运行工作区） |
+
+#### 3.10.2 保存与冻结
+
+- 步骤列表保存在 Project 行上（冻结的 PipelineSpec JSON，schema v2 的 `script` 步骤）。
+- 保存由服务端构建并校验；浏览器提交的是编辑器草稿，从不直接生成 spec。
+- 步骤脚本中引用的 Secret 名称（`${secret:NAME}`）在保存时被记录，语义与 Pipeline 一致。
+
+#### 3.10.3 执行模型
+
+- 触发时把当时保存的步骤快照冻结到 Run 上；之后编辑步骤不影响已排队或运行中的 Run。
+- Worker 收到的 claim 携带该快照，跳过 Clone 与定义阶段，直接执行步骤。
+- 步骤的工作目录是该 Run 的工作区 `work/{run-id}/workspace`（没有仓库，不使用 `repository/`）。
+- Worker 将解析引用后的脚本文本写入独立文件（`temp/step-N.cmd|sh`，无 BOM），由平台 Shell 执行；
+  不与其它参数做任何拼接或插值（§8 约束 6）。
+- 失败语义、continue_on_error、条件、环境变量分层、Secrets、Artifact、取消与超时与 Pipeline 完全一致。
+- Run 不记录 Git Commit；Branch/Pipeline Path 记录为空字符串。
+- Freestyle Project 不支持 Webhook 触发，也没有 Git Credentials。
+
+### 3.11 参数化构建（Build Parameters）
+
+Parameters 是 Project 上的一组输入定义，两种 Kind 通用。触发时由触发者填写（或由无人工触发的
+场景使用默认值），解析后的值作为运行快照冻结到 Run 上，并注入每个步骤的环境变量。
+
+#### 3.11.1 定义
+
+| 字段 | 说明 |
+|---|---|
+| Name | 参数名，同时是步骤读取的环境变量名（字母/下划线开头，字母、数字、下划线，≤64，项目内唯一） |
+| Type | `string` / `text` / `boolean` / `choice` |
+| Default | 无用户输入时使用的值；`boolean` 缺省为 `false`，其余类型缺省为空字符串（`choice` 缺省为第一个选项） |
+| Choices | 仅 `choice`：允许值列表，默认值必须属于其中 |
+| Description | 触发面板显示的说明 |
+
+定义保存在 Project 行上（JSON），由服务端校验；一个项目最多 32 个参数。
+
+#### 3.11.2 触发与快照
+
+- 手动触发面板按定义动态渲染：文本框、多行文本、true/false 单选、下拉选项，并预填默认值。
+- 服务端按定义解析：未知参数名拒绝（`parameter-unknown`）；类型不符拒绝（`parameter-invalid`，
+  例如 boolean 非 true/false、choice 不在选项内、超长）；未提交的参数使用默认值。
+- 解析后的值冻结到 Run 上；之后编辑项目定义不影响已排队或运行中的 Run。
+- Webhook 等无人工触发使用定义默认值。
+- 参数是配置而非 Secret：值显示在 Run 详情页、随 claim 传给 Worker，不做脱敏；敏感值应放入
+  Secrets（§3.8）。
+
+#### 3.11.3 注入
+
+参数值并入 Worker 的 server-provided 环境层（与 `ZENKINS_*` 同层、优先于步骤自身 env），因此
+Pipeline（Lua）与 Freestyle 的每个步骤都能直接以参数名读取，`${env:NAME}` 引用同样可用。
+
 ---
 
 ## 4. UI 设计
@@ -673,8 +745,9 @@ Organization 可以维护构建所需的敏感信息。
 项目列表展示：
 
 - 项目名称
-- Git Repository
-- 默认分支
+- Kind（Pipeline / Freestyle 徽标）
+- Git Repository（Freestyle 显示"无仓库，步骤配置于服务端"）
+- 默认分支（仅 Pipeline）
 - 最近一次构建状态
 - 最近构建时间
 
@@ -682,10 +755,11 @@ Organization 可以维护构建所需的敏感信息。
 
 包含：
 
-- Overview
-- Pipelines
+- Overview（Freestyle 不展示仓库信息，展示步骤保存状态；触发面板按参数定义动态渲染）
+- Pipelines（Freestyle 下该 Tab 为 Steps：服务端步骤编辑器）
+- Parameters（参数定义编辑器，两种 Kind 通用）
 - Runs
-- Settings
+- Settings（Freestyle 不含 Git Credentials 与 Webhook 区块）
 
 #### Pipeline
 
@@ -699,7 +773,8 @@ Organization 可以维护构建所需的敏感信息。
 
 不提供图形化 Pipeline 编辑器。
 
-Pipeline 内容由 Git Repository 中的 `pipeline.lua` 管理。
+Pipeline 内容由 Git Repository 中的 `pipeline.lua` 管理。Freestyle 项目的同一 Tab 是步骤编辑器
+（§3.10）：每个步骤为一段多行脚本，支持步骤级环境变量、continue_on_error 与 artifact 声明。
 
 #### Build Run Detail
 
@@ -709,6 +784,7 @@ Pipeline 内容由 Git Repository 中的 `pipeline.lua` 管理。
 - Git Commit
 - Branch
 - Worker
+- Build Parameters（本次 Run 的值快照）
 - 执行时间
 - Step 列表
 - 实时日志
@@ -859,6 +935,8 @@ BuildRun 必须记录执行时的 Git Commit 和 Pipeline 版本信息，以便�
 
 ## 7. 第一版范围与非目标
 
+> v1.1 在本节 MVP 范围之外新增了 Freestyle Job（§3.10）与参数化构建（§3.11）。
+
 ### 7.1 第一版必须实现（MVP）
 
 #### 基础设施
@@ -959,7 +1037,9 @@ BuildRun 必须记录执行时的 Git Commit 和 Pipeline 版本信息，以便�
 3. Worker 必须主动连接 Server。
 4. Pipeline 使用 Lua，不使用 YAML。
 5. Lua 只负责流程编排，不替代原生进程执行。
-6. 默认通过 ProcessStartInfo 启动外部进程，不拼接 Shell 命令。
+6. 通过 ProcessStartInfo 启动外部进程，不在进程参数中拼接 Shell 命令。Pipeline（Lua）的步骤
+   保持纯 argv，任何地方不存在 Shell 解释；Freestyle 的脚本步骤是配置者显式提供的 Shell 文本，
+   Worker 将其写入独立文件后交给平台 Shell 执行，不与其它参数做任何拼接或插值。
 7. 所有构建任务必须具有独立工作目录。
 8. 多租户隔离必须在数据访问层强制实施。
 9. 不引入 Docker 作为基础设施依赖。

@@ -436,7 +436,8 @@ process environment < pipeline `env` < step `env` < the server-provided run envi
 composition feeds two readers — the substituted argv/`env` values and the child process's own
 environment — so a script and the process it starts can never disagree about a value. A secret's
 value enters only where the script put the reference; it is not a layer that silently overrides a
-name.
+name. A run's **build parameters** (F-021, PRD §3.11) join this same server-provided layer under
+their own names, so a step reads them directly or through `${env:NAME}` with no new syntax.
 
 The value a reference resolves to is registered with the run's redaction filter (§7) at the moment
 it is decrypted — before the step that asked for it can log anything — and the definition phase
@@ -474,6 +475,15 @@ validates it, serialises it, and executes the steps **in C#**:
 - Imperative orchestration (`step("x", function() ... end)` with `run()` inside) is a later
   capability, not a v0.3 one; the host-call protocol (§5.2) is built now precisely so it can land
   without re-architecting.
+- **The spec schema is versioned, and v2 adds the Freestyle `script` step** (card F-020). A
+  `pipeline.lua` never produces a script step — the Lua reader still accepts exactly one of
+  `run`/`shell` per step, and the schema version the definition phase freezes is v2 only because the
+  shared record now carries the field. A Freestyle project's steps (PRD §3.10) are configured in the
+  Server UI and frozen into the same record there: the Server builds the spec, captures the secret
+  references with the same scanner, and hands the frozen JSON to the Worker in the claim payload;
+  the Worker re-checks the envelope and executes it without a clone or a definition phase. The
+  envelope accepts **v1 and v2** — every spec frozen before F-020 stays readable — and refuses
+  anything newer.
 - **The frozen spec records which secret names the definition referenced** (card D-006): the sandbox
   sees every `secret("NAME")` call, and every `${secret:NAME}` marker that ends up in a step's argv or
   in a pipeline/step `env` value is collected too, because those are exactly what the C# executor

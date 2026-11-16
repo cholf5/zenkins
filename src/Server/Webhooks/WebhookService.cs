@@ -3,6 +3,7 @@ using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.Projects;
 
 namespace Zenkins.Server.Webhooks;
 
@@ -180,6 +181,15 @@ public sealed class WebhookService(
         if (project is null)
         {
             return WebhookManagementResult.NotFound();
+        }
+
+        // F-020: a webhook triggers on git pushes, and a Freestyle project has no repository to push
+        // to. There is no branch to filter and no commit to pin, so creating one for that kind is
+        // refused here rather than minting a webhook that can never fire honestly.
+        if (project.Kind == ProjectKinds.Freestyle)
+        {
+            return WebhookManagementResult.Invalid(
+                new WebhookFieldError(WebhookFields.BranchFilter, WebhookErrorCodes.ProjectNotPipeline));
         }
 
         var errors = Validate(input, out var name, out var branchFilter, out var requiredTags);

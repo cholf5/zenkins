@@ -1,6 +1,9 @@
 @page "/projects/{ProjectId:guid}"
 @attribute [Authorize]
 @using System.Globalization
+@using System.Text.Json
+@using Zenkins.Shared.Projects
+@using Zenkins.Shared.Pipelines
 @using Zenkins.Server.Git
 @using Zenkins.Server.Webhooks
 @inject UserSession UserSession
@@ -31,7 +34,14 @@
                 {
                     <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
                 }
-                <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+                @if (_project.Kind == ProjectKinds.Freestyle)
+                {
+                    <BbBadge Variant="BadgeVariant.Secondary">Freestyle</BbBadge>
+                }
+                else
+                {
+                    <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+                }
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                 <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit</BbButton>
@@ -42,7 +52,7 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="overview" />
+        <ProjectTabs ProjectId="@_project.Id" Active="overview" Kind="@_project.Kind" />
 
         @if (Notice is { } notice)
         {
@@ -51,66 +61,103 @@
             </div>
         }
 
-        <BbCard>
-            <BbCardHeader>
-                <BbCardTitle As="h2">Repository</BbCardTitle>
-                <BbCardDescription>
-                    Git repository metadata and what this project runs. Credentials are managed on the
-                    settings tab by organization Owners.
-                </BbCardDescription>
-            </BbCardHeader>
-            <BbCardContent>
-                <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
-                    <div class="bb:sm:col-span-3">
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository URL</dt>
-                        <dd class="bb:break-all">@_project.RepositoryUrl</dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
-                        <dd>@_project.DefaultBranch</dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
-                        <dd>@_project.PipelinePath</dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credential</dt>
-                        <dd>
-                            @if (_project.GitCredentialId is null)
-                            {
-                                <span class="bb:text-muted-foreground">Not configured</span>
-                            }
-                            else if (_assignedCredentialName is { } assignedName)
-                            {
-                                <span>@assignedName</span>
-                            }
-                            else
-                            {
-                                <span>Configured</span>
-                            }
-                        </dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
-                        <dd>@_webhooks.Count</dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credentials (organization)</dt>
-                        @* D-003: the credential metadata is Owner-visible only (the asymmetry stance the
-                           settings tab keeps), so a Member sees that the store exists, not its size. *@
-                        <dd>@(CredentialCountText)</dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
-                        <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
-                    </div>
-                    <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Updated</dt>
-                        <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
-                    </div>
-                </dl>
-            </BbCardContent>
-        </BbCard>
+        @if (_project.Kind == ProjectKinds.Freestyle)
+        {
+            @* F-020: a Freestyle project's overview - there is no repository, so the card says what
+               the project runs and where its steps are edited instead. *@
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Freestyle project</BbCardTitle>
+                    <BbCardDescription>
+                        No repository is cloned: the steps are configured on the server (the Steps
+                        tab) and every run carries the snapshot it was triggered with.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Steps</dt>
+                            <dd>@(_savedStepCount is { } count ? count.ToString(CultureInfo.InvariantCulture) + " saved" : "Not saved yet")</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
+                            <dd>Not available for this kind</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
+                            <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Updated</dt>
+                            <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                        </div>
+                    </dl>
+                </BbCardContent>
+            </BbCard>
+        }
+        else
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Repository</BbCardTitle>
+                    <BbCardDescription>
+                        Git repository metadata and what this project runs. Credentials are managed on the
+                        settings tab by organization Owners.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                        <div class="bb:sm:col-span-3">
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository URL</dt>
+                            <dd class="bb:break-all">@_project.RepositoryUrl</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
+                            <dd>@_project.DefaultBranch</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                            <dd>@_project.PipelinePath</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credential</dt>
+                            <dd>
+                                @if (_project.GitCredentialId is null)
+                                {
+                                    <span class="bb:text-muted-foreground">Not configured</span>
+                                }
+                                else if (_assignedCredentialName is { } assignedName)
+                                {
+                                    <span>@assignedName</span>
+                                }
+                                else
+                                {
+                                    <span>Configured</span>
+                                }
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
+                            <dd>@_webhooks.Count</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credentials (organization)</dt>
+                            @* D-003: the credential metadata is Owner-visible only (the asymmetry stance the
+                               settings tab keeps), so a Member sees that the store exists, not its size. *@
+                            <dd>@(CredentialCountText)</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
+                            <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Updated</dt>
+                            <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                        </div>
+                    </dl>
+                </BbCardContent>
+            </BbCard>
+        }
 
         <BbCard>
             <BbCardHeader>
@@ -167,11 +214,22 @@
         <BbCard>
             <BbCardHeader>
                 <BbCardTitle As="h2">Start run</BbCardTitle>
-                <BbCardDescription>
-                    A run executes this project's pipeline file on the branch you choose. Leave the
-                    branch blank to build the default branch. Optional required tags restrict which
-                    worker may claim the run: one worker must declare all of them.
-                </BbCardDescription>
+                @if (_project.Kind == ProjectKinds.Freestyle)
+                {
+                    <BbCardDescription>
+                        A run executes this project's saved steps (the snapshot taken when the run is
+                        queued). Optional required tags restrict which worker may claim the run: one
+                        worker must declare all of them.
+                    </BbCardDescription>
+                }
+                else
+                {
+                    <BbCardDescription>
+                        A run executes this project's pipeline file on the branch you choose. Leave the
+                        branch blank to build the default branch. Optional required tags restrict which
+                        worker may claim the run: one worker must declare all of them.
+                    </BbCardDescription>
+                }
             </BbCardHeader>
             <BbCardContent>
                 <form method="post" action="@($"/projects/{_project.Id}/runs/start")" data-zenkins-antiforgery>
@@ -180,17 +238,91 @@
                         {
                             <p id="run-form-error" role="alert" class="bb:text-sm bb:text-destructive">@runRequestError</p>
                         }
-                        <div>
-                            <label for="run-branch" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branch (optional)</label>
-                            <input id="run-branch"
-                                   name="Branch"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
-                                   placeholder="@_project.DefaultBranch" />
-                            @if (BranchError is { } branchError)
-                            {
-                                <p id="run-branch-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@branchError</p>
-                            }
-                        </div>
+                        @if (_project.Kind != ProjectKinds.Freestyle)
+                        {
+                            <div>
+                                <label for="run-branch" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branch (optional)</label>
+                                <input id="run-branch"
+                                       name="Branch"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
+                                       placeholder="@_project.DefaultBranch" />
+                                @if (BranchError is { } branchError)
+                                {
+                                    <p id="run-branch-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@branchError</p>
+                                }
+                            </div>
+                        }
+                        else if (RunErrorCode == RunErrorCodes.StepsMissing)
+                        {
+                            <p id="run-form-error" role="alert" class="bb:text-sm bb:text-destructive">
+                                This project has no saved steps yet - save them on the Steps tab first.
+                            </p>
+                        }
+                        @* F-021: the project's parameter definitions render the trigger's inputs.
+                           Each field posts Parameters[NAME]; the service resolves missing entries to
+                           the definitions' defaults and refuses unknown names or mistyped values. *@
+                        @foreach (var parameter in _parameterDefinitions)
+                        {
+                            <div>
+                                <label for="run-param-@(parameter.Name)" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">
+                                    @parameter.Name
+                                    @if (parameter.Description is { } description)
+                                    {
+                                        <span class="bb:ml-2 bb:font-normal bb:text-xs bb:text-muted-foreground">@description</span>
+                                    }
+                                </label>
+                                @if (parameter.Type == ProjectParameterTypes.Boolean)
+                                {
+                                    @* A radio pair, not a checkbox: an unchecked checkbox posts nothing at
+                                       all, which is indistinguishable from "the form did not render this
+                                       parameter" - and would silently resolve to a true default. A radio
+                                       group always posts exactly one of the two values. *@
+                                    <div id="run-param-@(parameter.Name)" class="bb:flex bb:items-center bb:gap-4">
+                                        <label class="bb:flex bb:items-center bb:gap-1">
+                                            <input type="radio"
+                                                   name="@($"Parameters[{parameter.Name}]")"
+                                                   value="true"
+                                                   checked="@(parameter.DefaultValue == "true")" />
+                                            <span>true</span>
+                                        </label>
+                                        <label class="bb:flex bb:items-center bb:gap-1">
+                                            <input type="radio"
+                                                   name="@($"Parameters[{parameter.Name}]")"
+                                                   value="false"
+                                                   checked="@(parameter.DefaultValue != "true")" />
+                                            <span>false</span>
+                                        </label>
+                                    </div>
+                                }
+                                else if (parameter.Type == ProjectParameterTypes.Choice)
+                                {
+                                    <select id="run-param-@(parameter.Name)"
+                                            name="@($"Parameters[{parameter.Name}]")"
+                                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm">
+                                        @foreach (var choice in parameter.Choices ?? [])
+                                        {
+                                            <option value="@choice" selected="@(parameter.DefaultValue == choice)">@choice</option>
+                                        }
+                                    </select>
+                                }
+                                else if (parameter.Type == ProjectParameterTypes.Text)
+                                {
+                                    <textarea id="run-param-@(parameter.Name)"
+                                              name="@($"Parameters[{parameter.Name}]")"
+                                              rows="4"
+                                              spellcheck="false"
+                                              class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm">@parameter.DefaultValue</textarea>
+                                }
+                                else
+                                {
+                                    <input id="run-param-@(parameter.Name)"
+                                           name="@($"Parameters[{parameter.Name}]")"
+                                           value="@parameter.DefaultValue"
+                                           autocomplete="off"
+                                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
+                                }
+                            </div>
+                        }
                         <div>
                             <label for="run-required-tags" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Required tags (optional)</label>
                             <input id="run-required-tags"
@@ -247,6 +379,8 @@
     private bool _canDelete;
     private IReadOnlyList<WebhookView> _webhooks = [];
     private RunView? _newestRun;
+    private int? _savedStepCount;
+    private ProjectParameter[] _parameterDefinitions = [];
     private int _credentialCount;
     private string? _assignedCredentialName;
 
@@ -299,6 +433,8 @@
     private string? RunRequestError => RunErrorCode switch
     {
         RunErrorCodes.FieldInvalid => "That request could not be read, so no run was started. Try again.",
+        RunErrorCodes.ParameterUnknown => "One of the supplied parameter names is not defined on this project.",
+        RunErrorCodes.ParameterInvalid => "One of the supplied parameter values does not fit its type.",
         _ => null,
     };
 
@@ -334,6 +470,33 @@
         if (_project is null || _session is not { HasOrganization: true } session)
         {
             return;
+        }
+
+        // F-021: the trigger form renders the project's parameter definitions (both kinds). The
+        // stored JSON was validated at save; a parse here only fails on a corrupted row, and the
+        // form then renders none rather than guessing.
+        if (_project.ParametersJson is { } savedParameters)
+        {
+            try
+            {
+                _parameterDefinitions = JsonSerializer.Deserialize(
+                    savedParameters,
+                    ProjectParameterJsonContext.Default.ProjectParameterArray) ?? [];
+            }
+            catch (JsonException)
+            {
+                _parameterDefinitions = [];
+            }
+        }
+
+        // F-020: the Freestyle overview shows whether steps are saved (and how many). The saved JSON
+        // is envelope-checked, so a count is only derived from a spec the server accepted.
+        if (_project.Kind == ProjectKinds.Freestyle
+            && _project.FreestyleSpecJson is { } savedSpec
+            && PipelineSpecJson.TryRead(savedSpec, out var saved, out _)
+            && saved is not null)
+        {
+            _savedStepCount = saved.Steps.Length;
         }
 
         // The project's webhooks (any member may manage them, F-017): the count here, the cards on

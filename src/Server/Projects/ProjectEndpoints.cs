@@ -44,6 +44,13 @@ public static class ProjectEndpoints
         group.MapPost("/{projectId:guid}/edit", UpdateAsync);
         group.MapPost("/{projectId:guid}/delete", DeleteAsync);
 
+        // F-020: the Freestyle steps editor's save. Same form-post + antiforgery shape as the other
+        // mutations; the drafts travel as one JSON field the page serializes.
+        group.MapPost("/{projectId:guid}/freestyle/steps", SaveFreestyleStepsAsync);
+
+        // F-021: the parameters editor's save - the same shape, both kinds.
+        group.MapPost("/{projectId:guid}/parameters", SaveParametersAsync);
+
         return endpoints;
     }
 
@@ -104,6 +111,69 @@ public static class ProjectEndpoints
         };
     }
 
+    private static async Task<IResult> SaveFreestyleStepsAsync(
+        Guid projectId,
+        [FromForm] FreestyleStepsForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // F-019's rule in miniature: a lost body is the page's PRG error, never a null reference.
+        var result = await projects.SaveFreestyleStepsAsync(
+            userId,
+            projectId,
+            form?.ToInput() ?? new FreestyleStepsInput(null),
+            httpContext.RequestAborted);
+
+        // The PRG target is the route that owns the editor (the Freestyle project's definition tab),
+        // so a refusal lands on the page that can show the code - the overview reads neither `error`
+        // nor the steps' notice.
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/pipelines?notice=steps-saved"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect($"/projects/{projectId}/pipelines?error={ProjectErrorCodes.StepsInvalid}"),
+        };
+    }
+
+    private static async Task<IResult> SaveParametersAsync(
+        Guid projectId,
+        [FromForm] ProjectParametersForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // F-019's rule in miniature: a lost body is the page's PRG error, never a null reference.
+        var result = await projects.SaveParametersAsync(
+            userId,
+            projectId,
+            form?.ToInput() ?? new ProjectParametersInput(null),
+            httpContext.RequestAborted);
+
+        // Same PRG target rule as the steps save: the Parameters tab renders the code, the overview
+        // does not.
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/parameters?notice=parameters-saved"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect($"/projects/{projectId}/parameters?error={ProjectErrorCodes.ParametersInvalid}"),
+        };
+    }
+
     private static async Task<IResult> DeleteAsync(
         Guid projectId,
         [FromForm] DeleteProjectForm form,
@@ -148,6 +218,7 @@ public static class ProjectEndpoints
         {
             ["error"] = code,
             ["name"] = form?.Name,
+            ["kind"] = form?.Kind,
             ["repositoryUrl"] = form?.RepositoryUrl,
             ["defaultBranch"] = form?.DefaultBranch,
             ["pipelinePath"] = form?.PipelinePath,
@@ -164,7 +235,7 @@ public static class ProjectEndpoints
     /// values, so the service's validation - not a null reference - answers the request (F-019).
     /// </summary>
     private static ProjectInput EmptyInput() =>
-        new(Name: null, RepositoryUrl: null, DefaultBranch: null, PipelinePath: null);
+        new(Name: null, Kind: null, RepositoryUrl: null, DefaultBranch: null, PipelinePath: null);
 
     /// <summary>
     /// Empty on purpose: the parameter exists so the delete POST is form-bound and therefore covered
@@ -176,12 +247,16 @@ public static class ProjectEndpoints
     }
 
     /// <summary>
-    /// The three editable fields plus the pipeline path. Deliberately no <c>ProjectId</c>: the route
-    /// is the only source of the target project.
+    /// The editable fields plus the pipeline path and (since F-020) the kind. Deliberately no
+    /// <c>ProjectId</c>: the route is the only source of the target project. The kind binds from a
+    /// radio group; a form that omits it keeps the historical Pipeline default (see
+    /// <see cref="ProjectValidation.ValidateKind"/>).
     /// </summary>
     public sealed class ProjectForm
     {
         public string? Name { get; set; }
+
+        public string? Kind { get; set; }
 
         public string? RepositoryUrl { get; set; }
 
@@ -189,6 +264,29 @@ public static class ProjectEndpoints
 
         public string? PipelinePath { get; set; }
 
-        public ProjectInput ToInput() => new(Name, RepositoryUrl, DefaultBranch, PipelinePath);
+        public ProjectInput ToInput() => new(Name, Kind, RepositoryUrl, DefaultBranch, PipelinePath);
+    }
+
+    /// <summary>
+    /// The Freestyle steps editor's payload (F-020): one JSON field holding the draft list. The field
+    /// is serialized by the page (which owns the dynamic row list) and parsed, built and validated
+    /// server-side by <see cref="FreestyleSteps.BuildSpecJson"/> - the browser never authors a spec.
+    /// </summary>
+    public sealed class FreestyleStepsForm
+    {
+        public string? StepsJson { get; set; }
+
+        public FreestyleStepsInput ToInput() => new(StepsJson);
+    }
+
+    /// <summary>
+    /// The parameters editor's payload (F-021): one JSON field holding the draft list, parsed and
+    /// validated server-side by <see cref="ProjectParameters.BuildDefinitionsJson"/>.
+    /// </summary>
+    public sealed class ProjectParametersForm
+    {
+        public string? ParametersJson { get; set; }
+
+        public ProjectParametersInput ToInput() => new(ParametersJson);
     }
 }

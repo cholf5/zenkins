@@ -23,11 +23,15 @@ public static class WebhookErrorCodes
     public const string BranchFilterInvalid = "branch-filter-invalid";
     public const string TagsInvalid = "tags-invalid";
 
+    /// <summary>F-020: the target project is a Freestyle project - there is no repository to push to,
+    /// so a webhook can never fire honestly for it.</summary>
+    public const string ProjectNotPipeline = "project-not-pipeline";
+
     /// <summary>The form field a code belongs to, or <see langword="null"/> for an unknown code.</summary>
     public static string? FieldFor(string? code) => code switch
     {
         NameRequired or NameTooLong or NameInvalid or NameDuplicate => WebhookFields.Name,
-        BranchFilterInvalid => WebhookFields.BranchFilter,
+        BranchFilterInvalid or ProjectNotPipeline => WebhookFields.BranchFilter,
         TagsInvalid => WebhookFields.RequiredTags,
         _ => null,
     };
@@ -42,6 +46,8 @@ public static class WebhookErrorCodes
         BranchFilterInvalid =>
             "Enter comma-separated branch names; a trailing '*' is the only wildcard (for example "
             + "main, release/*). Leave it blank to follow the project's default branch.",
+        ProjectNotPipeline =>
+            "A webhook triggers on git pushes; this project is a Freestyle project and has no repository.",
         TagsInvalid => "Required tags are comma-separated text, at most 64 characters per tag.",
         _ => null,
     };
@@ -103,6 +109,10 @@ public static class WebhookOutcomes
 
     /// <summary>A ref that is not a branch (a tag, a note): nothing to build.</summary>
     public const string IgnoredNotBranch = "ignored:not-branch";
+
+    /// <summary>F-020, defence in depth: the webhook somehow targets a Freestyle project (creation
+    /// already refuses that kind, and a project's kind is immutable) - nothing to build.</summary>
+    public const string IgnoredNoRepository = "ignored:no-repository";
 
     /// <summary>Longest stored outcome.</summary>
     public const int MaxLength = 32;

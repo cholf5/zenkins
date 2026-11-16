@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Zenkins.Shared.Projects;
 
 namespace Zenkins.Server.Projects;
 
@@ -9,9 +10,12 @@ namespace Zenkins.Server.Projects;
 public static class ProjectFields
 {
     public const string Name = "Name";
+    public const string Kind = "Kind";
     public const string RepositoryUrl = "RepositoryUrl";
     public const string DefaultBranch = "DefaultBranch";
     public const string PipelinePath = "PipelinePath";
+    public const string Steps = "Steps";
+    public const string Parameters = "Parameters";
 }
 
 /// <summary>
@@ -26,6 +30,9 @@ public static class ProjectErrorCodes
     public const string NameInvalid = "name-invalid";
     public const string NameDuplicate = "name-duplicate";
 
+    /// <summary>F-020: the kind selector's value is not one of the known kinds.</summary>
+    public const string KindInvalid = "kind-invalid";
+
     public const string RepositoryUrlRequired = "repository-url-required";
     public const string RepositoryUrlTooLong = "repository-url-too-long";
     public const string RepositoryUrlInvalid = "repository-url-invalid";
@@ -36,13 +43,25 @@ public static class ProjectErrorCodes
     public const string PipelinePathTooLong = "pipeline-path-too-long";
     public const string PipelinePathInvalid = "pipeline-path-invalid";
 
+    /// <summary>F-020: the Freestyle step list was refused (the message carries the field path).</summary>
+    public const string StepsInvalid = "steps-invalid";
+
+    /// <summary>F-020: a Freestyle project's steps were never saved, so there is nothing to run.</summary>
+    public const string StepsMissing = "steps-missing";
+
+    /// <summary>F-021: the parameter list was refused (the log carries the specific reason).</summary>
+    public const string ParametersInvalid = "parameters-invalid";
+
     /// <summary>The form field the code belongs to, or <see langword="null"/> for an unknown code.</summary>
     public static string? FieldFor(string? code) => code switch
     {
         NameRequired or NameTooLong or NameInvalid or NameDuplicate => ProjectFields.Name,
+        KindInvalid => ProjectFields.Kind,
         RepositoryUrlRequired or RepositoryUrlTooLong or RepositoryUrlInvalid => ProjectFields.RepositoryUrl,
         DefaultBranchRequired or DefaultBranchInvalid => ProjectFields.DefaultBranch,
         PipelinePathTooLong or PipelinePathInvalid => ProjectFields.PipelinePath,
+        StepsInvalid or StepsMissing => ProjectFields.Steps,
+        ParametersInvalid => ProjectFields.Parameters,
         _ => null,
     };
 
@@ -53,6 +72,7 @@ public static class ProjectErrorCodes
         NameTooLong => $"The project name must be at most {ProjectValidation.MaxNameLength} characters.",
         NameInvalid => "The project name contains characters that are not allowed.",
         NameDuplicate => "A project with this name already exists in this organization.",
+        KindInvalid => "The project kind is not one of the known kinds.",
         RepositoryUrlRequired => "Enter the Git repository URL.",
         RepositoryUrlTooLong => $"The repository URL must be at most {ProjectValidation.MaxRepositoryUrlLength} characters.",
         RepositoryUrlInvalid =>
@@ -64,6 +84,12 @@ public static class ProjectErrorCodes
         PipelinePathInvalid =>
             "Enter a relative path inside the repository (for example pipeline.lua). "
             + "Absolute paths, backslashes and '..' are rejected.",
+        StepsInvalid =>
+            "The step list was refused - check every step's name and script, then try again.",
+        StepsMissing =>
+            "This Freestyle project has no steps yet: save the steps before triggering a run.",
+        ParametersInvalid =>
+            "The parameter list was refused - check every parameter's name, type and choices.",
         _ => null,
     };
 }
@@ -114,6 +140,23 @@ public static class ProjectValidation
         }
 
         return normalized.Any(char.IsControl) ? ProjectErrorCodes.NameInvalid : null;
+    }
+
+    /// <summary>
+    /// Validates the kind selector (card F-020). Blank means <see cref="ProjectKinds.Pipeline"/> -
+    /// the historical default, so an existing client that posts no kind keeps the F-003 behaviour -
+    /// and anything that is not a known kind is refused rather than coerced.
+    /// </summary>
+    public static string? ValidateKind(string? value, out string kind)
+    {
+        kind = value?.Trim() ?? string.Empty;
+        if (kind.Length == 0)
+        {
+            kind = ProjectKinds.Pipeline;
+            return null;
+        }
+
+        return ProjectKinds.IsValid(kind) ? null : ProjectErrorCodes.KindInvalid;
     }
 
     /// <summary>

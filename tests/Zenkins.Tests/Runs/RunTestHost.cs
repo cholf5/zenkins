@@ -186,18 +186,30 @@ public sealed class RunTestHost : IDisposable
         Guid projectId,
         string? branch = null,
         string? requiredTags = null,
-        string? timeoutMinutes = null) =>
-        OrganizationTestHost.PostFormAsync(
+        string? timeoutMinutes = null,
+        IReadOnlyDictionary<string, string>? parameters = null)
+    {
+        var form = new Dictionary<string, string>
+        {
+            // F-014: a run selects a branch, never a command line. Blank means the project default.
+            ["Branch"] = branch ?? string.Empty,
+            ["RequiredTags"] = requiredTags ?? string.Empty,
+            ["TimeoutMinutes"] = timeoutMinutes ?? string.Empty,
+        };
+
+        // F-021: the parameter inputs the project's definitions render, keyed the way the page names
+        // them. A hand-built dictionary here is the same shape the browser posts.
+        foreach (var (name, value) in parameters ?? new Dictionary<string, string>())
+        {
+            form[$"Parameters[{name}]"] = value;
+        }
+
+        return OrganizationTestHost.PostFormAsync(
             client,
             $"/projects/{projectId}",
             $"/projects/{projectId}/runs/start",
-            new Dictionary<string, string>
-            {
-                // F-014: a run selects a branch, never a command line. Blank means the project default.
-                ["Branch"] = branch ?? string.Empty,
-                ["RequiredTags"] = requiredTags ?? string.Empty,
-                ["TimeoutMinutes"] = timeoutMinutes ?? string.Empty,
-            });
+            form);
+    }
 
     /// <summary>Triggers a run through the real form and returns the new run's id (asserts PRG).</summary>
     public static async Task<Guid> TriggerRunAsync(
@@ -205,9 +217,10 @@ public sealed class RunTestHost : IDisposable
         Guid projectId,
         string? branch = null,
         string? requiredTags = null,
-        string? timeoutMinutes = null)
+        string? timeoutMinutes = null,
+        IReadOnlyDictionary<string, string>? parameters = null)
     {
-        var response = await StartRunAsync(client, projectId, branch, requiredTags, timeoutMinutes);
+        var response = await StartRunAsync(client, projectId, branch, requiredTags, timeoutMinutes, parameters);
         Assert.True((int)response.StatusCode is 302 or 303,
             $"Expected a redirect, got {(int)response.StatusCode}.");
         var location = response.Headers.Location!.OriginalString;

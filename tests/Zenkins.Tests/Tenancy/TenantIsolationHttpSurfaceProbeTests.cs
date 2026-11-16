@@ -77,6 +77,7 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
                      $"/projects/{TwoOrgsFixture.ProjectBId}",
                      $"/projects/{TwoOrgsFixture.ProjectBId}/runs",
                      $"/projects/{TwoOrgsFixture.ProjectBId}/pipelines",
+                     $"/projects/{TwoOrgsFixture.ProjectBId}/parameters",
                      $"/projects/{TwoOrgsFixture.ProjectBId}/settings",
                      $"/projects/{TwoOrgsFixture.ProjectBId}/edit",
                      $"/projects/{TwoOrgsFixture.ProjectBId}/delete/confirm",

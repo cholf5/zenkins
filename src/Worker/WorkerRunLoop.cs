@@ -327,6 +327,38 @@ public sealed class WorkerRunLoop(
     /// path did.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The server-provided run environment (F-007) plus the run's resolved build parameters (F-021).
+    /// One layer, so one precedence story: the trigger's values win over anything a step declares,
+    /// exactly like the <c>ZENKINS_*</c> metadata beside them.
+    /// </summary>
+    private static Dictionary<string, string?> BuildRunEnvironment(
+        WorkerClaimResponse claim,
+        string workerName)
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        if (claim.Parameters is { } parameters)
+        {
+            foreach (var (name, value) in parameters)
+            {
+                if (name.Length > 0)
+                {
+                    environment[name] = value;
+                }
+            }
+        }
+
+        // The metadata is written last: it is the server's own record of this run, so a parameter that
+        // happens to be named ZENKINS_RUN_ID (or another reserved name) cannot make a step read a
+        // different run id, project id or worker name than the claim describes (F-021).
+        environment["ZENKINS_RUN_ID"] = claim.RunId.ToString();
+        environment["ZENKINS_WORKER_NAME"] = workerName;
+        environment["ZENKINS_PROJECT_ID"] = claim.ProjectId.ToString();
+
+        return environment;
+    }
+
     private async Task<RunExecutionResult> ExecutePipelineAsync(
         WorkerClaimResponse claim,
         RunWorkDirectory work,
@@ -395,17 +427,20 @@ public sealed class WorkerRunLoop(
 
                 // F-017 (review M1): a webhook run names the commit to build; a manual run does not.
                 ExpectedCommit = claim.Commit,
+
+                // F-020: a non-null spec makes this run Freestyle - the worker skips the clone and
+                // the definition phase and executes exactly what the server froze at trigger time.
+                PipelineSpecJson = claim.PipelineSpecJson,
+
                 Deadline = deadline,
                 GitDepth = configuration.GitDepth,
                 KnownHostsPath = configuration.GitKnownHostsPath,
                 GitOperationTimeout = configuration.GitOperationTimeout
                     ?? WorkerConfiguration.DefaultGitOperationTimeout,
-                StepEnvironment = new Dictionary<string, string?>
-                {
-                    ["ZENKINS_RUN_ID"] = claim.RunId.ToString(),
-                    ["ZENKINS_WORKER_NAME"] = configuration.WorkerName,
-                    ["ZENKINS_PROJECT_ID"] = claim.ProjectId.ToString(),
-                },
+                // F-021: the run's resolved build-parameter values join this same server-provided
+                // layer (the highest precedence below nothing), so every step of both kinds reads
+                // them by name and a step's own env can never override what the trigger froze.
+                StepEnvironment = BuildRunEnvironment(claim, configuration.WorkerName),
                 Log = Emit,
                 OnProcessOutput = OnOutput,
 
@@ -421,13 +456,15 @@ public sealed class WorkerRunLoop(
                 CancellationFailureReason = () => StepCancellationReason.For(
                     cancelRequested.IsCompletedSuccessfully ? cancelRequested.Result.Reason : null),
 
-                // F-016: the artifact publisher for this run. The source root is the checkout only, the caps
-                // come from the same configuration keys the server reads (a console app reads them as
-                // Artifacts__MaxFileBytes), and the run's kill token bounds each upload.
+                // F-016: the artifact publisher for this run. The source root is the checkout (a
+                // Pipeline run) or the Freestyle run's workspace (F-020) - wherever this run's steps
+                // execute - and the caps come from the same configuration keys the server reads (a
+                // console app reads them as Artifacts__MaxFileBytes). The run's kill token bounds each
+                // upload.
                 Artifacts = new Zenkins.Worker.Artifacts.ArtifactPublisher(
                     new Zenkins.Worker.Artifacts.ArtifactUploadClient(api, workerToken),
                     claim.RunId,
-                    work.RepositoryPath,
+                    claim.PipelineSpecJson is not null ? work.WorkspacePath : work.RepositoryPath,
                     work.RootPath,
                     Zenkins.Shared.Artifacts.ArtifactLimits.FromConfiguration(
                         key => Environment.GetEnvironmentVariable(key.Replace(":", "__", StringComparison.Ordinal))),

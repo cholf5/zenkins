@@ -1,15 +1,17 @@
 @page "/projects/{ProjectId:guid}/pipelines"
 @attribute [Authorize]
 @using Zenkins.Shared.Pipelines
+@using Zenkins.Shared.Projects
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
 @inject RunService RunsService
 
-@* D-003: the Pipelines tab, read-only by decision. It answers "what does this project actually run":
-   the pipeline file from settings, and - when any run exists - the frozen spec of the newest run
-   (F-014) with its step names in order. Editing pipeline content belongs to the repository; a
-   pipeline editor is not in v0.9. *@
-<PageTitle>Pipelines · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+@* D-003: the definition tab, read-only by decision for a Pipeline project - it answers "what does
+   this project actually run": the pipeline file from settings, and - when any run exists - the
+   frozen spec of the newest run (F-014) with its step names in order. Editing pipeline content
+   belongs to the repository. A Freestyle project (F-020) is the other half: its definition lives on
+   the server, so this same route renders the steps editor instead. *@
+<PageTitle>@(_project is { } project && project.Kind == ProjectKinds.Freestyle ? "Steps" : "Pipelines") · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
     @if (_project is null)
@@ -17,6 +19,41 @@
         @* Foreign tenant id == missing id: the service reads through the tenant filter and the
            response is a real 404 (same pattern as the other project tabs). *@
         <NotFoundPage />
+    }
+    else if (_project.Kind == ProjectKinds.Freestyle)
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">Steps · @_project.Name</BbCardTitle>
+                <BbBadge Variant="BadgeVariant.Outline">Freestyle</BbBadge>
+            </div>
+        </div>
+
+        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" Kind="@_project.Kind" />
+
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Steps</BbCardTitle>
+                <BbCardDescription>
+                    The steps this project runs, in order. Every step is a script the claiming worker
+                    executes in the run's workspace - no repository, no clone. Saving freezes this
+                    list onto the project; a run carries the snapshot it was triggered with, so
+                    editing here never moves a queued or running run.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <FreestyleStepsEditor Action="@($"/projects/{_project.Id}/freestyle/steps")"
+                                      Steps="@(_savedSteps ?? [])"
+                                      ErrorCode="@ErrorCode" />
+            </BbCardContent>
+        </BbCard>
     }
     else
     {
@@ -132,8 +169,22 @@
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    /// <summary>The steps save's PRG outcome (F-020), on the route that owns the editor.</summary>
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        "steps-saved" => "The steps were saved; the next run carries this snapshot.",
+        _ => null,
+    };
+
     private ProjectView? _project;
     private RunView? _newestRun;
+    private IReadOnlyList<PipelineStep>? _savedSteps;
 
     protected override async Task OnInitializedAsync()
     {
@@ -152,9 +203,29 @@
             return;
         }
 
+        // F-020: a Freestyle project's saved steps render as the editor's starting rows. The saved
+        // JSON is the envelope-checked spec, so the parse here only fails on a corrupted row - the
+        // editor then renders empty rather than guessing.
+        if (_project.Kind == ProjectKinds.Freestyle)
+        {
+            _savedSteps = LoadSavedSteps(_project.FreestyleSpecJson);
+        }
+
         // The same read the Runs tab uses (newest first), so "newest" means the same run everywhere.
         var runs = await RunsService.GetProjectRunsAsync(ProjectId);
         _newestRun = runs.Count > 0 ? runs[0] : null;
+    }
+
+    private static IReadOnlyList<PipelineStep> LoadSavedSteps(string? specJson)
+    {
+        if (specJson is not { } saved
+            || !PipelineSpecJson.TryRead(saved, out var spec, out _)
+            || spec is null)
+        {
+            return [];
+        }
+
+        return spec.Steps;
     }
 
     private void SetNotFound()

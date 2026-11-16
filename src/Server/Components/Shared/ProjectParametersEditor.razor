@@ -1,0 +1,174 @@
+@using Zenkins.Shared.Projects
+@* Card F-021's parameters editor. The same pattern as the Freestyle steps editor: a plain HTML form
+   posting the drafts as one JSON field to the real endpoint (antiforgery, no circuit needed), with
+   js/parameter-rows.js owning the dynamic rows. The server - never the browser - validates every
+   rule (names, types, choices, bounds) and stores the definitions the trigger form renders. *@
+<form method="post" action="@Action" data-zenkins-antiforgery data-parameter-rows-form>
+    <input type="hidden" name="ParametersJson" id="parameters-json" />
+
+    @if (ErrorCode is not null)
+    {
+        <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+            <p>@(ProjectErrorCodes.MessageFor(ErrorCode) ?? "The parameter list was refused.")</p>
+        </div>
+    }
+
+    <ol data-parameter-rows-list class="bb:space-y-4">
+        @for (var parameterIndex = 0; parameterIndex < Parameters.Count; parameterIndex++)
+        {
+            var parameter = Parameters[parameterIndex];
+            <li data-parameter-row class="bb:rounded-md bb:border bb:border-input bb:p-4">
+                <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
+                    <span class="bb:text-sm bb:font-medium">
+                        Parameter <span data-parameter-row-index>@(parameterIndex + 1)</span>
+                    </span>
+                    <button type="button" data-parameter-action="remove"
+                            class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
+                            aria-label="Remove parameter @(parameterIndex + 1)">Remove</button>
+                </div>
+                <div class="bb:grid bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
+                    <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-name-@(parameterIndex)">Name (env variable)</label>
+                        <input data-parameter-field="name"
+                               id="param-name-@(parameterIndex)"
+                               value="@parameter.Name"
+                               maxlength="64"
+                               autocomplete="off"
+                               spellcheck="false"
+                               placeholder="NUGET_TOKEN"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:font-mono" />
+                    </div>
+                    <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-type-@(parameterIndex)">Type</label>
+                        <select data-parameter-field="type"
+                                id="param-type-@(parameterIndex)"
+                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
+                            @foreach (var type in ProjectParameterTypes.All)
+                            {
+                                <option value="@type" selected="@(parameter.Type == type)">@type</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-default-@(parameterIndex)">
+                            Default (blank = the type's neutral default)
+                        </label>
+                        <input data-parameter-field="default"
+                               id="param-default-@(parameterIndex)"
+                               value="@parameter.DefaultValue"
+                               autocomplete="off"
+                               spellcheck="false"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                    </div>
+                    <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-choices-@(parameterIndex)">
+                            Choices (comma-separated; choice parameters only)
+                        </label>
+                        <input data-parameter-field="choices"
+                               id="param-choices-@(parameterIndex)"
+                               value="@string.Join(", ", parameter.Choices ?? [])"
+                               autocomplete="off"
+                               spellcheck="false"
+                               placeholder="debug, release"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                    </div>
+                    <div class="bb:sm:col-span-2">
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-description-@(parameterIndex)">
+                            Description (shown on the trigger form)
+                        </label>
+                        <input data-parameter-field="description"
+                               id="param-description-@(parameterIndex)"
+                               value="@parameter.Description"
+                               maxlength="200"
+                               autocomplete="off"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                    </div>
+                </div>
+            </li>
+        }
+    </ol>
+
+    <template id="parameter-row-template">
+        <li data-parameter-row class="bb:rounded-md bb:border bb:border-input bb:p-4">
+            <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
+                <span class="bb:text-sm bb:font-medium">
+                    Parameter <span data-parameter-row-index></span>
+                </span>
+                <button type="button" data-parameter-action="remove"
+                        class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
+                        aria-label="Remove parameter">Remove</button>
+            </div>
+            <div class="bb:grid bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="name">Name (env variable)</label>
+                    <input data-parameter-field="name"
+                           maxlength="64"
+                           autocomplete="off"
+                           spellcheck="false"
+                           placeholder="NUGET_TOKEN"
+                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:font-mono" />
+                </div>
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="type">Type</label>
+                    <select data-parameter-field="type"
+                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
+                        @foreach (var type in ProjectParameterTypes.All)
+                        {
+                            <option value="@type">@type</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="default">
+                        Default (blank = the type's neutral default)
+                    </label>
+                    <input data-parameter-field="default"
+                           autocomplete="off"
+                           spellcheck="false"
+                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                </div>
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="choices">
+                        Choices (comma-separated; choice parameters only)
+                    </label>
+                    <input data-parameter-field="choices"
+                           autocomplete="off"
+                           spellcheck="false"
+                           placeholder="debug, release"
+                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                </div>
+                <div class="bb:sm:col-span-2">
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="description">
+                        Description (shown on the trigger form)
+                    </label>
+                    <input data-parameter-field="description"
+                           maxlength="200"
+                           autocomplete="off"
+                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                </div>
+            </div>
+        </li>
+    </template>
+
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <button type="button" data-parameter-action="add"
+                class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-2 bb:text-sm">
+            Add parameter
+        </button>
+        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save parameters</BbButton>
+    </div>
+</form>
+
+@code {
+    /// <summary>POST target of the form (the project's parameters endpoint).</summary>
+    [Parameter, EditorRequired]
+    public string Action { get; set; } = string.Empty;
+
+    /// <summary>The saved definitions, in order; an empty list renders no rows.</summary>
+    [Parameter]
+    public IReadOnlyList<ProjectParameter> Parameters { get; set; } = [];
+
+    /// <summary>The stable validation code from the redirect query, if any.</summary>
+    [Parameter]
+    public string? ErrorCode { get; set; }
+}

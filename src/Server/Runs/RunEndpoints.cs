@@ -145,11 +145,13 @@ public static class RunEndpoints
             _ => Results.Json(new RunClaimResponse(
                 result.RunId!.Value,
                 result.ProjectId!.Value,
-                result.RepositoryUrl!,
+                result.RepositoryUrl,
                 result.Branch!,
                 result.Commit,
                 result.PipelinePath!,
-                result.LeaseExpiresAt!.Value)),
+                result.LeaseExpiresAt!.Value,
+                result.PipelineSpecJson,
+                result.Parameters)),
         };
     }
 
@@ -298,7 +300,14 @@ public static class RunEndpoints
         /// <summary>Optional per-run timeout override in minutes (blank = the server default).</summary>
         public string? TimeoutMinutes { get; set; }
 
-        public RunTriggerInput ToInput() => new(Branch, RequiredTags, TimeoutMinutes);
+        /// <summary>
+        /// F-021: the trigger's build-parameter values, bound from the dynamic inputs the project's
+        /// definitions render (keys <c>Parameters[NAME]</c>). Absent entries resolve to defaults;
+        /// unknown names are refused by the service.
+        /// </summary>
+        public Dictionary<string, string>? Parameters { get; set; }
+
+        public RunTriggerInput ToInput() => new(Branch, RequiredTags, TimeoutMinutes, Parameters);
     }
 
     /// <summary>Empty form binding: the parameter makes the cancel POST form-bound (antiforgery).</summary>
@@ -370,11 +379,22 @@ public static class RunEndpoints
     public sealed record RunClaimResponse(
         Guid RunId,
         Guid ProjectId,
-        string RepositoryUrl,
+
+        // Nullable since F-020: a Freestyle run has no repository - the Worker skips the clone and
+        // executes the frozen spec the claim carries instead.
+        string? RepositoryUrl,
         string Branch,
         string? Commit,
         string PipelinePath,
-        DateTimeOffset LeaseExpiresAt);
+        DateTimeOffset LeaseExpiresAt,
+
+        // F-020: the Freestyle run's frozen spec, snapshotted at trigger time. Null for a Pipeline run,
+        // whose spec comes from the Worker's definition phase.
+        string? PipelineSpecJson = null,
+
+        // F-021: the run's resolved build-parameter values (name → value). Null when the project
+        // declares no parameters; the worker injects them into the server-provided env layer.
+        IReadOnlyDictionary<string, string>? Parameters = null);
 
     /// <param name="DeadlineAt">F-014: the accepted answer carries the run's frozen deadline.</param>
     public sealed record RunReportResponse(string Status, DateTimeOffset? DeadlineAt = null);

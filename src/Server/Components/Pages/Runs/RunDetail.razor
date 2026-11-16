@@ -85,21 +85,28 @@
             <BbCardHeader>
                 <BbCardTitle As="h2">Pipeline</BbCardTitle>
                 <BbCardDescription>
-                    The branch and pipeline file this run executed, the exact commit the worker
-                    resolved, and the frozen step list it ran. @*F-014*@ The steps come from the
-                    spec the worker validated before the first one started, so a later commit never
-                    changes what this run shows.
+                    @*F-020*@ A Freestyle run has no branch, pipeline file or commit - the card says
+                    what it executed and where its steps came from. A Pipeline run's card is the
+                    branch and pipeline file this run executed, the exact commit the worker resolved,
+                    and the frozen step list it ran. The steps come from the spec frozen before the
+                    first one started, so a later commit never changes what this run shows.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branch</dt>
-                        <dd id="run-branch" class="bb:break-all">@_run.GitBranch</dd>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Source</dt>
+                        <dd id="run-branch" class="bb:break-all">
+                            @(_run.Pipeline is not null && string.IsNullOrEmpty(_run.GitBranch)
+                                ? "Freestyle steps, frozen at trigger time"
+                                : _run.GitBranch)
+                        </dd>
                     </div>
                     <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
-                        <dd id="run-pipeline-path" class="bb:break-all">@_run.PipelinePath</dd>
+                        <dd id="run-pipeline-path" class="bb:break-all">
+                            @(_run.PipelinePath.Length == 0 ? "-" : _run.PipelinePath)
+                        </dd>
                     </div>
                     <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Git commit</dt>
@@ -201,6 +208,33 @@
                 }
             </BbCardContent>
         </BbCard>
+
+        @* F-021: what this run was triggered with. Values are the run's own snapshot - editing the
+           project's definitions now never changes this card - and they are deliberately visible:
+           parameters are configuration, not secrets. *@
+        @if (_run.Parameters is { Count: > 0 } parameters)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Build parameters</BbCardTitle>
+                    <BbCardDescription>
+                        The values this run was triggered with, frozen at trigger time. Every step read
+                        them as environment variables under these names.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl id="run-parameters" class="bb:grid bb:grid-cols-1 bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
+                        @foreach (var (name, value) in parameters.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                        {
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@name</dt>
+                                <dd id="@($"run-parameter-{name}")" class="bb:whitespace-pre-wrap bb:break-all bb:font-mono">@(value.Length == 0 ? "(empty)" : value)</dd>
+                            </div>
+                        }
+                    </dl>
+                </BbCardContent>
+            </BbCard>
+        }
 
         <BbCard>
             <BbCardHeader>

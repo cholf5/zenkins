@@ -3,6 +3,7 @@ using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.Projects;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Projects;
@@ -27,21 +28,34 @@ public sealed record ProjectFieldError(string Field, string Code);
 
 /// <summary>
 /// A project as the pages display it. A record instead of the tracked entity keeps the UI from
-/// holding a row whose <c>ZenkinsDbContext</c> has already been disposed.
+/// holding a row whose <c>ZenkinsDbContext</c> has already been disposed. The repository fields are
+/// nullable since F-020 - a Freestyle project has none - and the pages decide what to show per kind.
 /// </summary>
 public sealed record ProjectView(
     Guid Id,
     string Name,
-    string RepositoryUrl,
-    string DefaultBranch,
-    string PipelinePath,
+    string Kind,
+    string? RepositoryUrl,
+    string? DefaultBranch,
+    string? PipelinePath,
     Guid? GitCredentialId,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
 
-/// <summary>The raw form values, before trimming and validation.</summary>
+    /// <summary>F-020: the Freestyle project's frozen step spec (the steps editor's starting rows).
+    /// <see langword="null"/> for Pipeline projects and for a Freestyle project with no saved steps.</summary>
+    string? FreestyleSpecJson = null,
+
+    /// <summary>F-021: the project's parameter definitions (the editor's rows and the trigger
+    /// form's inputs); <see langword="null"/> when the project declares none.</summary>
+    string? ParametersJson = null);
+
+/// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
+/// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
+/// project into a Freestyle one (or back) and strand its runs' semantics.</summary>
 public sealed record ProjectInput(
     string? Name,
+    string? Kind,
     string? RepositoryUrl,
     string? DefaultBranch,
     string? PipelinePath);
@@ -149,7 +163,14 @@ public sealed class ProjectService(
             return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
         }
 
-        var errors = Validate(input, out var name, out var repositoryUrl, out var branch, out var pipelinePath);
+        var errors = new List<ProjectFieldError>();
+        var kindError = ProjectValidation.ValidateKind(input.Kind, out var kind);
+        if (kindError is not null)
+        {
+            errors.Add(new ProjectFieldError(ProjectFields.Kind, kindError));
+        }
+
+        errors.AddRange(Validate(input, kind, out var name, out var repositoryUrl, out var branch, out var pipelinePath));
         if (errors.Count > 0)
         {
             return ProjectMutationResult.Invalid([.. errors]);
@@ -160,6 +181,7 @@ public sealed class ProjectService(
             // The tenant comes from the active request; the data layer rejects anything else.
             OrganizationId = activeOrganizationId.Value,
             Name = name,
+            Kind = kind,
             RepositoryUrl = repositoryUrl,
             DefaultBranch = branch,
             PipelinePath = pipelinePath,
@@ -217,16 +239,22 @@ public sealed class ProjectService(
             return ProjectMutationResult.NotFound();
         }
 
-        var errors = Validate(input, out var name, out var repositoryUrl, out var branch, out var pipelinePath);
+        // The kind is immutable after create (F-020): the edit validates the repository fields against
+        // the project's existing kind and never rewrites it, so a kind swap cannot strand the
+        // run semantics a queued run already snapshotted.
+        var errors = Validate(input, project.Kind, out var name, out var repositoryUrl, out var branch, out var pipelinePath);
         if (errors.Count > 0)
         {
             return ProjectMutationResult.Invalid([.. errors]);
         }
 
         project.Name = name;
-        project.RepositoryUrl = repositoryUrl;
-        project.DefaultBranch = branch;
-        project.PipelinePath = pipelinePath;
+        if (project.Kind == ProjectKinds.Pipeline)
+        {
+            project.RepositoryUrl = repositoryUrl;
+            project.DefaultBranch = branch;
+            project.PipelinePath = pipelinePath;
+        }
 
         try
         {
@@ -295,12 +323,141 @@ public sealed class ProjectService(
         return ProjectMutationResult.Success(project.Id);
     }
 
+    /// <summary>
+    /// Saves the steps editor's drafts as the Freestyle project's frozen spec (card F-020). Members may
+    /// edit, like every other project field. The kind must already be Freestyle (a Pipeline project's
+    /// steps come from its repository, so there is nothing here to save), and the drafts become the
+    /// stored JSON only after <see cref="FreestyleSteps.BuildSpecJson"/> has built and envelope-checked
+    /// the spec - the stored value is exactly what a run will execute.
+    /// </summary>
+    public async Task<ProjectMutationResult> SaveFreestyleStepsAsync(
+        string actingUserId,
+        Guid projectId,
+        FreestyleStepsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to edit.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return ProjectMutationResult.NotFound();
+        }
+
+        if (project.Kind != ProjectKinds.Freestyle)
+        {
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectFields.Steps, ProjectErrorCodes.StepsInvalid));
+        }
+
+        var specJson = FreestyleSteps.BuildSpecJson(project.Name, input, out var error);
+        if (specJson is null)
+        {
+            // The specific reason went to the log; the page's redirect carries the stable code.
+            logger.LogInformation(
+                "Freestyle steps refused. OrganizationId={OrganizationId} ProjectId={ProjectId} Reason={Reason}",
+                activeOrganizationId,
+                project.Id,
+                error);
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectFields.Steps, ProjectErrorCodes.StepsInvalid));
+        }
+
+        project.FreestyleSpecJson = specJson;
+
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Freestyle steps saved. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId}",
+            activeOrganizationId,
+            project.Id,
+            actingUserId);
+        return ProjectMutationResult.Success(project.Id);
+    }
+
+    /// <summary>
+    /// Saves the parameters editor's drafts as the project's parameter definitions (card F-021).
+    /// Members may edit, like every other project field; both kinds can declare parameters. The
+    /// drafts become the stored JSON only after <see cref="ProjectParameters.BuildDefinitionsJson"/>
+    /// has validated them - an empty list clears the definitions.
+    /// </summary>
+    public async Task<ProjectMutationResult> SaveParametersAsync(
+        string actingUserId,
+        Guid projectId,
+        ProjectParametersInput input,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to edit.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return ProjectMutationResult.NotFound();
+        }
+
+        var definitionsJson = ProjectParameters.BuildDefinitionsJson(input, out var error);
+        if (definitionsJson is null && error is not null)
+        {
+            logger.LogInformation(
+                "Project parameters refused. OrganizationId={OrganizationId} ProjectId={ProjectId} Reason={Reason}",
+                activeOrganizationId,
+                project.Id,
+                error);
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectFields.Parameters, ProjectErrorCodes.ParametersInvalid));
+        }
+
+        project.ParametersJson = definitionsJson;
+
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Project parameters saved. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId}",
+            activeOrganizationId,
+            project.Id,
+            actingUserId);
+        return ProjectMutationResult.Success(project.Id);
+    }
+
     private static List<ProjectFieldError> Validate(
         ProjectInput input,
+        string kind,
         out string name,
-        out string repositoryUrl,
-        out string branch,
-        out string pipelinePath)
+        out string? repositoryUrl,
+        out string? branch,
+        out string? pipelinePath)
     {
         var errors = new List<ProjectFieldError>();
 
@@ -310,24 +467,37 @@ public sealed class ProjectService(
             errors.Add(new ProjectFieldError(ProjectFields.Name, nameError));
         }
 
-        var repositoryUrlError = ProjectValidation.ValidateRepositoryUrl(input.RepositoryUrl, out repositoryUrl);
+        if (kind == ProjectKinds.Freestyle)
+        {
+            // F-020: a Freestyle project has no repository, no default branch and no pipeline path -
+            // the three F-003 fields do not exist for it, so their absence is not an error.
+            repositoryUrl = null;
+            branch = null;
+            pipelinePath = null;
+            return errors;
+        }
+
+        var repositoryUrlError = ProjectValidation.ValidateRepositoryUrl(input.RepositoryUrl, out var normalizedUrl);
         if (repositoryUrlError is not null)
         {
             errors.Add(new ProjectFieldError(ProjectFields.RepositoryUrl, repositoryUrlError));
         }
 
-        var branchError = ProjectValidation.ValidateDefaultBranch(input.DefaultBranch, out branch);
+        var branchError = ProjectValidation.ValidateDefaultBranch(input.DefaultBranch, out var normalizedBranch);
         if (branchError is not null)
         {
             errors.Add(new ProjectFieldError(ProjectFields.DefaultBranch, branchError));
         }
 
-        var pipelinePathError = ProjectValidation.ValidatePipelinePath(input.PipelinePath, out pipelinePath);
+        var pipelinePathError = ProjectValidation.ValidatePipelinePath(input.PipelinePath, out var normalizedPath);
         if (pipelinePathError is not null)
         {
             errors.Add(new ProjectFieldError(ProjectFields.PipelinePath, pipelinePathError));
         }
 
+        repositoryUrl = normalizedUrl;
+        branch = normalizedBranch;
+        pipelinePath = normalizedPath;
         return errors;
     }
 
@@ -355,10 +525,13 @@ public sealed class ProjectService(
     private static ProjectView ToView(Project project) => new(
         project.Id,
         project.Name,
+        project.Kind,
         project.RepositoryUrl,
         project.DefaultBranch,
         project.PipelinePath,
         project.GitCredentialId,
         project.CreatedAt,
-        project.UpdatedAt);
+        project.UpdatedAt,
+        project.FreestyleSpecJson,
+        project.ParametersJson);
 }

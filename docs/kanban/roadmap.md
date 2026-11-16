@@ -129,6 +129,23 @@ Candidate tasks:
   in that card's development log); turn the invariants into machine-checked assertions. No card yet
   — open one when this becomes near-term work.
 
+### v1.1 — Job flexibility
+
+Goal:
+- The Jenkins-shaped job model lands beside the SCM-centric one: a project can be a **Freestyle** job
+  (no repository, steps configured in the UI as shell scripts, every run executing the snapshot it
+  was triggered with) and a job can declare **build parameters** the trigger form fills in and every
+  step's environment receives. The Pipeline kind (repository + `pipeline.lua`) is unchanged; both
+  kinds share the frozen-spec execution contract, so scheduling, logs, secrets and artifacts do too.
+
+Candidate tasks:
+- Freestyle job kind: kind column + nullable repository fields, server-frozen spec on the run, script
+  steps (schema v2) executed from a per-step file by the platform shell, steps editor, workspace
+  working directory, webhook/credential guards. → `F-020`
+- Parameterized builds: parameter definitions on the project (string/text/boolean/choice), values
+  snapshotted onto the run at trigger time, injected as environment variables into every step of both
+  kinds; dynamic trigger form; webhook and other headless triggers resolve defaults. → `F-021`
+
 ## Parking Lot
 
 Future ideas that are not yet committed:

@@ -12,6 +12,8 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
+| [F-020](issues/f-020-freestyle-job-kind.md) | Freestyle job kind: repository-free projects with server-configured script steps | P1 | L | | none |
+| [F-021](issues/f-021-parameterized-builds.md) | Parameterized builds: project definitions, trigger values and a frozen run snapshot (both kinds) | P1 | M | | F-020 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | M | | D-001 |
 | [B-003](issues/b-003-dashboard-ceiling-count-interference.md) | Dashboard ceiling tests share one fixture and both seed 200 runs — the count assertion sees 401 | P2 | S | | none |
 

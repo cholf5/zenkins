@@ -1,4 +1,5 @@
 @using System.Globalization
+@using Zenkins.Shared.Projects
 @* D-003: the one tab strip for a project's four routed tabs. The tabs are links, never client
    state: every tab is a real route, so a deep link, a reload and back/forward all work, and the
    same strip renders on every tab page (the active entry is derived from the route). *@
@@ -14,7 +15,7 @@
                          class="bb:block bb:border-b-2 bb:border-transparent bb:pb-2 bb:font-medium bb:text-muted-foreground bb:hover:text-foreground"
                          Match="NavLinkMatch.All"
                          aria-current="@AriaCurrent(tab.Name)">
-                    @tab.Label
+                    @LabelFor(tab)
                 </NavLink>
             </li>
         }
@@ -30,15 +31,27 @@
     [Parameter, EditorRequired]
     public string Active { get; set; } = "overview";
 
+    /// <summary>
+    /// The project's kind (card F-020): a Freestyle project's definition tab is the server-side steps
+    /// editor, so its label reads "Steps" where a Pipeline project reads "Pipelines". The routes and
+    /// the strip are identical for both kinds - only the label follows the kind.
+    /// </summary>
+    [Parameter]
+    public string Kind { get; set; } = ProjectKinds.Pipeline;
+
     private sealed record ProjectTab(string Name, string Label, string PathFormat);
 
     private IReadOnlyList<ProjectTab> Tabs { get; } =
     [
         new("overview", "Overview", "/projects/{0}"),
         new("pipelines", "Pipelines", "/projects/{0}/pipelines"),
+        new("parameters", "Parameters", "/projects/{0}/parameters"),
         new("runs", "Runs", "/projects/{0}/runs"),
         new("settings", "Settings", "/projects/{0}/settings"),
     ];
+
+    private string LabelFor(ProjectTab tab) =>
+        tab.Name == "pipelines" && Kind == ProjectKinds.Freestyle ? "Steps" : tab.Label;
 
     private string? AriaCurrent(string name) =>
         string.Equals(name, Active, StringComparison.Ordinal) ? "page" : null;

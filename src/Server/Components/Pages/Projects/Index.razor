@@ -1,5 +1,6 @@
 @page "/projects"
 @attribute [Authorize]
+@using Zenkins.Shared.Projects
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
 
@@ -61,11 +62,22 @@
                                     <p class="bb:font-medium">
                                         <a href="/projects/@project.Id" class="bb:underline bb:underline-offset-4">@project.Name</a>
                                     </p>
-                                    <p class="bb:truncate bb:text-xs bb:text-muted-foreground">@project.RepositoryUrl</p>
+                                    @* F-020: a Freestyle project has no repository - the secondary line
+                                       says so instead of rendering an empty string. *@
+                                    <p class="bb:truncate bb:text-xs bb:text-muted-foreground">
+                                        @(project.RepositoryUrl ?? "Freestyle project - steps configured on the server")
+                                    </p>
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
-                                    <BbBadge Variant="BadgeVariant.Outline">@project.DefaultBranch</BbBadge>
-                                    <span>@project.PipelinePath</span>
+                                    @if (project.Kind == ProjectKinds.Freestyle)
+                                    {
+                                        <BbBadge Variant="BadgeVariant.Secondary">Freestyle</BbBadge>
+                                    }
+                                    else
+                                    {
+                                        <BbBadge Variant="BadgeVariant.Outline">@project.DefaultBranch</BbBadge>
+                                        <span>@project.PipelinePath</span>
+                                    }
                                     <span>Updated @project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
                                 </div>
                             </li>

@@ -103,6 +103,15 @@ public sealed record RunWorkDirectory(
     /// run is a property the credential-secrecy tests rely on.
     /// </summary>
     public string HardeningPath => Path.Combine(RootPath, "hardening");
+
+    /// <summary>
+    /// The run's workspace (card F-020): the working directory a <b>Freestyle</b> run's steps execute
+    /// in and the root its declared artifacts are resolved against. Unlike the trio above it is not
+    /// created by <see cref="WorkDirectoryService.Prepare"/> - a Pipeline run never touches it, so the
+    /// prepared trio stays exactly PRD §3.4.6's; the run loop creates it only when the claim carries a
+    /// frozen spec, and preparation is idempotent like every directory here.
+    /// </summary>
+    public string WorkspacePath => Path.Combine(RootPath, "workspace");
 }
 
 /// <summary>A refused or failed work-directory operation; always safe to log verbatim.</summary>

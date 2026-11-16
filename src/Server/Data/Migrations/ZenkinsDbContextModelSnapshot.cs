@@ -249,6 +249,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ParametersJson")
+                        .HasColumnType("text");
+
                     b.Property<string>("PipelinePath")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -481,9 +484,11 @@ namespace Zenkins.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("DefaultBranch")
-                        .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<string>("FreestyleSpecJson")
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("GitCredentialAssignedAt")
                         .HasColumnType("timestamp with time zone");
@@ -495,6 +500,11 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<Guid?>("GitCredentialId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -503,13 +513,14 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ParametersJson")
+                        .HasColumnType("text");
+
                     b.Property<string>("PipelinePath")
-                        .IsRequired()
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
 
                     b.Property<string>("RepositoryUrl")
-                        .IsRequired()
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
 
@@ -523,7 +534,10 @@ namespace Zenkins.Server.Data.Migrations
                     b.HasIndex("OrganizationId", "Name")
                         .IsUnique();
 
-                    b.ToTable("Projects");
+                    b.ToTable("Projects", t =>
+                        {
+                            t.HasCheckConstraint("CK_Projects_Kind", "\"Kind\" IN ('pipeline', 'freestyle')");
+                        });
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Secret", b =>

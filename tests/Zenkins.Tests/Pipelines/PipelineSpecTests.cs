@@ -240,8 +240,23 @@ public sealed class PipelineSpecTests
     [Fact]
     public void The_envelope_gate_refuses_an_unknown_schema_version()
     {
-        Assert.False(PipelineSpecJson.TryRead(SpecJson(version: 2, steps: StepJson("a")), out _, out var error));
+        // F-020 moved the current schema to v2 (the script step) with v1 still readable; v3 is the
+        // unknown version, refused rather than guessed.
+        Assert.False(PipelineSpecJson.TryRead(SpecJson(version: 3, steps: StepJson("a")), out _, out var error));
         Assert.Contains("pipeline.version", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_v1_spec_still_reads_back_after_the_script_step_arrived()
+    {
+        // Every spec frozen before F-020 is v1 and has no script field; the envelope must keep
+        // accepting them for the historical runs' pages.
+        var json = SpecJson(version: 1, steps: StepJson("a"));
+
+        Assert.True(PipelineSpecJson.TryRead(json, out var read, out var error), error);
+        Assert.NotNull(read);
+        Assert.Equal(1, read!.Version);
+        Assert.Equal(["dotnet", "--info"], read.Steps[0].Run!);
     }
 
     [Fact]
@@ -266,7 +281,75 @@ public sealed class PipelineSpecTests
         var json = SpecJson(version: 1, steps: """{ "name": "a" }""");
 
         Assert.False(PipelineSpecJson.TryRead(json, out _, out var error));
-        Assert.Contains("exactly one of run or shell", error, StringComparison.Ordinal);
+        Assert.Contains("exactly one of run, shell or script", error, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------
+    // The Freestyle script step (card F-020)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void A_script_step_round_trips_through_the_frozen_json()
+    {
+        var spec = new PipelineSpec(
+            PipelineSpecSchema.Version,
+            "Freestyle",
+            [
+                new PipelineStep("Hello", Script: "echo hello"),
+                new PipelineStep(
+                    "Build",
+                    Script: "dotnet build\nif errorlevel 1 exit 1",
+                    Env: new SortedDictionary<string, string>(StringComparer.Ordinal) { ["CONFIG"] = "Release" },
+                    ContinueOnError: true),
+            ]);
+
+        var json = PipelineSpecJson.Serialize(spec);
+
+        Assert.True(PipelineSpecJson.TryRead(json, out var read, out var error), error);
+        Assert.NotNull(read);
+        Assert.Equal(2, read!.Version);
+        Assert.Equal("echo hello", read.Steps[0].Script);
+        Assert.True(read.Steps[0].IsScript);
+        Assert.Empty(read.Steps[0].Argv);
+        Assert.Null(read.Steps[0].Run);
+        Assert.Null(read.Steps[0].Shell);
+        Assert.Equal("dotnet build\nif errorlevel 1 exit 1", read.Steps[1].Script);
+        Assert.True(read.Steps[1].ContinueOnError);
+
+        // Byte-stable, like every frozen spec.
+        Assert.Equal(json, PipelineSpecJson.Serialize(read));
+    }
+
+    [Fact]
+    public void The_envelope_gate_refuses_a_step_with_a_script_and_a_command()
+    {
+        var json = SpecJson(
+            version: 2,
+            steps: """{ "name": "a", "run": [ "dotnet" ], "script": "echo hi" }""");
+
+        Assert.False(PipelineSpecJson.TryRead(json, out _, out var error));
+        Assert.Contains("exactly one of run, shell or script", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_envelope_gate_refuses_an_empty_script()
+    {
+        var json = SpecJson(version: 2, steps: """{ "name": "a", "script": "   " }""");
+
+        Assert.False(PipelineSpecJson.TryRead(json, out _, out var error));
+        Assert.Contains("script must be a non-empty script text", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_envelope_gate_refuses_an_oversized_script()
+    {
+        var json = SpecJson(
+            version: 2,
+            steps: $$"""{ "name": "a", "script": "{{new string('x', PipelineSpecSchema.MaxScriptChars + 1)}}" }""");
+
+        Assert.False(PipelineSpecJson.TryRead(json, out _, out var error));
+        Assert.Contains("at most", error, StringComparison.Ordinal);
+        Assert.Contains("characters", error, StringComparison.Ordinal);
     }
 
     [Fact]
