@@ -16,6 +16,29 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-021](issues/f-021-parameterized-builds.md) | Parameterized builds: project definitions, trigger values and a frozen run snapshot (both kinds) | P1 | M | | F-020 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | M | | D-001 |
 | [B-003](issues/b-003-dashboard-ceiling-count-interference.md) | Dashboard ceiling tests share one fixture and both seed 200 runs — the count assertion sees 401 | P2 | S | | none |
+| [B-004](issues/b-004-windows-shim-facts-skip.md) | Nine shim-observed Git facts skip on Windows — a compiled shim TestAsset would run them there | P3 | M | | none |
+| [I-005](issues/i-005-worker-git-remote-probe.md) | Worker git remote probe: branches and heads without a clone, over the pull model | P1 | M | | none |
+| [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | M | | F-020 |
+| [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | L | | I-005, F-017, F-036 |
+| [F-024](issues/f-024-scheduled-triggers.md) | Scheduled triggers: cron per project, with an honest overlap and miss policy | P1 | M | | F-021, F-029 |
+| [F-027](issues/f-027-api-v1.md) | API v1: organization API tokens, trigger/cancel/read runs without a browser | P1 | M | | F-017 |
+| [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | M | | I-005, F-017 |
+| [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | M | | F-036 |
+| [F-028](issues/f-028-project-enable-disable.md) | Project enable/disable: stop every trigger without deleting history | P2 | S | | none |
+| [F-029](issues/f-029-queue-controls.md) | Queue controls: per-project concurrency, quiet period and a bounded queue | P2 | M | | B-002 |
+| [F-030](issues/f-030-stage-grouping.md) | Stage grouping: named stages in the frozen spec, with status and duration | P2 | L | | F-014, F-015, F-020 |
+| [F-031](issues/f-031-post-actions.md) | Post actions: always / on-success / on-failure steps after the last step | P2 | M | | F-030, F-009 |
+| [F-032](issues/f-032-step-timeout-retry.md) | Step-level timeout and retry: a hung or flaky step is the pipeline's problem | P2 | M | | F-009 |
+| [F-033](issues/f-033-step-worker-requirements.md) | Per-step worker requirements and label expressions (the runs_on the PRD promises) | P2 | M | | Q-010, Q-005 |
+| [F-034](issues/f-034-organization-environment.md) | Organization environment variables: one shared env layer for every project | P2 | S | | F-021 |
+| [F-036](issues/f-036-build-numbers.md) | Build numbers and permalinks: #N per project, /runs/last, /lastSuccessful | P2 | S | | none |
+| [F-037](issues/f-037-rebuild-replay.md) | Rebuild and replay: re-run a finished run with the same inputs, or the current definition | P2 | S | | F-036, F-017 |
+| [F-038](issues/f-038-build-retention.md) | Build retention: keep N builds and/or D days, delete the rest for real | P2 | M | | F-016, F-036 |
+| [F-039](issues/f-039-completion-notifications.md) | Completion notifications: signed outbound webhooks on failure, success and recovery | P2 | M | | F-026, F-036, F-037 |
+| [F-040](issues/f-040-credential-types.md) | More credential types: username/password pairs and secret files, bindable per step | P2 | M | | F-012, D-006 |
+| [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | M | | F-021 |
+| [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
+| [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
 
 ## Done
 
@@ -64,5 +87,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-001](issues/b-001-dashboard-org-switch-sweep-flake.md) | Dashboard org-switch flake: seeded Running run swept Lost before the page reads it (D-002-B2) | P1 | 2026-11-15 |
 | [Q-009](issues/q-009-ssh-clone-real-sshd.md) | SSH clone verified against a real sshd — the keyless-sshd fixture (F-018 follow-up) | P1 | 2026-11-15 |
 | [B-002](issues/b-002-maxconcurrency-check-then-act.md) | maxConcurrency slot check is check-then-act; a token-holding client can exceed the cap (Q-005 hardening) | P2 | 2026-11-15 |
+| [B-005](issues/b-005-first-three-os-gate-defects.md) | Two product defects the first three-OS CI gate caught — cancel race and key-ring path shape | P1 | 2026-11-15 |
 | [Q-010](issues/q-010-tag-validation-asymmetry.md) | Tag validation asymmetry: the trigger accepts a union no single worker can cover (Q-005 hardening) | P2 | 2026-11-15 |
 | [Q-011](issues/q-011-pipelines-test-temp-leak.md) | Pipelines tests leak per-run temp roots — Dispose swallows only IOException (found by P-001) | P3 | 2026-11-15 |

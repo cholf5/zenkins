@@ -146,15 +146,76 @@ Candidate tasks:
   snapshotted onto the run at trigger time, injected as environment variables into every step of both
   kinds; dynamic trigger form; webhook and other headless triggers resolve defaults. → `F-021`
 
+### v1.2 — Job model, triggers and history
+
+Goal:
+- The Jenkins-shaped feature set people miss when they migrate lands beside what v1.1 added: a job
+  defined on the server (not only in a repository), more than one way to start it, a history that can
+  be read and bounded, and a machine-facing API. Still no plugins, no Docker, no DAG: the product
+  stays a small CI server with a Lua pipeline.
+
+This milestone exists because the v1.0/v1.1 surface had a clear, enumerated gap list against Jenkins
+(two job definitions, branch discovery, scheduled and polled triggers, chains, an API, numbered
+builds, rebuilds, retention, notifications, credential and parameter breadth). Every item judged
+near-term work is a card; the ones that would change the product's shape stayed in the Parking Lot,
+named so nothing is lost.
+
+Job model:
+- Inline pipeline script: a `pipeline` project whose `pipeline.lua` lives on the Server, with the
+  definition phase intact. → `F-022`
+- Multibranch jobs: one branch job per branch, its own history and last status, per-branch retention.
+  → `F-023` (needs `I-005`)
+- Project folders: nested grouping per organization, names unique inside a folder. → `F-042`
+- Stage grouping: named stages in the frozen spec, rendered with status and duration. → `F-030`
+- Post actions: always / on-success / on-failure steps, still running on cancellation. → `F-031`
+- Step-level timeout and retry, with typed failure reasons. → `F-032`
+- Per-step worker requirements and label expressions — the `runs_on` PRD §3.4.4 already shows. → `F-033`
+- Organization environment variables and insertable step snippets. → `F-034`, `F-035`
+
+Triggers and scheduling:
+- Scheduled (cron) triggers with an honest overlap, miss and restart policy. → `F-024`
+- SCM polling for hosts that cannot deliver webhooks, deduped against a webhook on the same commit.
+  → `F-025` (needs `I-005`)
+- Upstream/downstream chains with save-time cycle refusal and an outbox delivery guarantee. → `F-026`
+- API v1 with scoped organization tokens: trigger, read, tail, cancel. → `F-027`
+- Project enable/disable and queue controls (concurrency, quiet period, queue cap). → `F-028`, `F-029`
+- The trigger primitive both discovery paths need: a worker-side git remote probe. → `I-005`
+
+Results:
+- Build numbers and permalinks; rebuild and replay; retention that really deletes; signed completion
+  notifications. → `F-036`, `F-037`, `F-038`, `F-039`
+
+Credentials and parameters:
+- Username/password and secret-file credentials bindable per step; password/file/run/git-ref
+  parameters. → `F-040`, `F-041`
+
+Suggested landing order (each step leaves the product coherent):
+1. `F-036` (numbers) → `F-028` (disable) → `F-029` (queue controls) — small, and everything else
+   references them.
+2. `F-022` (inline script) and `I-005` (probe) — the two enablers.
+3. `F-024` (cron) → `F-025` (polling) → `F-023` (multibranch) → `F-026` (chains).
+4. `F-027` (API) — independent, but its docs land better after numbers and chains exist.
+5. `F-030` → `F-031` → `F-032` → `F-033` (the spec v3 cluster: one bump, one migration story).
+6. `F-037`, `F-038`, `F-039`, `F-040`, `F-041`, `F-034`, `F-035`, `F-042`.
+
+Scope note: PRD §7.2 lists 定时任务 (scheduled triggers) as a v1.0 non-goal. `F-024` reverses that and
+owns the PRD edit; the other §7.2 non-goals below are deliberately still out of scope.
+
 ## Parking Lot
 
 Future ideas that are not yet committed:
 
 - Docker images (explicitly out of v1 scope, but the most requested thing a self-hosted CI gets asked for).
-- DAG / parallel pipelines, matrix builds, scheduled triggers.
-- Plugin system and third-party marketplace.
+- DAG / parallel pipelines, matrix builds, and a run that spans more than one worker (the prerequisite
+  of both: workspace hand-off and per-step leases).
+- Plugin system and third-party marketplace; Jenkins shared libraries as a runtime mechanism (v1.2's
+  `F-035` snippets are the frozen-at-save substitute).
+- Tool installations (a managed JDK / MSBuild / Unity per tool version) and lockable shared resources.
+- Global build trend charts, artifact fingerprints and `last*Build` badges beyond `F-036`'s permalinks.
+- Test-report ingestion (JUnit), coverage and code-quality dashboards.
 - S3-compatible artifact storage backend.
-- Build trend analysis / dashboards beyond the current run list.
-- Enterprise SSO, fine-grained RBAC, deployment approvals.
-- Built-in package registry, code-quality analysis.
+- Email notifications (v1.2 ships signed outbound webhooks; a mail bridge can consume them).
+- Enterprise SSO, fine-grained RBAC, per-folder permissions, deployment approvals / manual gates.
+- Built-in package registry.
+- Multi-server deployment (the probe queue and the lease sweeper assume one Server).
 - `p4` / Perforce repository support (common in game teams — not in the PRD, worth asking about).
