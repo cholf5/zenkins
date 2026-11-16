@@ -187,8 +187,9 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// therefore serialize here instead of interleaving the slot count with the lease
     /// (check-then-act, the window B-002 closes), while claims of different workers never wait on
     /// each other beyond the brief transaction. A second guarded <c>ExecuteUpdate</c> on a
-    /// tenant-owned entity outside a system scope (the lease CAS in
-    /// <see cref="TryLeaseBuildRunAsync"/> is the other one; see the class doc's bypass
+    /// tenant-owned entity outside a system scope (<see cref="TryLeaseBuildRunAsync"/>,
+    /// <see cref="LockProjectForTriggerAsync"/> and
+    /// <see cref="TryCancelQueuedProjectRunsAsync"/> are the others; see the class doc's bypass
     /// discipline): the SET is fixed, never caller-supplied, and the WHERE carries the tenant
     /// query filter.
     /// </summary>
@@ -203,13 +204,93 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 cancellationToken);
 
     /// <summary>
+    /// F-028 + F-029: locks one project row for the duration of a trigger or a claim - the same
+    /// deliberate no-op write <see cref="LockWorkerForClaimAsync"/> uses, applied to the project row
+    /// instead of the worker row. PostgreSQL takes the row's write lock until the caller commits;
+    /// SQLite serializes database writes outright. Three decisions ride on this one lock, which is why
+    /// they can be read and acted on atomically instead of check-then-act - but they are <b>not</b> read
+    /// the same way, and the difference matters:
+    /// <list type="bullet">
+    /// <item><b>Trigger (insert path), F-028.</b> The staging routine re-reads <c>Projects.Disabled</c>
+    /// <em>under</em> the lock, immediately before the insert, so a trigger that started before a disable
+    /// committed cannot slip a run into a disabled project: the disable's own update is the same row
+    /// lock, so the two serialize and the loser reads the winner's flag.</item>
+    /// <item><b>Trigger (insert path), F-029.</b> The queue cap counts the project's queued runs under
+    /// the same lock, so two concurrent triggers cannot both pass a "below the cap?" check.</item>
+    /// <item><b>Claim path, F-029.</b> The claim counts the project's active runs under the lock, so two
+    /// workers cannot both take the second slot of a <c>MaxConcurrentRuns = 1</c> project.</item>
+    /// </list>
+    /// <para>
+    /// <b>The claim path does not re-read <c>Disabled</c> under this lock</b> - its candidate rows are a
+    /// snapshot read before the lock, and its <c>Disabled</c> filter is therefore defence in depth, not
+    /// the guarantee. What actually keeps a disabled project's runs from being built is a pair of
+    /// statements that already serialize on the run rows: disabling cancels every <c>Queued</c> run in
+    /// the same transaction as the flag, and the lease compare-and-set (F-006, unchanged) only matches
+    /// <c>Status == Queued</c>. So a claim racing a disable either commits its lease first - and the
+    /// disable's cancel then cancels that run, making the holder's <c>accepted</c> report the documented
+    /// 409 - or finds the run already canceled and its CAS updates zero rows. No run of a disabled
+    /// project reaches <c>Running</c> through either interleaving.
+    /// </para>
+    /// <para>
+    /// <b>Lock order.</b> Callers take worker row -> project row -> run rows. Projects are attempted in
+    /// the queue's own FIFO order (the candidate order is a subsequence of one global
+    /// <c>(CreatedAt, Id)</c> order), so two claims never hold each other's next project: no cycle.
+    /// </para>
+    /// <para>
+    /// A second guarded <c>ExecuteUpdate</c> on a tenant-owned entity outside a system scope (see the
+    /// class doc's bypass discipline): the SET is fixed, never caller-supplied, and the WHERE carries
+    /// the tenant query filter.
+    /// </para>
+    /// </summary>
+    /// <returns>1 when the project row was locked, 0 when it no longer exists.</returns>
+    public Task<int> LockProjectForTriggerAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default) =>
+        Projects
+            .Where(project => project.Id == projectId)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(project => project.UpdatedAt, project => project.UpdatedAt),
+                cancellationToken);
+
+    /// <summary>
+    /// F-028: cancels every still-<c>Queued</c> run of one project in a single guarded statement (the
+    /// disable's "a disabled job never builds something it queued while enabled"). The same terminal
+    /// shape <see cref="TryCancelQueuedBuildRunAsync"/> writes per run - the reason becomes the
+    /// <c>FailureReason</c>, the lease columns are cleared - but for the project's whole queue at once.
+    /// <para>
+    /// The <c>Status == Queued</c> predicate is what leaves a <c>Running</c> run alone: disabling is not
+    /// a cancellation of work in flight (that is a second, separate decision), and a claim that leased a
+    /// run inside the same window still ends terminal here - its leaseholder's accept is then the
+    /// documented 409 (F-009's race-window semantic).
+    /// </para>
+    /// </summary>
+    /// <returns>How many queued runs this call canceled.</returns>
+    public Task<int> TryCancelQueuedProjectRunsAsync(
+        Guid projectId,
+        string failureReason,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        BuildRuns
+            .Where(run => run.ProjectId == projectId
+                && run.Status == BuildRunStatus.Queued)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(run => run.Status, BuildRunStatus.Canceled)
+                .SetProperty(run => run.EndedAt, (DateTimeOffset?)now)
+                .SetProperty(run => run.FailureReason, failureReason)
+                .SetProperty(run => run.WorkerId, (Guid?)null)
+                .SetProperty(run => run.LeaseExpiresAt, (DateTimeOffset?)null)
+                .SetProperty(run => run.UpdatedAt, now),
+                cancellationToken);
+
+    /// <summary>
     /// F-006: atomic compare-and-set lease of one queued run (the claim endpoint). This is one of
-    /// the two guarded <c>ExecuteUpdate</c> calls on a tenant-owned entity outside a system scope
-    /// (the other is <see cref="LockWorkerForClaimAsync"/>; see the class doc's bypass
-    /// discipline): the SET is fixed here - never caller-supplied - and the WHERE is the tenant
-    /// query filter (which applies to <c>ExecuteUpdate</c>) plus the compare-and-set conditions
-    /// that make a concurrent double-claim impossible: the run must still be <c>Queued</c> and
-    /// still unleased.
+    /// the guarded <c>ExecuteUpdate</c> calls on a tenant-owned entity outside a system scope
+    /// (the others are <see cref="LockWorkerForClaimAsync"/>, <see cref="LockProjectForTriggerAsync"/>,
+    /// <see cref="TryCancelQueuedProjectRunsAsync"/> and the cancel requests below; see the class
+    /// doc's bypass discipline): the SET is fixed here - never caller-supplied - and the WHERE is
+    /// the tenant query filter (which applies to <c>ExecuteUpdate</c>) plus the compare-and-set
+    /// conditions that make a concurrent double-claim impossible: the run must still be <c>Queued</c>
+    /// and still unleased.
     /// <para>
     /// One UPDATE statement is atomic under both providers' write locking: PostgreSQL re-evaluates
     /// the predicate after granting the row lock (READ COMMITTED), which is the equivalent of the
@@ -632,13 +713,37 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // F-021: the project's parameter definitions, bounded by ProjectParameterLimits when the
             // definitions are saved (the same discipline the caps elsewhere follow).
             entity.Property(project => project.ParametersJson);
+
+            // F-028: the reversible disable switch. The reason is the operator's own words, bounded
+            // like every other user-authored text; the attribution columns carry no foreign key (the
+            // GitCredential pattern), so an account deletion never rewrites a project's history.
+            entity.Property(project => project.DisabledReason).HasMaxLength(ProjectValidation.MaxDisabledReasonLength);
+            entity.Property(project => project.DisabledByUserId).HasMaxLength(450);
+
+            // F-029: the three queue controls. The check constraints restate the validation the service
+            // performs, so a row written out of band (raw SQL, a future caller) cannot declare a limit
+            // no claim could satisfy: a concurrency cap below 1 or a queue cap below 1 is a configured
+            // starvation, and a negative quiet period is meaningless.
             entity.HasOne<Organization>().WithMany().HasForeignKey(project => project.OrganizationId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            // Belt and braces for the string kind, same shape as the run status check below.
-            entity.ToTable(table => table.HasCheckConstraint(
-                "CK_Projects_Kind",
-                $"\"Kind\" IN ('{ProjectKinds.Pipeline}', '{ProjectKinds.Freestyle}')"));
+            // Belt and braces for the string kind, same shape as the run status check below, plus
+            // F-029's bounded queue controls.
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_Projects_Kind",
+                    $"\"Kind\" IN ('{ProjectKinds.Pipeline}', '{ProjectKinds.Freestyle}')");
+                table.HasCheckConstraint(
+                    "CK_Projects_MaxConcurrentRuns",
+                    "\"MaxConcurrentRuns\" IS NULL OR \"MaxConcurrentRuns\" >= 1");
+                table.HasCheckConstraint(
+                    "CK_Projects_QuietPeriodSeconds",
+                    "\"QuietPeriodSeconds\" >= 0");
+                table.HasCheckConstraint(
+                    "CK_Projects_MaxQueuedRuns",
+                    "\"MaxQueuedRuns\" IS NULL OR \"MaxQueuedRuns\" >= 1");
+            });
 
             entity.HasQueryFilter(project => project.OrganizationId == CurrentOrganizationId);
         });

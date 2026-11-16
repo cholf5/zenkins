@@ -31,10 +31,18 @@ public sealed class OrganizationTestHost : IDisposable
     public AuthTestHost Host { get; }
 
     /// <summary>Starts an empty host and registers the first account (Owner of the starter organization).</summary>
+    /// <param name="configureTestServices">
+    /// Extra DI replacements, applied after the host's own (AuthTestHost registers last, so this still
+    /// gets the final say). Card F-029's Postgres suite uses it to point the whole app at a real
+    /// PostgreSQL server instead of the temp SQLite file.
+    /// </param>
     public static async Task<OrganizationTestHost> CreateAsync(
-        Action<IConfigurationBuilder>? configureAppConfiguration = null)
+        Action<IConfigurationBuilder>? configureAppConfiguration = null,
+        Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>? configureTestServices = null)
     {
-        var host = new AuthTestHost(configureAppConfiguration: configureAppConfiguration);
+        var host = new AuthTestHost(
+            configureAppConfiguration: configureAppConfiguration,
+            configureTestServices: configureTestServices);
         using var client = host.CreateClient();
         var response = await AuthTestHost.RegisterAsync(client, OwnerEmail);
         if ((int)response.StatusCode is not (302 or 303))

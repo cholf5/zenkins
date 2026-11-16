@@ -4,6 +4,7 @@ using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Shared.Projects;
+using Zenkins.Shared.RunCancellation;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Projects;
@@ -48,7 +49,30 @@ public sealed record ProjectView(
 
     /// <summary>F-021: the project's parameter definitions (the editor's rows and the trigger
     /// form's inputs); <see langword="null"/> when the project declares none.</summary>
-    string? ParametersJson = null);
+    string? ParametersJson = null,
+
+    /// <summary>F-028: whether every trigger is refused. History, artifacts and settings stay
+    /// readable either way - the flag is the trigger brake, not a soft delete.</summary>
+    bool Disabled = false,
+
+    /// <summary>F-028: the operator's reason, shown on every page that says the project is disabled.</summary>
+    string? DisabledReason = null,
+
+    /// <summary>F-028: when the current disable happened.</summary>
+    DateTimeOffset? DisabledAt = null,
+
+    /// <summary>F-028: who disabled it, resolved to an e-mail; <see langword="null"/> for a row written
+    /// before the attribution existed or an account that no longer resolves.</summary>
+    string? DisabledByEmail = null,
+
+    /// <summary>F-029: the project's concurrency limit; <see langword="null"/> means unlimited.</summary>
+    int? MaxConcurrentRuns = null,
+
+    /// <summary>F-029: seconds a queued run waits before it becomes claimable (0 = immediately).</summary>
+    int QuietPeriodSeconds = 0,
+
+    /// <summary>F-029: the project's queue cap; <see langword="null"/> means unlimited.</summary>
+    int? MaxQueuedRuns = null);
 
 /// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
 /// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
@@ -59,6 +83,18 @@ public sealed record ProjectInput(
     string? RepositoryUrl,
     string? DefaultBranch,
     string? PipelinePath);
+
+/// <summary>
+/// The queue-controls form's raw values (card F-029), before trimming and validation. Blank means "the
+/// default": unlimited for the two caps and zero for the quiet period.
+/// </summary>
+public sealed record ProjectLimitsInput(
+    string? MaxConcurrentRuns,
+    string? QuietPeriodSeconds,
+    string? MaxQueuedRuns);
+
+/// <summary>The validated queue controls (card F-029) a project row stores.</summary>
+public sealed record ProjectLimits(int? MaxConcurrentRuns, int QuietPeriodSeconds, int? MaxQueuedRuns);
 
 /// <summary>
 /// Result of a mutation. <see cref="ProjectId"/> is set on success (and is the id the endpoint
@@ -123,7 +159,7 @@ public sealed class ProjectService(
         return projects
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(project => project.Id)
-            .Select(ToView)
+            .Select(project => ToView(project))
             .ToArray();
     }
 
@@ -138,7 +174,25 @@ public sealed class ProjectService(
         var project = await context.Projects.SingleOrDefaultAsync(
             candidate => candidate.Id == projectId,
             cancellationToken);
-        return project is null ? null : ToView(project);
+        if (project is null)
+        {
+            return null;
+        }
+
+        // F-028: the attribution resolves to an e-mail for display, in one extra read that only a
+        // disabled project pays for. Like the assignment attribution (F-018), the id is a plain string
+        // without a foreign key, so "who disabled this" survives an account deletion as an id the
+        // lookup no longer resolves - the page then says "not recorded" instead of guessing.
+        string? disabledByEmail = null;
+        if (project.DisabledByUserId is { Length: > 0 } disabledByUserId)
+        {
+            disabledByEmail = await context.Users
+                .Where(user => user.Id == disabledByUserId)
+                .Select(user => user.Email)
+                .SingleOrDefaultAsync(cancellationToken);
+        }
+
+        return ToView(project, disabledByEmail);
     }
 
     /// <summary>Creates a project in the active organization. Members and Owners may both do this.</summary>
@@ -451,6 +505,164 @@ public sealed class ProjectService(
         return ProjectMutationResult.Success(project.Id);
     }
 
+    /// <summary>
+    /// Disables or re-enables a project (card F-028). Members and Owners may both do it, like every
+    /// other project mutation - disabling is a brake, not a destructive action, and nothing is deleted.
+    /// <para>
+    /// <b>Disabling cancels the queue, not the work in flight.</b> Every still-<c>Queued</c> run of the
+    /// project becomes <c>Canceled</c> with reason <c>project-disabled</c> in the same transaction as the
+    /// flag: a disabled job must never build something it queued while it was enabled. A <c>Running</c>
+    /// run is deliberately untouched - stopping work in flight is a second, separate decision (and
+    /// already has its own cancel).
+    /// </para>
+    /// <para>
+    /// <b>The flag and the cancels are one unit of work</b>, and the flag write is the project row's own
+    /// lock, which is what serializes this with a concurrent trigger (see
+    /// <c>ZenkinsDbContext.LockProjectForTriggerAsync</c>): a trigger either commits its run before the
+    /// disable (the cancel below then catches it) or reads the flag after it and refuses.
+    /// </para>
+    /// <para>
+    /// <b>Enabling replays nothing.</b> It clears the flag and the attribution only: canceled runs stay
+    /// canceled, no run is un-canceled, and no trigger that was refused is replayed - the next trigger
+    /// queues a run like any other.
+    /// </para>
+    /// </summary>
+    public async Task<ProjectMutationResult> SetDisabledAsync(
+        string actingUserId,
+        Guid projectId,
+        bool disabled,
+        string? reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                disabled
+                    ? "You are not a member of an organization, so there is no project to disable."
+                    : "You are not a member of an organization, so there is no project to enable.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            // Foreign or unknown id: the same 404, no existence oracle.
+            return ProjectMutationResult.NotFound();
+        }
+
+        var normalizedReason = string.Empty;
+        if (disabled)
+        {
+            var reasonError = ProjectValidation.ValidateDisabledReason(reason, out normalizedReason);
+            if (reasonError is not null)
+            {
+                return ProjectMutationResult.Invalid(
+                    new ProjectFieldError(ProjectFields.DisabledReason, reasonError));
+            }
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var canceledRuns = 0;
+
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+
+        project.Disabled = disabled;
+        project.DisabledReason = disabled ? normalizedReason : null;
+        project.DisabledAt = disabled ? now : null;
+        project.DisabledByUserId = disabled ? actingUserId : null;
+        await context.SaveChangesAsync(cancellationToken);
+
+        if (disabled)
+        {
+            canceledRuns = await context.TryCancelQueuedProjectRunsAsync(
+                project.Id,
+                RunCancelReasons.ProjectDisabled,
+                now,
+                cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Project {State}. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId} CanceledRuns={CanceledRuns}",
+            disabled ? "disabled" : "enabled",
+            activeOrganizationId,
+            project.Id,
+            actingUserId,
+            canceledRuns);
+        return ProjectMutationResult.Success(project.Id);
+    }
+
+    /// <summary>
+    /// Saves the queue controls (card F-029): the concurrency limit, the quiet period and the queue cap.
+    /// Members may edit them, like every other project field - they bound the project's own queue, they
+    /// do not decide who may do what. Blank means the default (unlimited / zero), which is exactly how
+    /// every project behaved before this card, so a project that never opens this form keeps today's
+    /// behaviour.
+    /// </summary>
+    public async Task<ProjectMutationResult> SaveLimitsAsync(
+        string actingUserId,
+        Guid projectId,
+        ProjectLimitsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to edit.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return ProjectMutationResult.NotFound();
+        }
+
+        var limitsError = ProjectValidation.ValidateLimits(input, out var limits);
+        if (limitsError is not null)
+        {
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectErrorCodes.FieldFor(limitsError) ?? ProjectFields.MaxConcurrentRuns, limitsError));
+        }
+
+        project.MaxConcurrentRuns = limits.MaxConcurrentRuns;
+        project.QuietPeriodSeconds = limits.QuietPeriodSeconds;
+        project.MaxQueuedRuns = limits.MaxQueuedRuns;
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Project limits saved. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId} MaxConcurrentRuns={MaxConcurrentRuns} QuietPeriodSeconds={QuietPeriodSeconds} MaxQueuedRuns={MaxQueuedRuns}",
+            activeOrganizationId,
+            project.Id,
+            actingUserId,
+            limits.MaxConcurrentRuns,
+            limits.QuietPeriodSeconds,
+            limits.MaxQueuedRuns);
+        return ProjectMutationResult.Success(project.Id);
+    }
+
     private static List<ProjectFieldError> Validate(
         ProjectInput input,
         string kind,
@@ -522,7 +734,7 @@ public sealed class ProjectService(
             member => member.UserId == actingUserId && member.Role == OrganizationRole.Owner,
             cancellationToken);
 
-    private static ProjectView ToView(Project project) => new(
+    private static ProjectView ToView(Project project, string? disabledByEmail = null) => new(
         project.Id,
         project.Name,
         project.Kind,
@@ -533,5 +745,12 @@ public sealed class ProjectService(
         project.CreatedAt,
         project.UpdatedAt,
         project.FreestyleSpecJson,
-        project.ParametersJson);
+        project.ParametersJson,
+        project.Disabled,
+        project.DisabledReason,
+        project.DisabledAt,
+        disabledByEmail,
+        project.MaxConcurrentRuns,
+        project.QuietPeriodSeconds,
+        project.MaxQueuedRuns);
 }

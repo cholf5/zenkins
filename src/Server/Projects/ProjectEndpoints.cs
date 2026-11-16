@@ -51,6 +51,13 @@ public static class ProjectEndpoints
         // F-021: the parameters editor's save - the same shape, both kinds.
         group.MapPost("/{projectId:guid}/parameters", SaveParametersAsync);
 
+        // F-028: the reversible trigger brake, and F-029: the queue controls. Same form-post shape
+        // (antiforgery through UseAntiforgery) and the same 404/403 answers as every other project
+        // mutation; the PRG target is the settings tab, which owns the forms and renders the codes.
+        group.MapPost("/{projectId:guid}/disable", DisableProjectAsync);
+        group.MapPost("/{projectId:guid}/enable", EnableProjectAsync);
+        group.MapPost("/{projectId:guid}/limits", SaveLimitsAsync);
+
         return endpoints;
     }
 
@@ -199,6 +206,111 @@ public static class ProjectEndpoints
         };
     }
 
+    /// <summary>
+    /// Card F-028: disables the project - every trigger refuses, the queue is canceled, history stays.
+    /// A Member may do this (it is a brake, not a delete), and a form that carries no reason is refused
+    /// with the field-level code the settings tab renders.
+    /// </summary>
+    private static async Task<IResult> DisableProjectAsync(
+        Guid projectId,
+        [FromForm] DisableProjectForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // F-019's rule in miniature: a lost body is the page's PRG error, never a null reference.
+        var result = await projects.SetDisabledAsync(
+            userId,
+            projectId,
+            disabled: true,
+            form?.Reason,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/settings?notice=project-disabled"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect($"/projects/{projectId}/settings?error={FirstCode(result)}"),
+        };
+    }
+
+    /// <summary>
+    /// Card F-028: re-enables the project. Nothing is replayed - canceled runs stay canceled and no
+    /// refused trigger is retried; the next trigger queues a run like any other.
+    /// </summary>
+    private static async Task<IResult> EnableProjectAsync(
+        Guid projectId,
+        [FromForm] EnableProjectForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await projects.SetDisabledAsync(
+            userId,
+            projectId,
+            disabled: false,
+            reason: null,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/settings?notice=project-enabled"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect($"/projects/{projectId}/settings?error={FirstCode(result)}"),
+        };
+    }
+
+    /// <summary>
+    /// Card F-029: saves the three queue controls. Blank means the default (unlimited / zero), so the
+    /// form can express "behave exactly as before" without a second toggle.
+    /// </summary>
+    private static async Task<IResult> SaveLimitsAsync(
+        Guid projectId,
+        [FromForm] ProjectLimitsForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // F-019's rule in miniature: a lost body is the page's PRG error, never a null reference.
+        var result = await projects.SaveLimitsAsync(
+            userId,
+            projectId,
+            form?.ToInput() ?? new ProjectLimitsInput(null, null, null),
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/settings?notice=limits-saved"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect($"/projects/{projectId}/settings?error={FirstCode(result)}"),
+        };
+    }
+
+    /// <summary>The first field error's code, or the name field's when none was reported (F-019).</summary>
+    private static string FirstCode(ProjectMutationResult result) =>
+        result.FieldErrors?.FirstOrDefault()?.Code ?? ProjectErrorCodes.NameInvalid;
+
     private static IResult Forbidden(ProjectMutationResult result) =>
         Results.Text(
             result.Message ?? "You are not allowed to perform this action.",
@@ -236,6 +348,36 @@ public static class ProjectEndpoints
     /// </summary>
     private static ProjectInput EmptyInput() =>
         new(Name: null, Kind: null, RepositoryUrl: null, DefaultBranch: null, PipelinePath: null);
+
+    /// <summary>
+    /// Card F-028's disable form: the reason is the only field, and it is required - the person whose
+    /// trigger is refused reads it, so "disabled" alone would leave them guessing.
+    /// </summary>
+    public sealed class DisableProjectForm
+    {
+        public string? Reason { get; set; }
+    }
+
+    /// <summary>Empty on purpose: the parameter makes the enable POST form-bound (antiforgery).</summary>
+    public sealed class EnableProjectForm
+    {
+    }
+
+    /// <summary>
+    /// Card F-029's limits form. All three fields are optional text: blank is "the default". They are
+    /// not bound as numbers so a typo reaches the service's validation and comes back as a field-level
+    /// code instead of a binding failure.
+    /// </summary>
+    public sealed class ProjectLimitsForm
+    {
+        public string? MaxConcurrentRuns { get; set; }
+
+        public string? QuietPeriodSeconds { get; set; }
+
+        public string? MaxQueuedRuns { get; set; }
+
+        public ProjectLimitsInput ToInput() => new(MaxConcurrentRuns, QuietPeriodSeconds, MaxQueuedRuns);
+    }
 
     /// <summary>
     /// Empty on purpose: the parameter exists so the delete POST is form-bound and therefore covered

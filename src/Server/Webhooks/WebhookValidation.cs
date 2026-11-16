@@ -1,3 +1,4 @@
+using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
 
 namespace Zenkins.Server.Webhooks;
@@ -113,6 +114,21 @@ public static class WebhookOutcomes
     /// <summary>F-020, defence in depth: the webhook somehow targets a Freestyle project (creation
     /// already refuses that kind, and a project's kind is immutable) - nothing to build.</summary>
     public const string IgnoredNoRepository = "ignored:no-repository";
+
+    /// <summary>
+    /// Cards F-028: the project is disabled, so this push queued nothing. Recorded (and answered
+    /// <c>2xx</c>) rather than refused at the HTTP level: a permanent <c>4xx</c> makes most git hosts
+    /// disable the webhook automatically, which would silently break "enable the project again and the
+    /// webhook works". The word is the same one a disabled project's trigger refusal uses.
+    /// </summary>
+    public const string ProjectDisabled = ProjectTriggerRefusals.ProjectDisabled;
+
+    /// <summary>
+    /// Card F-029: the project's queue is at its cap, so this push queued nothing. Recorded for the same
+    /// reason as <see cref="ProjectDisabled"/> - the delivery is a fact, and a host that retries gets the
+    /// same honest answer instead of a retry storm.
+    /// </summary>
+    public const string QueueFull = ProjectTriggerRefusals.QueueFull;
 
     /// <summary>Longest stored outcome.</summary>
     public const int MaxLength = 32;

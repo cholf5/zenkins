@@ -37,6 +37,19 @@ public enum RunOperationStatus
 
     /// <summary>An illegal state transition, a lease that is not the caller's, or an expired lease.</summary>
     Conflict = 5,
+
+    /// <summary>
+    /// A trigger the project itself refused (cards F-028 and F-029): the project is disabled, or its
+    /// queue is at its cap. Nothing was written.
+    /// <para>
+    /// <b>Why this is not <see cref="InvalidInput"/>.</b> The caller's input may be perfectly valid -
+    /// the project's own state is what refuses it - and the distinction is what lets an API answer
+    /// <c>409</c> (a conflict with the resource's state) instead of <c>400</c> (a malformed request),
+    /// while the form maps the same answer to a form-level message. The specific cause travels as the
+    /// field-error code (<c>project-disabled</c> / <c>queue-full</c>).
+    /// </para>
+    /// </summary>
+    Refused = 6,
 }
 
 /// <summary>One field-level validation failure of the trigger form.</summary>
@@ -55,6 +68,13 @@ public static class RunFields
 
     /// <summary>F-021: one build parameter value, keyed by the parameter's name.</summary>
     public const string Parameter = "parameters";
+
+    /// <summary>
+    /// Cards F-028 + F-029: a refusal of the project itself (disabled, or queue at its cap). It is a
+    /// form-level field because no input is at fault; the code inside it
+    /// (<see cref="ProjectTriggerRefusals"/>) says which refusal it was.
+    /// </summary>
+    public const string Queue = "queue";
 }
 
 /// <summary>The raw trigger-form values, before trimming and validation. <see cref="Parameters"/>
@@ -82,6 +102,18 @@ public sealed record RunTriggerResult(
 
     public static RunTriggerResult Invalid(params RunFieldError[] errors) =>
         new(RunOperationStatus.InvalidInput, FieldErrors: errors);
+
+    /// <summary>
+    /// The project refused the trigger (cards F-028 and F-029): nothing was written. The code is the
+    /// refusal's stable spelling (<see cref="ProjectTriggerRefusals"/>), carried as a field error so
+    /// every surface - the form's <c>?runError=</c>, a webhook delivery's outcome, a future API's 409
+    /// body - reads the same value.
+    /// </summary>
+    public static RunTriggerResult Refused(string code, string message) =>
+        new(
+            RunOperationStatus.Refused,
+            Message: message,
+            FieldErrors: [new RunFieldError(RunFields.Queue, code)]);
 }
 
 /// <summary>A run as the pages display it. Records keep disposed contexts out of the UI.</summary>
@@ -118,7 +150,15 @@ public sealed record RunView(
     DateTimeOffset? DeadlineAt = null,
     IReadOnlyList<RunStepView>? Steps = null,
     bool? GitCredentialAssigned = null,
-    IReadOnlyDictionary<string, string>? Parameters = null)
+    IReadOnlyDictionary<string, string>? Parameters = null,
+
+    /// <summary>
+    /// Cards F-028: whether the run's project is disabled <em>now</em> (read when the page was read), so a
+    /// run page and the dashboard can say "the project was disabled while this run was in flight" instead
+    /// of leaving the operator to guess why nothing new is queuing. <see langword="null"/> when the
+    /// project could not be read (a foreign or deleted row).
+    /// </summary>
+    bool? ProjectDisabled = null)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -387,6 +427,24 @@ public sealed class RunService(
             return RunTriggerResult.NotFound();
         }
 
+        // F-028: a disabled project refuses the trigger here - before its own field validation - because
+        // the reason is the actionable answer and a form that will be refused must not spend the caller's
+        // attention on a branch name (the project page does not even render the form). The staging routine
+        // repeats the check under the project row lock, which is what makes it a decision rather than a
+        // check-then-act: this early read only decides *which* refusal the caller reads first.
+        if (ProjectTriggerGuard.DisabledRefusal(project.Disabled) is { } disabledCode)
+        {
+            logger.LogInformation(
+                "Trigger refused: the project is disabled. OrganizationId={OrganizationId} ProjectId={ProjectId} Refusal={Refusal} ByUserId={UserId}",
+                activeOrganizationId,
+                project.Id,
+                disabledCode,
+                actingUserId);
+            return RunTriggerResult.Refused(
+                disabledCode,
+                ProjectTriggerGuard.DisabledMessage(project.DisabledReason));
+        }
+
         // F-020: a Freestyle project runs its frozen spec and has no branch to name. The branch input
         // is ignored on this path (the form does not render it), and the run must already have a spec -
         // a Freestyle project whose steps were never saved cannot run anything.
@@ -457,8 +515,18 @@ public sealed class RunService(
             // discipline the branch and pipeline path follow (a later edit cannot move this run).
             pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
             parametersJson: SerializeParameters(values));
-        context.BuildRuns.Add(run);
-        await context.SaveChangesAsync(cancellationToken);
+
+        // F-028 + F-029: the project's own gate (disabled / queue cap) is applied inside the staging
+        // routine, under the project row lock, in the same transaction as the insert - never as a
+        // separate pre-flight check here.
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var staged = await StageQueuedRunAsync(context, run, cancellationToken);
+        if (staged.Status != RunOperationStatus.Success)
+        {
+            return staged;
+        }
+
+        await transaction.CommitAsync(cancellationToken);
 
         logger.LogInformation(
             "Run queued. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} PipelinePath={PipelinePath} ByUserId={UserId}",
@@ -468,7 +536,83 @@ public sealed class RunService(
             run.GitBranch,
             run.PipelinePath,
             actingUserId);
-        return RunTriggerResult.Success(run.Id);
+        return staged;
+    }
+
+    /// <summary>
+    /// Cards F-028 + F-029: the one place a trigger's run is staged, used by <b>every</b> trigger source
+    /// (the manual form and the webhook today; schedules, polls and the reactor of F-024/F-025/F-026 when
+    /// they land). The caller owns the transaction; this method owns the decision.
+    /// <para>
+    /// <b>Why a project row lock.</b> The gate's facts are the project's own state, and two writers change
+    /// them concurrently with a trigger: the disable mutation and every other trigger of the same
+    /// project. Taking the project row's write lock first
+    /// (<see cref="ZenkinsDbContext.LockProjectForTriggerAsync"/>) makes the reads and the insert one
+    /// step, the same shape B-002 gave the worker's slot check:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>a trigger that read <c>Disabled</c> before a disable committed cannot insert afterwards -
+    /// it waits for the lock, then reads the flag the disable wrote;</item>
+    /// <item>two concurrent triggers cannot both pass the queue-cap count, because only the lock holder
+    /// raises the count (an insert is the only statement that can).</item>
+    /// </list>
+    /// <para>
+    /// Both refusals answer <see cref="RunOperationStatus.Refused"/>: nothing is written, so a webhook can
+    /// still record its delivery and a form can still name the reason.
+    /// </para>
+    /// </summary>
+    private async Task<RunTriggerResult> StageQueuedRunAsync(
+        ZenkinsDbContext context,
+        BuildRun staged,
+        CancellationToken cancellationToken)
+    {
+        if (await context.LockProjectForTriggerAsync(staged.ProjectId, cancellationToken) == 0)
+        {
+            // The project is gone (deleted between the trigger's read and the lock): nothing to queue.
+            return RunTriggerResult.NotFound();
+        }
+
+        var project = await context.Projects
+            .AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == staged.ProjectId, cancellationToken);
+        if (project is null)
+        {
+            return RunTriggerResult.NotFound();
+        }
+
+        // F-028: a disabled project queues nothing, from any source, and says why.
+        if (ProjectTriggerGuard.DisabledRefusal(project.Disabled) is { } disabledCode)
+        {
+            logger.LogInformation(
+                "Trigger refused: the project is disabled. OrganizationId={OrganizationId} ProjectId={ProjectId} Refusal={Refusal}",
+                project.OrganizationId,
+                project.Id,
+                disabledCode);
+            return RunTriggerResult.Refused(disabledCode, ProjectTriggerGuard.DisabledMessage(project.DisabledReason));
+        }
+
+        // F-029: the queue cap. Counted under the same lock, so "below the cap" stays true until this
+        // trigger's insert commits - two racing triggers cannot both squeeze in.
+        var queued = await context.BuildRuns.CountAsync(
+            run => run.ProjectId == staged.ProjectId && run.Status == BuildRunStatus.Queued,
+            cancellationToken);
+        if (ProjectTriggerGuard.IsQueueFull(project.MaxQueuedRuns, queued))
+        {
+            var cap = project.MaxQueuedRuns!.Value;
+            logger.LogInformation(
+                "Trigger refused: the project's queue is full. OrganizationId={OrganizationId} ProjectId={ProjectId} Queued={Queued} Cap={Cap}",
+                project.OrganizationId,
+                project.Id,
+                queued,
+                cap);
+            return RunTriggerResult.Refused(
+                ProjectTriggerRefusals.QueueFull,
+                ProjectTriggerGuard.QueueFullMessage(queued, cap));
+        }
+
+        context.BuildRuns.Add(staged);
+        await context.SaveChangesAsync(cancellationToken);
+        return RunTriggerResult.Success(staged.Id);
     }
 
     /// <summary>
@@ -498,10 +642,19 @@ public sealed class RunService(
     /// <c>clone_url</c>: the claim hands the worker <c>project.RepositoryUrl</c>, so a valid signature
     /// cannot redirect a build to another repository.
     /// </para>
+    /// <para>
+    /// <b>Cards F-028 + F-029 apply here too, through the same gate.</b> A disable or a full queue is
+    /// not a delivery error: this method returns <see cref="RunOperationStatus.Refused"/> with the
+    /// refusal's code, the caller records it on the delivery row and answers the git host
+    /// <c>2xx</c> - a permanent <c>4xx</c> makes most hosts disable the webhook automatically, which
+    /// would silently break the "enable it again and it works" promise.
+    /// </para>
     /// </summary>
     /// <returns>
-    /// <see cref="RunTriggerResult.Success"/> with the staged run's id (<b>not yet saved</b>), or the
-    /// reason nothing was staged - in which case the caller rolls its transaction back.
+    /// <see cref="RunTriggerResult.Success"/> with the staged run's id (saved on the caller's context, so
+    /// it commits with the caller's transaction), <see cref="RunOperationStatus.Refused"/> when the
+    /// project's own gate refused it (nothing written), or the reason nothing was staged - in which case
+    /// the caller rolls its transaction back.
     /// </returns>
     public async Task<RunTriggerResult> QueueWebhookRunAsync(
         ZenkinsDbContext context,
@@ -567,7 +720,14 @@ public sealed class RunService(
             // definitions' defaults - the honest answer for a headless trigger.
             parametersJson: SerializeParameters(
                 ProjectParameters.ResolveValues(ReadParameterDefinitions(project.ParametersJson), null, out _)));
-        context.BuildRuns.Add(run);
+        var staged = await StageQueuedRunAsync(context, run, cancellationToken);
+        if (staged.Status != RunOperationStatus.Success)
+        {
+            // Cards F-028 + F-029: the project's own gate refused this trigger (disabled, or the queue
+            // is at its cap). The caller records the refusal on its delivery row; nothing is staged, so
+            // there is no orphan run to clean up and a retry after re-enabling can build.
+            return staged;
+        }
 
         logger.LogInformation(
             "Run queued by webhook. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} Commit={Commit} PipelinePath={PipelinePath}",
@@ -577,15 +737,16 @@ public sealed class RunService(
             run.GitBranch,
             run.GitCommit,
             run.PipelinePath);
-        return RunTriggerResult.Success(run.Id);
+        return staged;
     }
 
     /// <summary>
     /// The one run construction routine both trigger sources use: the tenant from the active request (the
     /// data layer rejects anything else), the branch and pipeline path snapshotted so a later project edit
     /// cannot move this run, and the trigger source's own attribution. Adding and saving is the caller's
-    /// step, so each source keeps its own unit of work (the manual trigger saves one row; a webhook saves
-    /// its replay record and the run together).
+    /// step (<c>StageQueuedRunAsync</c>, which applies the project gate first), so each source keeps its own
+    /// unit of work (the manual trigger saves one row; a webhook saves its replay record and the run
+    /// together).
     /// </summary>
     private static BuildRun BuildQueuedRun(
         Guid organizationId,
@@ -657,6 +818,21 @@ public sealed class RunService(
             .OrderByDescending(run => run.CreatedAt)
             .ThenBy(run => run.Id)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Card F-029: how many runs of one project are <c>Queued</c> right now (claimed-but-not-yet-accepted
+    /// ones included - the count the trigger's cap is measured against, and the number the refusal
+    /// message quotes). Read through the tenant filter, so a foreign project id simply counts nothing.
+    /// </summary>
+    public async Task<int> GetProjectQueuedRunCountAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.BuildRuns.CountAsync(
+            run => run.ProjectId == projectId && run.Status == BuildRunStatus.Queued,
+            cancellationToken);
     }
 
     /// <summary>
@@ -865,10 +1041,17 @@ public sealed class RunService(
             .ToArray();
 
         // 5. Compare-and-set loop: the first candidate whose single-statement lease wins is the
-        //    answer. A lost race means another claim took exactly that run - move to the next.
+        //    answer. A lost race means another claim took exactly that run - move to the next. Each
+        //    candidate first passes the project's own gate (cards F-028 + F-029), which may itself take
+        //    the project row lock.
         var leaseExpiresAt = now.AddSeconds(options.LeaseSeconds);
         foreach (var candidate in candidates)
         {
+            if (!await ProjectAllowsClaimAsync(context, candidate, now, cancellationToken))
+            {
+                continue;
+            }
+
             var leased = await context.TryLeaseBuildRunAsync(
                 candidate.Id,
                 worker.Id,
@@ -910,6 +1093,83 @@ public sealed class RunService(
         }
 
         return RunClaimResult.NoRun();
+    }
+
+    /// <summary>
+    /// Cards F-028 + F-029: whether one candidate is claimable for its project's own reasons.
+    /// <para>
+    /// <b>Three answers, in the card's documented order.</b> A disabled project's queued run is never
+    /// claimed (F-028 - defence in depth: disabling cancels the queue, so such a row should not exist);
+    /// a run still inside its project's quiet period is not claimable yet (F-029, measured from the run's
+    /// own <c>CreatedAt</c>; a trigger inside the period is an ordinary queued run, not a coalesced one);
+    /// and a project at its <c>MaxConcurrentRuns</c> leaves the run queued for later.
+    /// </para>
+    /// <para>
+    /// <b>The concurrency limit is decided under the project row lock, not before it.</b> Counting and
+    /// then leasing in two steps is exactly the check-then-act window B-002 closed at the worker level;
+    /// here the racing counterparts are two <em>different</em> workers claiming two different runs of one
+    /// project, which the worker row lock cannot serialize. So the limit's count runs inside the caller's
+    /// transaction after <see cref="ZenkinsDbContext.LockProjectForTriggerAsync"/>, and only the lock
+    /// holder can raise the count - a claim is the only statement that adds an assigned run. Projects
+    /// without a limit pay neither the lock nor the count.
+    /// </para>
+    /// <para>
+    /// <b>Locks are taken in the queue's own order.</b> The candidate list is a subsequence of one global
+    /// <c>(CreatedAt, Id)</c> order, so two claims attempt the same projects in the same relative order -
+    /// no lock cycle is possible.
+    /// </para>
+    /// </summary>
+    private static async Task<bool> ProjectAllowsClaimAsync(
+        ZenkinsDbContext context,
+        BuildRun candidate,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var project = candidate.Project;
+
+        // F-028, defence in depth - NOT the guarantee. `project` is the candidate snapshot read before
+        // this transaction took any project lock, so this check can be stale; what actually keeps a
+        // disabled project's runs from being built is that the disable cancels every Queued run in the
+        // same transaction as its flag, and the lease CAS below only matches `Status == Queued` (see
+        // `ZenkinsDbContext.LockProjectForTriggerAsync` for the two interleavings). Checking the snapshot
+        // here only saves the work of considering such a candidate at all.
+        if (ProjectTriggerGuard.DisabledRefusal(project.Disabled) is not null)
+        {
+            return false;
+        }
+
+        // F-029: the quiet period. Measured against the run's own creation instant, in memory (SQLite
+        // cannot compare DateTimeOffset in SQL) - and time only moves forward, so a run inside its
+        // period can never become claimable inside this same transaction.
+        if (project.QuietPeriodSeconds > 0
+            && candidate.CreatedAt.AddSeconds(project.QuietPeriodSeconds) > now)
+        {
+            return false;
+        }
+
+        // F-029: no limit, no lock, no count - today's behaviour for every project that never opened the
+        // limits form.
+        if (project.MaxConcurrentRuns is not { } maxConcurrentRuns)
+        {
+            return true;
+        }
+
+        if (await context.LockProjectForTriggerAsync(project.Id, cancellationToken) == 0)
+        {
+            // The project was deleted between the candidate read and the lock.
+            return false;
+        }
+
+        // "Active" is the same predicate the worker's own slot count uses: Running, plus
+        // claimed-but-not-yet-accepted runs (they hold the slot until the lease sweeper clears an expired
+        // lease or the worker accepts). Counted under the project lock, so count + one lease cannot cross
+        // the limit.
+        var active = await context.BuildRuns.CountAsync(
+            run => run.ProjectId == project.Id
+                && (run.Status == BuildRunStatus.Running
+                    || (run.Status == BuildRunStatus.Queued && run.WorkerId != null)),
+            cancellationToken);
+        return active < maxConcurrentRuns;
     }
 
     /// <summary>
@@ -2111,8 +2371,13 @@ public sealed class RunService(
                 Assigned = project.GitCredentialId != null
                     && context.GitCredentials.Any(
                         credential => credential.Id == project.GitCredentialId.Value),
+
+                // F-028: whether the project is disabled right now - the run page and the dashboard say
+                // so next to a run that is still in flight, instead of leaving the operator to wonder why
+                // the queue stopped moving.
+                project.Disabled,
             })
-            .ToDictionaryAsync(row => row.Id, row => row.Assigned, cancellationToken);
+            .ToDictionaryAsync(row => row.Id, row => row, cancellationToken);
 
         return runs.Select(run =>
         {
@@ -2142,10 +2407,15 @@ public sealed class RunService(
                 run.TimeoutSeconds,
                 run.DeadlineAt,
                 BuildStepViews(pipeline, [.. stepsByRun[run.Id]]),
-                credentialAssigned.TryGetValue(run.ProjectId, out var assigned) ? assigned : null,
+                credentialAssigned.TryGetValue(run.ProjectId, out var projectFacts)
+                    ? projectFacts.Assigned
+                    : null,
                 // F-021: the values this run was triggered with (the snapshot, not the project's
                 // current definitions). Null when the project declared no parameters.
-                ReadParameters(run.ParametersJson));
+                ReadParameters(run.ParametersJson),
+
+                // F-028: the project's current disabled state (null when it could not be read).
+                projectFacts is null ? (bool?)null : projectFacts.Disabled);
         }).ToList();
     }
 

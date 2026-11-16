@@ -125,6 +125,14 @@ public static class RunEndpoints
                 "text/plain",
                 statusCode: StatusCodes.Status403Forbidden),
             RunOperationStatus.NotFound => Results.NotFound(),
+
+            // Everything else is a PRG back to the project page carrying the first field error's code:
+            // the trigger's own validation failures (F-014/F-021) and the project's refusals (cards
+            // F-028 + F-029 - disabled, or the queue at its cap; the two ride the same PRG because the
+            // browser has no other way to read a code). The *service* status keeps them apart -
+            // `Refused` is the "well-formed request, the project's state says no" case that a JSON API
+            // (F-027) will map to 409 while this form maps it to the same redirect - so nothing here is
+            // pretending that 409 is implemented today.
             _ => Results.Redirect(
                 $"/projects/{projectId}?runError={result.FieldErrors?[0].Code ?? RunErrorCodes.FieldInvalid}"),
         };

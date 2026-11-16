@@ -106,6 +106,21 @@
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
+                @* F-028: a disabled project produces no new runs, so "nothing is happening" has to say
+                   why. One line, only when it is true. *@
+                @if (summary.DisabledProjectCount > 0)
+                {
+                    <p id="dashboard-disabled-projects" class="bb:mb-4 bb:text-sm bb:text-muted-foreground">
+                        @if (summary.DisabledProjectCount == 1)
+                        {
+                            <span>1 project is disabled - triggers are refused until it is enabled again.</span>
+                        }
+                        else
+                        {
+                            <span>@summary.DisabledProjectCount projects are disabled - triggers are refused until each is enabled again.</span>
+                        }
+                    </p>
+                }
                 @if (!summary.HasProjects)
                 {
                     <BbEmpty id="dashboard-empty-projects"
@@ -142,6 +157,12 @@
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
                                             <a href="/projects/@run.ProjectId">@run.ProjectName</a> · @run.GitBranch
                                         </span>
+                                        @* F-028: the project's trigger brake, next to its name, so a run
+                                           still in flight when the project was disabled reads correctly. *@
+                                        @if (run.ProjectDisabled)
+                                        {
+                                            <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                                        }
                                     </p>
                                     <p class="bb:text-xs bb:text-muted-foreground">
                                         @run.TriggerType.ToLowerInvariant()

@@ -21,8 +21,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-027](issues/f-027-api-v1.md) | API v1: organization API tokens, trigger/cancel/read runs without a browser | P1 | M | | F-017 |
 | [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | M | | I-005, F-017 |
 | [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | M | | F-036 |
-| [F-028](issues/f-028-project-enable-disable.md) | Project enable/disable: stop every trigger without deleting history | P2 | S | | none |
-| [F-029](issues/f-029-queue-controls.md) | Queue controls: per-project concurrency, quiet period and a bounded queue | P2 | M | | B-002 |
 | [F-030](issues/f-030-stage-grouping.md) | Stage grouping: named stages in the frozen spec, with status and duration | P2 | L | | F-014, F-015, F-020 |
 | [F-031](issues/f-031-post-actions.md) | Post actions: always / on-success / on-failure steps after the last step | P2 | M | | F-030, F-009 |
 | [F-032](issues/f-032-step-timeout-retry.md) | Step-level timeout and retry: a hung or flaky step is the pipeline's problem | P2 | M | | F-009 |
@@ -92,3 +90,5 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-003](issues/b-003-dashboard-ceiling-count-interference.md) | Dashboard ceiling tests share one fixture and both seed 200 runs — the count assertion sees 401 | P2 | 2026-11-16 |
 | [F-020](issues/f-020-freestyle-job-kind.md) | Freestyle job kind: repository-free projects with server-configured script steps | P1 | 2026-11-16 |
 | [F-021](issues/f-021-parameterized-builds.md) | Parameterized builds: project definitions, trigger values and a frozen run snapshot (both kinds) | P1 | 2026-11-16 |
+| [F-028](issues/f-028-project-enable-disable.md) | Project enable/disable: stop every trigger without deleting history | P2 | 2026-11-16 |
+| [F-029](issues/f-029-queue-controls.md) | Queue controls: per-project concurrency, quiet period and a bounded queue | P2 | 2026-11-16 |

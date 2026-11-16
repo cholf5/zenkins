@@ -30,8 +30,9 @@ public sealed class WorkerTestHost : IDisposable
 
     /// <summary>Optional extra configuration sources (F-006 uses them for the short lease window).</summary>
     public static Task<WorkerTestHost> CreateAsync(
-        Action<IConfigurationBuilder>? configureAppConfiguration) =>
-        CreateCoreAsync(OrganizationTestHost.CreateAsync(configureAppConfiguration));
+        Action<IConfigurationBuilder>? configureAppConfiguration,
+        Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>? configureTestServices = null) =>
+        CreateCoreAsync(OrganizationTestHost.CreateAsync(configureAppConfiguration, configureTestServices));
 
     private static async Task<WorkerTestHost> CreateCoreAsync(Task<OrganizationTestHost> inner) =>
         new(await inner);

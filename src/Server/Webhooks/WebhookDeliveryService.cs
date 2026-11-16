@@ -350,7 +350,23 @@ public sealed class WebhookDeliveryService(
                 RunValidation.ParseTags(webhook.RequiredTags),
                 cancellationToken);
 
-            if (run.Status != RunOperationStatus.Success || run.RunId is null)
+            if (run.Status == RunOperationStatus.Refused && run.FieldErrors is { Count: > 0 } refusals)
+            {
+                // Cards F-028 + F-029: the project's own gate refused the trigger (disabled, or the queue
+                // is at its cap). Nothing was inserted, and this is NOT a delivery error: the record stays
+                // - with the refusal as its outcome instead of "queued" - and the git host is answered
+                // accepted. A 4xx here would make most hosts disable the webhook automatically, which is
+                // the opposite of what "enable the project again and it works" promises.
+                outcome = refusals[0].Code;
+                row.Outcome = outcome;
+                logger.LogInformation(
+                    "Webhook delivery refused by the project gate. OrganizationId={OrganizationId} ProjectId={ProjectId} WebhookId={WebhookId} Outcome={Outcome}",
+                    webhook.OrganizationId,
+                    webhook.ProjectId,
+                    webhook.Id,
+                    outcome);
+            }
+            else if (run.Status != RunOperationStatus.Success || run.RunId is null)
             {
                 // Nothing was queued, so nothing is recorded: a retry can build.
                 await transaction.RollbackAsync(cancellationToken);
@@ -359,9 +375,11 @@ public sealed class WebhookDeliveryService(
                     ? WebhookDeliveryResult.NotFound()
                     : WebhookDeliveryResult.InvalidPayload();
             }
-
-            runId = run.RunId;
-            row.RunId = runId;
+            else
+            {
+                runId = run.RunId;
+                row.RunId = runId;
+            }
         }
 
         // 9. The "last delivery" facts on the webhook (the settings page's only delivery history), in the

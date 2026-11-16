@@ -22,7 +22,14 @@ public sealed record DashboardRunView(
     DateTimeOffset? EndedAt,
     int? ExitCode,
     string? FailureReason,
-    DateTimeOffset CreatedAt)
+    DateTimeOffset CreatedAt,
+
+    /// <summary>
+    /// Card F-028: whether the run's project is disabled now, so the dashboard's recent list shows the
+    /// same fact the project page and the run page do. A run that is still in flight when its project is
+    /// disabled keeps running; the badge is how the operator sees that.
+    /// </summary>
+    bool ProjectDisabled = false)
 {
     /// <summary>
     /// The instant this run is ordered and windowed by: when it started, or - for a run that never
@@ -66,6 +73,9 @@ public sealed record DashboardRunView(
 /// keeps ticking from here in an interactive circuit without re-reading the database.</param>
 /// <param name="RecentRuns">The last 20 runs across the organization's projects by
 /// <see cref="DashboardRunView.Recency"/>, newest first (id as the deterministic tie-break).</param>
+/// <param name="DisabledProjectCount">Card F-028: projects whose triggers are refused right now. Shown
+/// as one line, because "a whole project stopped building" is exactly the fact this page is opened to
+/// find; zero disables the line.</param>
 public sealed record DashboardSummary(
     int ProjectCount,
     int QueuedCount,
@@ -76,7 +86,8 @@ public sealed record DashboardSummary(
     int FailuresInWindow,
     DateTimeOffset WindowStart,
     DateTimeOffset GeneratedAt,
-    IReadOnlyList<DashboardRunView> RecentRuns)
+    IReadOnlyList<DashboardRunView> RecentRuns,
+    int DisabledProjectCount = 0)
 {
     /// <summary>Total registered workers of the organization (zero drives the "no workers
     /// connected" empty state, which is not the same as "all workers offline").</summary>
@@ -211,6 +222,7 @@ public sealed class DashboardQuery(
                     run.Id,
                     run.ProjectId,
                     ProjectName = run.Project.Name,
+                    run.Project.Disabled,
                     run.Status,
                     run.TriggerType,
                     run.GitBranch,
@@ -232,14 +244,24 @@ public sealed class DashboardQuery(
                     run.EndedAt,
                     run.ExitCode,
                     run.FailureReason,
-                    run.CreatedAt))
+                    run.CreatedAt,
+                    run.Disabled))
                 .OrderByDescending(run => run.Recency)
                 .ThenBy(run => run.RunId)
                 .ToArray();
 
         // 4/4 - the "no projects yet" empty state has to be its own fact: an organization with
-        // projects but no runs and one with nothing at all must render differently.
-        var projectCount = await context.Projects.CountAsync(cancellationToken);
+        // projects but no runs and one with nothing at all must render differently. F-028 adds the
+        // disabled count (a project whose triggers are refused shows no runs, so without it the
+        // dashboard could look idle for the wrong reason): one grouped aggregate over the project table
+        // answers both numbers in a single round trip - at most two rows, and never the table itself.
+        var projectCounts = await context.Projects
+            .GroupBy(project => project.Disabled)
+            .Select(group => new { Disabled = group.Key, Count = group.Count() })
+            .ToListAsync(cancellationToken);
+
+        var projectCount = projectCounts.Sum(row => row.Count);
+        var disabledProjectCount = projectCounts.Where(row => row.Disabled).Sum(row => row.Count);
 
         var summary = new DashboardSummary(
             ProjectCount: projectCount,
@@ -251,12 +273,14 @@ public sealed class DashboardQuery(
             FailuresInWindow: failuresInWindow,
             WindowStart: windowStart,
             GeneratedAt: generatedAt,
-            RecentRuns: recentRuns);
+            RecentRuns: recentRuns,
+            DisabledProjectCount: disabledProjectCount);
 
         logger.LogInformation(
-            "Dashboard summary read. OrganizationId={OrganizationId} Projects={ProjectCount} Queued={Queued} Running={Running} Recent={Recent} FailuresInWindow={Failures}",
+            "Dashboard summary read. OrganizationId={OrganizationId} Projects={ProjectCount} DisabledProjects={DisabledProjects} Queued={Queued} Running={Running} Recent={Recent} FailuresInWindow={Failures}",
             organizationId,
             projectCount,
+            disabledProjectCount,
             queuedCount,
             runningCount,
             recentRuns.Length,

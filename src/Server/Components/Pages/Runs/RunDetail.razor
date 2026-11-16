@@ -23,6 +23,12 @@
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
                 <BbCardTitle As="h1" tabindex="-1">Run @(_run.Id.ToString("N")[..8])</BbCardTitle>
                 <RunStatusBadge Status="@_run.Status" />
+                @* F-028: the project's trigger brake, visible from the run that was in flight when it
+                   happened - the run itself is untouched. *@
+                @if (_run.ProjectDisabled == true)
+                {
+                    <BbBadge Variant="BadgeVariant.Destructive">Project disabled</BbBadge>
+                }
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                 @* F-009: cancel is offered while the run can still be stopped. A Queued run is
@@ -43,6 +49,27 @@
         {
             <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
                 <p>@notice</p>
+            </div>
+        }
+
+        @* F-028 / TC-002: a run that was already executing when its project was disabled keeps running
+           (stopping work in flight is a separate decision), so the page says why nothing new is queuing
+           instead of leaving the operator to guess. *@
+        @if (_run.ProjectDisabled == true)
+        {
+            <div id="run-project-disabled" role="status"
+                 class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>
+                    This run's project is disabled, so nothing new is queued for it.
+                    @if (_run.Status is BuildRunStatus.Queued or BuildRunStatus.Running)
+                    {
+                        <span>This run keeps running to its own end - disabling a project does not stop work in flight.</span>
+                    }
+                    else
+                    {
+                        <span>This run's own history is unchanged.</span>
+                    }
+                </p>
             </div>
         }
 

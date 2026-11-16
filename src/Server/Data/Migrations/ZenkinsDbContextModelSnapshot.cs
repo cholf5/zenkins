@@ -487,6 +487,20 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<bool>("Disabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("DisabledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DisabledByUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("DisabledReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
                     b.Property<string>("FreestyleSpecJson")
                         .HasColumnType("text");
 
@@ -505,6 +519,12 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
+                    b.Property<int?>("MaxConcurrentRuns")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("MaxQueuedRuns")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -519,6 +539,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<string>("PipelinePath")
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
+
+                    b.Property<int>("QuietPeriodSeconds")
+                        .HasColumnType("integer");
 
                     b.Property<string>("RepositoryUrl")
                         .HasMaxLength(2048)
@@ -537,6 +560,12 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("Projects", t =>
                         {
                             t.HasCheckConstraint("CK_Projects_Kind", "\"Kind\" IN ('pipeline', 'freestyle')");
+
+                            t.HasCheckConstraint("CK_Projects_MaxConcurrentRuns", "\"MaxConcurrentRuns\" IS NULL OR \"MaxConcurrentRuns\" >= 1");
+
+                            t.HasCheckConstraint("CK_Projects_MaxQueuedRuns", "\"MaxQueuedRuns\" IS NULL OR \"MaxQueuedRuns\" >= 1");
+
+                            t.HasCheckConstraint("CK_Projects_QuietPeriodSeconds", "\"QuietPeriodSeconds\" >= 0");
                         });
                 });
 

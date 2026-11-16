@@ -4,9 +4,10 @@
 # it runs the exact commands §2 documents, in §2's order, and stops at the first red one:
 #
 #   1. dotnet build -c Release
-#   2. the fast suite (the quintuple exclusion filter)
-#   3. the five acceptance harnesses, one filtered run each:
-#      Milestone (Q-002), Recovery (Q-004), PublishSmoke (I-003), PublishAot (I-004), GitSshd (Q-009)
+#   2. the fast suite (the sextuple exclusion filter)
+#   3. the six acceptance harnesses, one filtered run each:
+#      Milestone (Q-002), Recovery (Q-004), PublishSmoke (I-003), PublishAot (I-004), GitSshd (Q-009),
+#      Postgres (F-029)
 #
 # A red suite names itself and the script exits non-zero immediately; nothing after a red suite
 # runs, so the fix cycle starts at the first failing suite every time. Green output ends with the
@@ -22,10 +23,12 @@
 # gate to drift against - the Windows gate is this script, proven by CI.
 #
 # Prerequisites are §1's, per suite: PublishAot needs the machine's native AOT toolchain (macOS:
-# Xcode CLT; Windows: VS C++ workload; Linux: clang + zlib dev headers), and GitSshd needs the
-# OpenSSH tools (sshd + ssh-keygen, on PATH or the standard locations). Where the OpenSSH tools are
-# absent the GitSshd facts skip with the reason recorded - that is the suite's designed behaviour,
-# not a silent omission.
+# Xcode CLT; Windows: VS C++ workload; Linux: clang + zlib dev headers), GitSshd needs the OpenSSH
+# tools (sshd + ssh-keygen, on PATH or the standard locations), and Postgres needs a real PostgreSQL
+# server named by the ZENKINS_TEST_POSTGRES environment variable (a disposable database - its public
+# schema is dropped and recreated). Where those are absent the suite's facts skip with the reason
+# recorded - that is the suites' designed behaviour, not a silent omission - so the gate stays green
+# on a machine without them.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,12 +50,13 @@ run_suite() {
 }
 
 run_suite "build (Release)" dotnet build -c Release
-run_suite "Fast suite"      dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd"
+run_suite "Fast suite"      dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres"
 run_suite "Milestone"       dotnet test -c Release --filter "Category=Milestone"
 run_suite "Recovery"        dotnet test -c Release --filter "Category=Recovery"
 run_suite "PublishSmoke"    dotnet test -c Release --filter "Category=PublishSmoke"
 run_suite "PublishAot"      dotnet test -c Release --filter "Category=PublishAot"
 run_suite "GitSshd"         dotnet test -c Release --filter "Category=GitSshd"
+run_suite "Postgres"        dotnet test -c Release --filter "Category=Postgres"
 
 echo
-echo "verify.sh: gate green - build, fast suite and five harnesses in $((SECONDS - STARTED))s."
+echo "verify.sh: gate green - build, fast suite and six harnesses in $((SECONDS - STARTED))s."

@@ -41,8 +41,9 @@ public sealed class RunTestHost : IDisposable
 
     /// <param name="configureAppConfiguration">e.g. a short <c>Runs:LeaseSeconds</c> for lease tests.</param>
     public static async Task<RunTestHost> CreateAsync(
-        Action<IConfigurationBuilder>? configureAppConfiguration) =>
-        new(await WorkerTestHost.CreateAsync(configureAppConfiguration));
+        Action<IConfigurationBuilder>? configureAppConfiguration,
+        Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>? configureTestServices = null) =>
+        new(await WorkerTestHost.CreateAsync(configureAppConfiguration, configureTestServices));
 
     public async Task<Guid> OrganizationIdAsync() =>
         await Inner.Inner.ReadOrganizationIdAsync(BootstrapService.StarterOrganizationName);
@@ -227,6 +228,65 @@ public sealed class RunTestHost : IDisposable
         Assert.StartsWith("/runs/", location, StringComparison.Ordinal);
         return Guid.Parse(location["/runs/".Length..]);
     }
+
+    /// <summary>
+    /// Card F-028: disables the project through the real settings form (the settings tab is the page
+    /// that owns the form, so it is the page the antiforgery token is read from).
+    /// </summary>
+    public static Task<HttpResponseMessage> DisableProjectAsync(
+        HttpClient client,
+        Guid projectId,
+        string? reason = "mid-migration") =>
+        OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{projectId}/settings",
+            $"/projects/{projectId}/disable",
+            new Dictionary<string, string> { ["Reason"] = reason ?? string.Empty });
+
+    /// <summary>Card F-028: re-enables the project through the real settings form.</summary>
+    public static Task<HttpResponseMessage> EnableProjectAsync(HttpClient client, Guid projectId) =>
+        OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{projectId}/settings",
+            $"/projects/{projectId}/enable",
+            new Dictionary<string, string>());
+
+    /// <summary>
+    /// Card F-029: saves the three queue controls through the real settings form. Null means "the
+    /// default" (unlimited / zero), posted as the blank field the form renders.
+    /// </summary>
+    public static Task<HttpResponseMessage> SaveLimitsAsync(
+        HttpClient client,
+        Guid projectId,
+        int? maxConcurrentRuns = null,
+        int? quietPeriodSeconds = null,
+        int? maxQueuedRuns = null) =>
+        OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{projectId}/settings",
+            $"/projects/{projectId}/limits",
+            new Dictionary<string, string>
+            {
+                ["MaxConcurrentRuns"] = maxConcurrentRuns?.ToString() ?? string.Empty,
+                ["QuietPeriodSeconds"] = quietPeriodSeconds?.ToString() ?? string.Empty,
+                ["MaxQueuedRuns"] = maxQueuedRuns?.ToString() ?? string.Empty,
+            });
+
+    /// <summary>Reads one project row across tenants (the assertion side of F-028/F-029).</summary>
+    public Task<Project> ReadProjectAsync(Guid projectId) => Inner.Inner.ReadProjectAsync(projectId);
+
+    /// <summary>
+    /// Moves a run's created instant into the past - the deterministic stand-in for "the quiet period
+    /// has passed" (the alternative is sleeping for real seconds in a test).
+    /// </summary>
+    public Task AgeRunAsync(Guid runId, TimeSpan age) =>
+        InSystemScopeAsync(async context =>
+        {
+            var run = (await context.SystemQueryAsync<BuildRun>(candidate => candidate.Id == runId)).Single();
+            run.CreatedAt = DateTimeOffset.UtcNow - age;
+            await context.SaveChangesAsync();
+            return true;
+        });
 
     public static Task<HttpResponseMessage> ClaimAsync(HttpClient client, string? workerToken) =>
         WorkerTestHost.SendWorkerJsonAsync(client, workerToken, "/api/workers/claim", new { });

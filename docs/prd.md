@@ -210,6 +210,9 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 | Default Branch | 默认分支（仅 Pipeline；Freestyle 为空） |
 | Credentials | Git 认证信息（仅 Pipeline） |
 | Pipeline Path | Pipeline 文件路径，默认 `pipeline.lua`（仅 Pipeline） |
+| Disabled | 是否已禁用（见下）。禁用只停触发，不删历史 |
+| Disabled Reason | 禁用原因，禁用时必填——被拒绝的触发会把原因原样展示给用户 |
+| Disabled At / Disabled By | 何时、由谁禁用（无外键，账号删除不改写项目历史） |
 | Created At | 创建时间 |
 | Updated At | 更新时间 |
 
@@ -224,6 +227,19 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 - 支持手动触发构建。
 - 支持 Git Webhook 触发构建（仅 Pipeline；Freestyle 无仓库可推送）。
 - 支持参数化构建（两种 Kind 通用，见 §3.11）。
+- 支持启用/禁用项目：禁用后所有触发路径一律拒绝，历史、Artifact 与设置仍可读。
+
+#### 启用 / 禁用
+
+禁用是「可逆的触发制动」，不是软删除：不写删除标记，不删任何行。
+
+- 禁用者：Owner 或 Member（与项目其他变更一致）；删除项目仍仅限 Owner，且仍然是一个独立的确认动作。
+- 禁用时已排队未开始的 Run 会被取消（`project-disabled`），正在执行的 Run 不受影响——中止在跑的构建是另一个独立决定。
+- 重新启用只清除状态：已取消的 Run 不会复活，漏掉的触发不会补播。
+- 各触发路径的拒绝契约：手工表单回到项目页并显示 `project-disabled`；Webhook 记录
+  `project-disabled` 并返回 2xx（永久 4xx 会让多数 Git 托管方自动停用 Webhook，就破坏了
+  「重新启用后自动恢复」的承诺）；计划/轮询类触发记录 `skipped-disabled`。
+- 状态在项目列表、Dashboard、Runs 列表与 Run 详情页可见。
 
 Git 操作由 Worker 执行，Server 不负责在本地 Clone 项目。
 
@@ -556,6 +572,27 @@ worker/
 - 查看历史构建记录。
 
 第一版不提供复杂的构建趋势分析。
+
+#### 队列控制
+
+每个 Project 可声明三条限制（均为可选项，默认为「不限」）：
+
+| 限制 | 含义 | 默认 |
+|---|---|---|
+| Max Concurrent Runs | 同一项目最多多少个 Run 同时处于 Running（含已 claim 未 accept，占用名额直到 lease 被清） | 不限 |
+| Quiet Period Seconds | 触发后需要等待多少秒 Run 才可被 claim；静默期内的触发仍是普通排队 Run，不做合并 | 0 |
+| Max Queued Runs | 项目最多多少个 Run 处于 Queued；超过上限的触发在写入任何行之前被拒 | 不限 |
+
+生效顺序（claim 与 trigger 两处一致）：静默期 → 项目并发上限 → 队列上限。
+
+- 并发上限在 claim 的同一个事务内判定：先锁项目行，再数该项目的活跃 Run，最后执行 lease 的
+  compare-and-set。两个 worker 同一瞬间抢同一个项目时不可能同时拿到第 2 个名额（B-002 在 worker
+  维度的同一做法，搬到项目维度）。
+- 队列上限在触发的同一个事务内判定：先锁项目行，再数排队 Run，再插入，所以两个并发触发不可能
+  都通过；被拒绝时不会产生孤儿 Run 行。
+- 拒绝时的文案带观测值：「queue full: 20 queued runs, cap 20」；表单上是字段级错误，API 是 409，
+  Webhook 投递行记录 `queue-full` 并返回 2xx。
+- 三条限制在项目设置页可见可改；三者都为空/0 时，项目行为与引入这些限制之前完全一致。
 
 ### 3.6 实时日志
 

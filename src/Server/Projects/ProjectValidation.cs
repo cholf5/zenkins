@@ -16,6 +16,14 @@ public static class ProjectFields
     public const string PipelinePath = "PipelinePath";
     public const string Steps = "Steps";
     public const string Parameters = "Parameters";
+
+    /// <summary>F-028: the disable form's reason (the only field of that POST).</summary>
+    public const string DisabledReason = "Reason";
+
+    /// <summary>F-029: the three queue controls of the limits form.</summary>
+    public const string MaxConcurrentRuns = "MaxConcurrentRuns";
+    public const string QuietPeriodSeconds = "QuietPeriodSeconds";
+    public const string MaxQueuedRuns = "MaxQueuedRuns";
 }
 
 /// <summary>
@@ -52,6 +60,24 @@ public static class ProjectErrorCodes
     /// <summary>F-021: the parameter list was refused (the log carries the specific reason).</summary>
     public const string ParametersInvalid = "parameters-invalid";
 
+    /// <summary>F-028: disabling without a reason - the refused trigger has to be able to say why.</summary>
+    public const string DisabledReasonRequired = "disabled-reason-required";
+
+    /// <summary>F-028: the reason is longer than <see cref="ProjectValidation.MaxDisabledReasonLength"/>.</summary>
+    public const string DisabledReasonTooLong = "disabled-reason-too-long";
+
+    /// <summary>F-028: the reason carries control characters (it is rendered verbatim in a notice).</summary>
+    public const string DisabledReasonInvalid = "disabled-reason-invalid";
+
+    /// <summary>F-029: the concurrency limit is not a whole number in the accepted range.</summary>
+    public const string MaxConcurrentRunsInvalid = "max-concurrent-runs-invalid";
+
+    /// <summary>F-029: the quiet period is not a whole number of seconds in the accepted range.</summary>
+    public const string QuietPeriodInvalid = "quiet-period-invalid";
+
+    /// <summary>F-029: the queue cap is not a whole number in the accepted range.</summary>
+    public const string MaxQueuedRunsInvalid = "max-queued-runs-invalid";
+
     /// <summary>The form field the code belongs to, or <see langword="null"/> for an unknown code.</summary>
     public static string? FieldFor(string? code) => code switch
     {
@@ -62,6 +88,10 @@ public static class ProjectErrorCodes
         PipelinePathTooLong or PipelinePathInvalid => ProjectFields.PipelinePath,
         StepsInvalid or StepsMissing => ProjectFields.Steps,
         ParametersInvalid => ProjectFields.Parameters,
+        DisabledReasonRequired or DisabledReasonTooLong or DisabledReasonInvalid => ProjectFields.DisabledReason,
+        MaxConcurrentRunsInvalid => ProjectFields.MaxConcurrentRuns,
+        QuietPeriodInvalid => ProjectFields.QuietPeriodSeconds,
+        MaxQueuedRunsInvalid => ProjectFields.MaxQueuedRuns,
         _ => null,
     };
 
@@ -90,6 +120,17 @@ public static class ProjectErrorCodes
             "This Freestyle project has no steps yet: save the steps before triggering a run.",
         ParametersInvalid =>
             "The parameter list was refused - check every parameter's name, type and choices.",
+        DisabledReasonRequired =>
+            "Say why the project is being disabled - the person whose trigger is refused reads it.",
+        DisabledReasonTooLong =>
+            $"The reason must be at most {ProjectValidation.MaxDisabledReasonLength} characters.",
+        DisabledReasonInvalid => "The reason cannot contain control characters.",
+        MaxConcurrentRunsInvalid =>
+            $"The concurrency limit is a whole number between {ProjectValidation.MinMaxConcurrentRuns} and {ProjectValidation.MaxMaxConcurrentRuns}; leave it blank for unlimited.",
+        QuietPeriodInvalid =>
+            $"The quiet period is a whole number of seconds between 0 and {ProjectValidation.MaxQuietPeriodSeconds}.",
+        MaxQueuedRunsInvalid =>
+            $"The queue cap is a whole number between {ProjectValidation.MinMaxQueuedRuns} and {ProjectValidation.MaxMaxQueuedRuns}; leave it blank for unlimited.",
         _ => null,
     };
 }
@@ -111,6 +152,22 @@ public static class ProjectValidation
     /// <summary>PRD §3.2's default pipeline file name.</summary>
     public const string DefaultPipelinePath = "pipeline.lua";
 
+    /// <summary>F-028: the longest disable reason (it is rendered verbatim in a notice).</summary>
+    public const int MaxDisabledReasonLength = 500;
+
+    /// <summary>F-029: the accepted concurrency range - a cap of 0 is a configured starvation, and a
+    /// cap above the worker fleet's own ceiling would be a setting that never binds.</summary>
+    public const int MinMaxConcurrentRuns = 1;
+    public const int MaxMaxConcurrentRuns = 100;
+
+    /// <summary>F-029: the accepted quiet period range, in seconds (zero .. one day).</summary>
+    public const int MinQuietPeriodSeconds = 0;
+    public const int MaxQuietPeriodSeconds = 86_400;
+
+    /// <summary>F-029: the accepted queue-cap range.</summary>
+    public const int MinMaxQueuedRuns = 1;
+    public const int MaxMaxQueuedRuns = 1_000;
+
     public const int MaxNameLength = 200;
     public const int MaxRepositoryUrlLength = 2048;
     public const int MaxDefaultBranchLength = 200;
@@ -124,7 +181,105 @@ public static class ProjectValidation
         + ":(?<path>(?!/)(?!-)[^\\s:]+)$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    /// <summary>Validates and trims the project name. Returns a <see cref="ProjectErrorCodes"/> value or null.</summary>
+    /// <summary>
+    /// Validates and trims the disable reason (card F-028). Required - a refused trigger has to be able
+    /// to say why - and bounded, because the reason travels verbatim into the trigger form's refusal,
+    /// the webhook delivery's outcome and the log.
+    /// </summary>
+    public static string? ValidateDisabledReason(string? value, out string normalized)
+    {
+        normalized = value?.Trim() ?? string.Empty;
+
+        if (normalized.Length == 0)
+        {
+            return ProjectErrorCodes.DisabledReasonRequired;
+        }
+
+        if (normalized.Length > MaxDisabledReasonLength)
+        {
+            return ProjectErrorCodes.DisabledReasonTooLong;
+        }
+
+        return normalized.Any(char.IsControl) ? ProjectErrorCodes.DisabledReasonInvalid : null;
+    }
+
+    /// <summary>
+    /// Validates the three queue controls (card F-029). Blank means "the default": unlimited for the
+    /// two caps, zero for the quiet period - so a form that omits a field keeps today's behaviour. The
+    /// three are checked independently and the first error code is returned alongside the parsed values;
+    /// nothing is written unless every one of them is legal.
+    /// </summary>
+    public static string? ValidateLimits(
+        ProjectLimitsInput input,
+        out ProjectLimits limits)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        limits = new ProjectLimits(null, MinQuietPeriodSeconds, null);
+        string? error = null;
+
+        var maxConcurrent = (int?)null;
+        if (!string.IsNullOrWhiteSpace(input.MaxConcurrentRuns))
+        {
+            if (!TryParseBounded(
+                    input.MaxConcurrentRuns, MinMaxConcurrentRuns, MaxMaxConcurrentRuns, out var parsed))
+            {
+                error = ProjectErrorCodes.MaxConcurrentRunsInvalid;
+            }
+
+            maxConcurrent = parsed;
+        }
+
+        var quietPeriod = MinQuietPeriodSeconds;
+        if (!string.IsNullOrWhiteSpace(input.QuietPeriodSeconds))
+        {
+            if (!TryParseBounded(
+                    input.QuietPeriodSeconds, MinQuietPeriodSeconds, MaxQuietPeriodSeconds, out var parsed))
+            {
+                error ??= ProjectErrorCodes.QuietPeriodInvalid;
+            }
+
+            quietPeriod = parsed;
+        }
+
+        var maxQueued = (int?)null;
+        if (!string.IsNullOrWhiteSpace(input.MaxQueuedRuns))
+        {
+            if (!TryParseBounded(input.MaxQueuedRuns, MinMaxQueuedRuns, MaxMaxQueuedRuns, out var parsed))
+            {
+                error ??= ProjectErrorCodes.MaxQueuedRunsInvalid;
+            }
+
+            maxQueued = parsed;
+        }
+
+        limits = new ProjectLimits(maxConcurrent, quietPeriod, maxQueued);
+        return error;
+    }
+
+    /// <summary>Whole number in <paramref name="min"/>..<paramref name="max"/> (invariant culture, no
+    /// signs, no decimals); anything else is refused instead of silently coerced.</summary>
+    private static bool TryParseBounded(string text, int min, int max, out int value)
+    {
+        value = min;
+        if (!int.TryParse(
+                text.Trim(),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsed)
+            || parsed < min
+            || parsed > max)
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    /// <summary>
+    /// Validates and trims the project name. Returns a <see cref="ProjectErrorCodes"/> value or null.
+    /// </summary>
     public static string? ValidateName(string? value, out string normalized)
     {
         normalized = value?.Trim() ?? string.Empty;

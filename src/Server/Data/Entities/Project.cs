@@ -78,6 +78,53 @@ public sealed class Project : ITenantOwned
     /// </summary>
     public string? GitCredentialAssignedByUserId { get; set; }
 
+    /// <summary>
+    /// Card F-028: the reversible "stop every trigger" switch, the project-level analogue of
+    /// <see cref="Worker.IsDisabled"/>. A disabled project queues nothing from any trigger source, its
+    /// history, artifacts and settings stay readable, and enabling clears the state - it is not a soft
+    /// delete and stores no deleted marker (<see cref="DisabledReason"/> is the operator's own words,
+    /// not a tombstone).
+    /// </summary>
+    public bool Disabled { get; set; }
+
+    /// <summary>
+    /// Why the project was disabled (F-028): required when disabling, cleared when enabling. The refused
+    /// trigger surfaces it verbatim, so the person who pushes or clicks Start reads the operator's
+    /// reason instead of a bare code.
+    /// </summary>
+    public string? DisabledReason { get; set; }
+
+    /// <summary>When the current disable happened (F-028); cleared with <see cref="Disabled"/>.</summary>
+    public DateTimeOffset? DisabledAt { get; set; }
+
+    /// <summary>
+    /// Who disabled the project (F-028): the acting user's id, resolved to an e-mail for display. Like
+    /// <c>GitCredential.CreatedByUserId</c> it carries no foreign key, so deleting an account never
+    /// rewrites a project's history.
+    /// </summary>
+    public string? DisabledByUserId { get; set; }
+
+    /// <summary>
+    /// Card F-029: the most runs of this project that may be active at once - <c>Running</c>, plus
+    /// claimed-but-not-yet-accepted runs (the same "assigned" predicate the worker cap counts), so a
+    /// claim cannot outrun the limit through a lease. <see langword="null"/> means unlimited, which is
+    /// what every project created before this card has.
+    /// </summary>
+    public int? MaxConcurrentRuns { get; set; }
+
+    /// <summary>
+    /// Card F-029: seconds a freshly queued run waits before it becomes claimable (Jenkins' quiet
+    /// period), measured from <see cref="BuildRun.CreatedAt"/>. Zero - the default - means claimable
+    /// immediately. Triggers inside the period are ordinary queued runs; nothing is coalesced.
+    /// </summary>
+    public int QuietPeriodSeconds { get; set; }
+
+    /// <summary>
+    /// Card F-029: the most runs this project may have <c>Queued</c>. A trigger at the cap is refused
+    /// <em>before</em> any run row is written. <see langword="null"/> means unlimited.
+    /// </summary>
+    public int? MaxQueuedRuns { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

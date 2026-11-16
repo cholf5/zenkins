@@ -18,9 +18,15 @@ loop (`dotnet run` from a clone).
 > one `Version` property in `Directory.Build.props`, surfaced by the binaries' version flag and the
 > shell footer's version line) and re-verified the whole gate through `scripts/verify.sh` on
 > 2026-11-15, when the fast suite grew the version-agreement fact. B-002 added the claim-cap
-> regression on 2026-11-15 and the §2 counts were re-verified then (fast 1046, all six 1065).
-> Q-010 added the split-tag pin on 2026-11-15 and the §2 counts were re-verified then (fast 1047,
-> all six 1066; the pin is a `Category=Concurrency` test, which runs in the fast suite). Every command in the POSIX
+> regression on 2026-11-15. Q-010 added the split-tag pin on 2026-11-15 (a `Category=Concurrency`
+> test, which runs in the fast suite). F-028 and F-029 added the project gate and the queue controls
+> on 2026-11-16: 18 tests in the fast suite (7 project enable/disable, 8 queue-control facts, 2
+> webhook gate, 1 project-cap race) and a seventh category, `Postgres`, for the concurrency fact
+> that only a real PostgreSQL can show (§2). **Earlier revisions of this note carried counts that
+> were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
+> fast suite by more than fifty) - so this revision drops those figures rather than repeating them
+> and re-baselines against a real run: **fast 1124, all seven 1148** (Milestone 12, Recovery 4,
+> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 1). Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -134,15 +140,29 @@ that prove the product end to end instead of proving its parts:
   used is captured through a recording shim and matched word for word against the hardened
   `GIT_SSH_COMMAND` pins. It needs the OpenSSH tools of §1 and nothing on the host's `~/.ssh`;
   where the tools are absent the facts skip with the reason recorded.
+- **`Category=Postgres`** (F-029) runs the project-concurrency race against a **real PostgreSQL**
+  server, because SQLite cannot show it: every claim begins with a write (the worker-row no-op
+  `UPDATE`), so the database's single writer serializes the statements and the project lock's
+  necessity becomes unobservable. The suite needs a disposable database whose connection string is
+  passed in `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated before each fact);
+  without the variable the facts **skip with that reason recorded** - the GitSshd discipline - so it
+  costs a machine with no PostgreSQL nothing. What it carries: (a) with `MaxConcurrentRuns = 1`, two
+  workers with tag-disjoint queues firing eight concurrent claims admit **exactly one** run per
+  round, five rounds, read from the rows; (b) a **negative control** built from the product's own
+  compare-and-set: count the active runs, then lease, twice - the sequence a check-then-act
+  implementation would run - admits **two** on the same provider, so fact (a) is evidence about the
+  lock rather than about a race that never happened.
 
-None of the harnesses is part of the fast loop, so the fast filter has to exclude **five**
+None of the harnesses is part of the fast loop, so the fast filter has to exclude **six**
 categories. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix
-round for the triple, I-004 for the quadruple) and on 2026-11-15 (Q-009 for the quintuple): the
-quintuple exclusion runs green, and dropping `Category!=GitSshd` alone pulls the sshd suite in.
+round for the triple, I-004 for the quadruple), on 2026-11-15 (Q-009 for the quintuple) and on
+2026-11-16 (F-029 for the sextuple): the sextuple exclusion runs green, and dropping
+`Category!=GitSshd` alone pulls the sshd suite in (dropping `Category!=Postgres` pulls that suite
+in, where it skips without `ZENKINS_TEST_POSTGRES`).
 
 **One command for the whole gate: [`scripts/verify.sh`](../scripts/verify.sh)** (card P-001). The
 script runs exactly the commands below, in this order - `dotnet build -c Release`, the fast suite
-with its quintuple exclusion filter, then one filtered run per harness - and exits non-zero at the
+with its sextuple exclusion filter, then one filtered run per harness - and exits non-zero at the
 first red suite, naming it in its output; nothing after a red suite runs. §2 stays the written gate
 (the prerequisites, what each harness needs, the counts per suite) and the script is its executable
 form: the filters below are the text the script runs, and the two change together. On Windows, run
@@ -152,26 +172,28 @@ deliberately no second PowerShell transcript of the gate to drift against.
 
 ```bash
 dotnet build -c Release                                                                                                        # the harnesses run the built binaries
-dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd"   # the fast suite
+dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres"   # the fast suite
 dotnet test -c Release --filter "Category=Milestone"                                                                           # the milestone acceptance harness
 dotnet test -c Release --filter "Category=Recovery"                                                                            # the recovery acceptance harness
 dotnet test -c Release --filter "Category=PublishSmoke"                                                                        # the publish-smoke acceptance harness
 dotnet test -c Release --filter "Category=PublishAot"                                                                          # the AOT acceptance harness (needs the native toolchain)
 dotnet test -c Release --filter "Category=GitSshd"                                                                             # the real-sshd acceptance harness (needs the OpenSSH tools; skips with a recorded reason without them)
+dotnet test -c Release --filter "Category=Postgres"                                                                            # the real-PostgreSQL concurrency fact (needs ZENKINS_TEST_POSTGRES; skips with a recorded reason without it)
 ```
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd` | `dotnet build -c Release` | ~2½ min on the reference machine (1047 tests, snapshot of the revision) |
-| Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (8 tests) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~2½ min on the reference machine (1124 tests, snapshot of the revision) |
+| Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
 | GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
+| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the fact skips with the recorded reason | ~10 s warm, plus one migration run on a fresh schema (1 test) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all six** (1066 at the time of writing) but
+filter runs **all seven** (1148 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

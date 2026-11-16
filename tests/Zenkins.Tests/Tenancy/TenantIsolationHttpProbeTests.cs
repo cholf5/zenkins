@@ -234,11 +234,39 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
             new Dictionary<string, string> { ["ParametersJson"] = "[]" });
         Assert.Equal(HttpStatusCode.NotFound, parameters.StatusCode);
 
+        // F-028/F-029: the trigger brake and the queue controls resolve the project through the tenant
+        // filter as well - a foreign id is the same 404 the other mutations answer, and B's row keeps its
+        // state (enabled, unlimited).
+        var disable = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/disable",
+            new Dictionary<string, string> { ["Reason"] = "member-hijack" });
+        Assert.Equal(HttpStatusCode.NotFound, disable.StatusCode);
+
+        var enable = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/enable",
+            new Dictionary<string, string>());
+        Assert.Equal(HttpStatusCode.NotFound, enable.StatusCode);
+
+        var limits = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/limits",
+            new Dictionary<string, string> { ["MaxConcurrentRuns"] = "1" });
+        Assert.Equal(HttpStatusCode.NotFound, limits.StatusCode);
+
         var beta = (await _host.Data.ReadAcrossTenantsAsync<Project>(
             project => project.Id == TwoOrgsFixture.ProjectBId,
             CancellationToken)).Single();
         Assert.Equal(TwoOrgsFixture.ProjectBName, beta.Name);
         Assert.Equal(TwoOrgsFixture.ProjectBRepositoryUrl, beta.RepositoryUrl);
+        Assert.False(beta.Disabled);
+        Assert.Null(beta.MaxConcurrentRuns);
+        Assert.Null(beta.MaxQueuedRuns);
+        Assert.Equal(0, beta.QuietPeriodSeconds);
     }
 
     [Fact]

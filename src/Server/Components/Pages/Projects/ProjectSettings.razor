@@ -33,6 +33,12 @@
                     <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
                     <BbBadge Variant="BadgeVariant.Outline">Your role: @organization.Role</BbBadge>
                 }
+                @* F-028: the state the controls below change, stated in the header the other tabs
+                   share too. *@
+                @if (_project.Disabled)
+                {
+                    <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                }
             </div>
         </div>
 
@@ -49,6 +55,16 @@
         {
             <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
                 <p>@webhookMessage</p>
+            </div>
+        }
+
+        @* Cards F-028 + F-029: a refused disable reason or a mistyped limit, rendered from the
+           stable code the endpoint redirected with (the same PRG shape the other forms use). *@
+        @if (SettingsMessage is { } settingsMessage)
+        {
+            <div role="alert" id="settings-error"
+                 class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@settingsMessage</p>
             </div>
         }
 
@@ -111,6 +127,131 @@
                     @* The edit form keeps its own route, so basics editing works exactly as before. *@
                     <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit project basics</BbButton>
                 </div>
+            </BbCardContent>
+        </BbCard>
+
+        @* Card F-028: the reversible trigger brake. Members and Owners may both use it (the server
+           re-checks membership); disabling keeps every history row and only stops the triggers. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Triggers</BbCardTitle>
+                <BbCardDescription>
+                    Disabling stops <em>every</em> trigger for this project - the start form, webhooks and
+                    any future schedule - while its history, artifacts and settings stay readable. Runs
+                    still waiting in the queue are canceled; a run already executing continues. Enabling
+                    restores the triggers exactly as they were: nothing is replayed, and canceled runs
+                    stay canceled.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_project.Disabled)
+                {
+                    <div id="trigger-state-disabled" class="bb:space-y-3">
+                        <p class="bb:text-sm">
+                            <span class="bb:font-medium">This project is disabled.</span>
+                            @(_project.DisabledReason ?? "No reason was recorded.")
+                        </p>
+                        <p class="bb:text-xs bb:text-muted-foreground">
+                            @if (_project.DisabledAt is { } disabledAt)
+                            {
+                                <span>Disabled @disabledAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                                @if (_project.DisabledByEmail is { } disabledBy)
+                                {
+                                    <span> by @disabledBy</span>
+                                }
+                                <span>. </span>
+                            }
+                            Nothing is queued for it until it is enabled again.
+                        </p>
+                        <form method="post" action="@($"/projects/{_project.Id}/enable")" data-zenkins-antiforgery>
+                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Enable project</BbButton>
+                        </form>
+                    </div>
+                }
+                else
+                {
+                    <form id="project-disable-form" method="post" action="@($"/projects/{_project.Id}/disable")" data-zenkins-antiforgery>
+                        <div class="bb:space-y-3">
+                            <div>
+                                <label for="project-disabled-reason" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Reason</label>
+                                <input id="project-disabled-reason"
+                                       name="Reason"
+                                       required
+                                       maxlength="@ProjectValidation.MaxDisabledReasonLength"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                       placeholder="Repository is mid-migration" />
+                                <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                    Required: the person whose trigger is refused reads it.
+                                </p>
+                            </div>
+                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Disable project</BbButton>
+                        </div>
+                    </form>
+                }
+            </BbCardContent>
+        </BbCard>
+
+        @* Card F-029: how much of the queue and how many workers one project may occupy. Blank means
+           the default (unlimited / zero) - exactly how every project behaved before this card. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Limits</BbCardTitle>
+                <BbCardDescription>
+                    Bounds on this project's own queue and concurrency, so one busy repository cannot
+                    swamp the workers. The claim applies them in this order: quiet period, then the
+                    concurrency limit, then the queue cap decides whether a trigger is accepted at all.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <form id="project-limits-form" method="post" action="@($"/projects/{_project.Id}/limits")" data-zenkins-antiforgery>
+                    <div class="bb:grid bb:grid-cols-1 bb:gap-4 bb:sm:grid-cols-3">
+                        <div>
+                            <label for="limits-max-concurrent" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Concurrent runs</label>
+                            <input id="limits-max-concurrent"
+                                   name="MaxConcurrentRuns"
+                                   value="@_project.MaxConcurrentRuns"
+                                   inputmode="numeric"
+                                   autocomplete="off"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="unlimited" />
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                At most this many of the project's runs are running (or claimed and not yet
+                                started) at once. Blank means unlimited.
+                            </p>
+                        </div>
+                        <div>
+                            <label for="limits-quiet-period" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Quiet period (seconds)</label>
+                            <input id="limits-quiet-period"
+                                   name="QuietPeriodSeconds"
+                                   value="@_project.QuietPeriodSeconds"
+                                   inputmode="numeric"
+                                   autocomplete="off"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="0" />
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                Seconds after a trigger before its run may be claimed. A trigger inside the
+                                period is an ordinary queued run - nothing is merged. 0 means claimable at once.
+                            </p>
+                        </div>
+                        <div>
+                            <label for="limits-max-queued" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Queue cap</label>
+                            <input id="limits-max-queued"
+                                   name="MaxQueuedRuns"
+                                   value="@_project.MaxQueuedRuns"
+                                   inputmode="numeric"
+                                   autocomplete="off"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="unlimited" />
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                The most runs that may wait in this project's queue. A trigger at the cap is
+                                refused before any run is created. Blank means unlimited.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="bb:mt-4">
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save limits</BbButton>
+                    </div>
+                </form>
             </BbCardContent>
         </BbCard>
 
@@ -589,6 +730,10 @@
     [SupplyParameterFromQuery(Name = "credentialError")]
     private string? CredentialErrorCode { get; set; }
 
+    /// <summary>Cards F-028 + F-029: the stable code a refused disable reason or limits save redirected with.</summary>
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? SettingsErrorCode { get; set; }
+
     [SupplyParameterFromQuery(Name = "credentialName")]
     private string? SubmittedCredentialName { get; set; }
 
@@ -601,6 +746,12 @@
         "webhook-enabled" => "The webhook is enabled.",
         "webhook-disabled" => "The webhook is disabled; its URL now answers like an unknown one.",
         "webhook-deleted" => "The webhook was deleted.",
+        // F-028's trigger brake and F-029's limits.
+        "project-disabled" =>
+            "The project is disabled: every trigger is refused and the runs that were still waiting were canceled.",
+        "project-enabled" =>
+            "The project is enabled. Triggers queue runs again; canceled runs stay canceled and nothing was replayed.",
+        "limits-saved" => "The project's limits were saved.",
         // D-003's credential outcomes.
         GitCredentialEndpoints.NoticeCreated => "The Git credential was created.",
         GitCredentialEndpoints.NoticeRotated => "The Git credential was rotated; the previous value is no longer stored.",
@@ -615,6 +766,15 @@
 
     /// <summary>The field-level error the webhook create form redirected back with (F-017).</summary>
     private string? WebhookMessage => WebhookErrorCodes.MessageFor(WebhookErrorCode);
+
+    /// <summary>
+    /// Cards F-028 + F-029: the refusal a disable or limits save redirected back with. The code is the
+    /// request's only echo, so an unknown code still says something rather than rendering as a no-op.
+    /// </summary>
+    private string? SettingsMessage =>
+        SettingsErrorCode is null
+            ? null
+            : ProjectErrorCodes.MessageFor(SettingsErrorCode) ?? "The change was not accepted.";
 
     /// <summary>
     /// The field-level error a credential form redirected back with. The value never travels in a

@@ -42,6 +42,12 @@
                 {
                     <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
                 }
+                @* F-028: the state is stated next to the name, on every tab's shared header, so a
+                   "nothing builds" question answers itself without opening the settings tab. *@
+                @if (_project.Disabled)
+                {
+                    <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                }
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                 <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit</BbButton>
@@ -58,6 +64,36 @@
         {
             <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
                 <p>@notice</p>
+            </div>
+        }
+
+        @* F-028: a disabled project says so (with the operator's reason and the attribution) above
+           everything else - the history and artifacts below stay readable, only the triggers stop. *@
+        @if (_project.Disabled)
+        {
+            <div id="project-disabled-notice" role="alert"
+                 class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm">
+                <p class="bb:font-medium bb:text-destructive">This project is disabled.</p>
+                <p class="bb:mt-1" id="project-disabled-reason">
+                    @(_project.DisabledReason ?? "No reason was recorded.")
+                </p>
+                <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                    Nothing is queued for it - the form, webhooks and every other trigger are refused -
+                    and runs that were still waiting were canceled. Its history and artifacts stay
+                    readable. Enable it on the settings tab to build again.
+                    @if (_project.DisabledAt is { } disabledAt)
+                    {
+                        <span>Disabled @disabledAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                        @if (_project.DisabledByEmail is { } disabledBy)
+                        {
+                            <span> by @disabledBy.</span>
+                        }
+                        else
+                        {
+                            <span>.</span>
+                        }
+                    }
+                </p>
             </div>
         }
 
@@ -232,6 +268,18 @@
                 }
             </BbCardHeader>
             <BbCardContent>
+                @if (_project.Disabled)
+                {
+                    @* F-028: the form is not offered at all - a form that always refuses wastes the
+                       caller's attention. The server still refuses a forged POST; this is the page
+                       half of it. *@
+                    <p id="run-form-disabled" class="bb:text-sm">
+                        This project is disabled, so no run can be started. Enable it on the settings
+                        tab; the reason and the moment it was disabled are on the overview.
+                    </p>
+                }
+                else
+                {
                 <form method="post" action="@($"/projects/{_project.Id}/runs/start")" data-zenkins-antiforgery>
                     <div class="bb:space-y-4">
                         @if (RunRequestError is { } runRequestError)
@@ -362,6 +410,7 @@
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Start run</BbButton>
                     </div>
                 </form>
+                }
             </BbCardContent>
         </BbCard>
     }
@@ -383,6 +432,9 @@
     private ProjectParameter[] _parameterDefinitions = [];
     private int _credentialCount;
     private string? _assignedCredentialName;
+
+    /// <summary>F-029: the project's queued-run count, read only when the trigger was refused at the cap.</summary>
+    private int _queuedRunCount;
 
     /// <summary>One clock instant per render (the D-002 discipline the dashboard and runs list keep).</summary>
     private DateTimeOffset _now;
@@ -435,6 +487,14 @@
         RunErrorCodes.FieldInvalid => "That request could not be read, so no run was started. Try again.",
         RunErrorCodes.ParameterUnknown => "One of the supplied parameter names is not defined on this project.",
         RunErrorCodes.ParameterInvalid => "One of the supplied parameter values does not fit its type.",
+
+        // Cards F-028 + F-029: the project itself refused the trigger. The code is all the redirect can
+        // carry; the numbers (if any) are re-read here, so the message quotes what is true now.
+        ProjectTriggerRefusals.ProjectDisabled =>
+            ProjectTriggerGuard.DisabledMessage(_project?.DisabledReason),
+        ProjectTriggerRefusals.QueueFull => _project?.MaxQueuedRuns is { } cap
+            ? ProjectTriggerGuard.QueueFullMessage(_queuedRunCount, cap)
+            : "The project's queue is full, so no run was queued.",
         _ => null,
     };
 
@@ -508,6 +568,13 @@
         // tab can never disagree about which run is newest.
         var runs = await RunsService.GetProjectRunsAsync(ProjectId);
         _newestRun = runs.Count > 0 ? runs[0] : null;
+
+        // F-029: the queue-cap refusal quotes the observed numbers, so read the count only for that
+        // refusal - every other render of this page needs no count.
+        if (RunErrorCode == ProjectTriggerRefusals.QueueFull)
+        {
+            _queuedRunCount = await RunsService.GetProjectQueuedRunCountAsync(ProjectId);
+        }
 
         // Credential metadata is Owner-visible only (the settings tab's asymmetry stance): an Owner
         // gets the count and the assigned credential's name, a Member neither.

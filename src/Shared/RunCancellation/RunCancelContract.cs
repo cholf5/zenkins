@@ -19,6 +19,14 @@ public static class RunCancelReasons
     /// <summary>The prefix of a user-initiated cancel reason; the full reason names the actor.</summary>
     public const string CanceledByUser = "canceled-by-user";
 
+    /// <summary>
+    /// Card F-028: the run was still queued when its project was disabled, so the disable canceled it.
+    /// The same word is the trigger refusal's code (<c>project-disabled</c>): a run that did not build
+    /// and a trigger that did not queue say the same thing about the same cause. Declared here, next to
+    /// the other terminal reasons, because it becomes the run's <c>FailureReason</c>.
+    /// </summary>
+    public const string ProjectDisabled = "project-disabled";
+
     /// <summary>Builds the full reason for a user-initiated cancel (<c>canceled-by-user &lt;user&gt;</c>).</summary>
     public static string ForUser(string actor) => $"{CanceledByUser} {actor}";
 

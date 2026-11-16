@@ -297,7 +297,8 @@ public sealed class DashboardOrganizationSwitchTests : IClassFixture<TwoOrgsFixt
 /// The cost ceiling (TC-003): with 200 runs behind a 20-row cap, the read model and the page both
 /// cost a fixed number of commands. Documented ceiling, recorded in
 /// <c>docs/kanban/issues/d-002-dashboard.md</c>: the read model issues exactly 4 commands (worker
-/// aggregate, run scan, recent-20 detail, project count); the page render is bounded by 16.
+/// aggregate, run scan, recent-20 detail, project count - one grouped aggregate that answers both the
+/// total and card F-028's disabled count); the page render is bounded by 16.
 /// <para>
 /// <b>One fixture per test, never one per class (card B-003).</b> Both facts seed 200 <c>Success</c>
 /// runs into the same organization A and neither cleans up, so a class fixture made whichever fact ran
@@ -309,7 +310,8 @@ public sealed class DashboardOrganizationSwitchTests : IClassFixture<TwoOrgsFixt
 [Trait("Category", "Dashboard")]
 public sealed class DashboardQueryCeilingTests : IDisposable
 {
-    /// <summary>The documented read-model ceiling.</summary>
+    /// <summary>The documented read-model ceiling (D-002's 4; card F-028's disabled count rides the
+    /// same grouped aggregate as the total, so the ceiling does not move).</summary>
     public const int ReadModelCommandCeiling = 4;
 
     /// <summary>The documented page-render ceiling (session + shell + read model).</summary>

@@ -69,6 +69,12 @@
                                     </p>
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
+                                    @* F-028: a disabled project is visible here too - the list is where an
+                                       operator looks for "why did nothing build today?". *@
+                                    @if (project.Disabled)
+                                    {
+                                        <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                                    }
                                     @if (project.Kind == ProjectKinds.Freestyle)
                                     {
                                         <BbBadge Variant="BadgeVariant.Secondary">Freestyle</BbBadge>

@@ -116,8 +116,10 @@ public static class WebhookEndpoints
 
             default:
                 // The closed vocabulary the card fixes: `queued`, `ignored:branch`, `ignored:delete`,
-                // `ignored:not-branch`, and `duplicate` for a replay (which still carries the original
-                // outcome and, when it queued one, the original run id).
+                // `ignored:not-branch`, `project-disabled` and `queue-full` (cards F-028/F-029: the
+                // project's own gate refused the push - recorded, and still a 2xx), and `duplicate` for a
+                // replay (which still carries the original outcome and, when it queued one, the original
+                // run id).
                 return Results.Json(new WebhookDeliveryResponse(
                     Status: result.Status == WebhookDeliveryStatus.Duplicate
                         ? "duplicate"
