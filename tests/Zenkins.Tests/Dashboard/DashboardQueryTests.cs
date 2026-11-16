@@ -298,9 +298,16 @@ public sealed class DashboardOrganizationSwitchTests : IClassFixture<TwoOrgsFixt
 /// cost a fixed number of commands. Documented ceiling, recorded in
 /// <c>docs/kanban/issues/d-002-dashboard.md</c>: the read model issues exactly 4 commands (worker
 /// aggregate, run scan, recent-20 detail, project count); the page render is bounded by 16.
+/// <para>
+/// <b>One fixture per test, never one per class (card B-003).</b> Both facts seed 200 <c>Success</c>
+/// runs into the same organization A and neither cleans up, so a class fixture made whichever fact ran
+/// second count the first one's history - the read-model fact then saw 401 runs where its seeding
+/// promises 201. xunit constructs a new instance of a test class per fact, so holding the fixture in an
+/// instance field (instead of <c>IClassFixture</c>) gives each fact its own temporary database and host.
+/// </para>
 /// </summary>
 [Trait("Category", "Dashboard")]
-public sealed class DashboardQueryCeilingTests : IClassFixture<DashboardPageFixture>
+public sealed class DashboardQueryCeilingTests : IDisposable
 {
     /// <summary>The documented read-model ceiling.</summary>
     public const int ReadModelCommandCeiling = 4;
@@ -308,9 +315,8 @@ public sealed class DashboardQueryCeilingTests : IClassFixture<DashboardPageFixt
     /// <summary>The documented page-render ceiling (session + shell + read model).</summary>
     public const int PageCommandCeiling = 16;
 
-    private readonly DashboardPageFixture _host;
-
-    public DashboardQueryCeilingTests(DashboardPageFixture host) => _host = host;
+    /// <summary>This fact's own host and database; disposed with the test instance.</summary>
+    private readonly DashboardPageFixture _host = new();
 
     private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
 
@@ -377,6 +383,8 @@ public sealed class DashboardQueryCeilingTests : IClassFixture<DashboardPageFixt
         Assert.Equal(DashboardQuery.RecentRunCap, runIds.Count);
         Assert.Equal(runIds.Count, runIds.Distinct().Count());
     }
+
+    public void Dispose() => _host.Dispose();
 }
 
 /// <summary>The shared display bits (D-002): one badge map and one duration formatter for every page.</summary>
