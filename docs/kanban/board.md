@@ -36,6 +36,8 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-013](issues/q-013-theme-shell-test-strength.md) | The theme shell tests do not pin the load order, the trigger wiring or the cookie's negative cases | P2 | S | | none |
 | [Q-014](issues/q-014-artifact-zip-temp-snapshot-flake.md) | The artifact zip fact snapshots the OS temp directory and fails whenever anything else writes there | P2 | S | | none |
 | [Q-015](issues/q-015-api-token-stamp-and-test-gaps.md) | F-027's review leftovers: the last-used stamp still fails loud and wide, and two fixes have no regression net | P3 | S | | none |
+| [B-008](issues/b-008-idempotency-key-scope.md) | Idempotency-Key has no project and no payload dimension, so a reused key answers with another project's run | P1 | S | | none |
+| [Q-016](issues/q-016-postgres-trigger-cap-fact.md) | The trigger-side queue cap has no provider-discriminating fact — SQLite cannot see its lock either | P2 | S | | none |
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | S | | none |
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Duplicate choice entries accepted; a Freestyle row's inherited pipeline path | P3 | S | | none |
 
