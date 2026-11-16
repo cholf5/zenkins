@@ -1522,6 +1522,97 @@ public sealed class RunService(
     }
 
     /// <summary>
+    /// Card F-024's scheduled trigger: <b>the same run the manual form and a webhook delivery queue</b>, with the
+    /// definition's defaults filled in for the inputs a headless trigger cannot supply.
+    /// <list type="bullet">
+    /// <item>the branch is the project's default (a Pipeline run) and the definition is the project's frozen
+    /// Freestyle spec (a Freestyle run) - the two things a click would have chosen;</item>
+    /// <item>the parameters resolve to their definitions' defaults (F-021) and no required tags are set, because a
+    /// schedule has no form to collect either;</item>
+    /// <item>the trigger type is <see cref="BuildRunTriggerType.Schedule"/> and there is no triggering user - nobody
+    /// was signed in.</item>
+    /// </list>
+    /// <para>
+    /// <b>Why the caller passes its context.</b> The schedule sweeper needs the run and the due-time record it
+    /// explains to commit together: a crash between them would either lose the run without a record or record a
+    /// due time that queued nothing. So this method stages on the caller's context inside the caller's transaction,
+    /// and the staging routine applies the same F-028/F-029 gate under the same project row lock as every other
+    /// trigger. There is no second insert path and no schedule-only validation.
+    /// </para>
+    /// <para>
+    /// <b>Refusals are answers, not exceptions.</b> A disabled project returns <c>Refused(project-disabled)</c>, a
+    /// full queue <c>Refused(queue-full)</c>, and a Freestyle project with no saved steps
+    /// <c>Invalid(steps-missing)</c> - the schedule records whichever it gets, so the page says why nothing was
+    /// queued instead of showing a missing run.
+    /// </para>
+    /// </summary>
+    public async Task<RunTriggerResult> QueueScheduledRunAsync(
+        ZenkinsDbContext context,
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            // The schedule row selects the tenant; reaching here without one is a wiring fault, not a user error.
+            return RunTriggerResult.Forbidden("No organization is selected for this schedule.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return RunTriggerResult.NotFound();
+        }
+
+        // F-020: a Freestyle project runs its frozen spec. A project whose steps were never saved cannot run
+        // anything, and a schedule must not queue a run whose only future is that failure.
+        var isFreestyle = project.Kind == ProjectKinds.Freestyle;
+        if (isFreestyle && project.FreestyleSpecJson is null)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.StepsMissing));
+        }
+
+        var run = BuildQueuedRun(
+            activeOrganizationId.Value,
+            project,
+            isFreestyle ? string.Empty : project.DefaultBranch,
+            requiredTags: string.Empty,
+            timeoutSeconds: null,
+            BuildRunTriggerType.Schedule,
+            triggerUserId: null,
+            gitCommit: null,
+            // F-020: the Freestyle run freezes the project's spec at trigger time (the same snapshot discipline
+            // a click follows); a Pipeline run's worker reports its own definition.
+            pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
+            // F-021: a headless trigger has no user to fill the form, so the parameters resolve to the
+            // definitions' defaults - the same honest answer a webhook delivery gives.
+            parametersJson: SerializeParameters(
+                ProjectParameters.ResolveValues(ReadParameterDefinitions(project.ParametersJson), null, out _)));
+
+        var staged = await StageQueuedRunAsync(context, run, idempotency: null, cancellationToken);
+        if (staged.Status != RunOperationStatus.Success)
+        {
+            // Cards F-028 + F-029: the project's own gate refused this trigger (disabled, or the queue is at its
+            // cap). Nothing is staged, so the schedule records the refusal with no orphan run to clean up.
+            return staged;
+        }
+
+        logger.LogInformation(
+            "Run queued by schedule. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Number={Number} Branch={Branch} PipelinePath={PipelinePath}",
+            activeOrganizationId,
+            project.Id,
+            run.Id,
+            run.Number,
+            run.GitBranch,
+            run.PipelinePath);
+        return staged;
+    }
+
+    /// <summary>
     /// The one run construction routine both trigger sources use: the tenant from the active request (the
     /// data layer rejects anything else), the branch and pipeline path snapshotted so a later project edit
     /// cannot move this run, and the trigger source's own attribution. Adding and saving is the caller's

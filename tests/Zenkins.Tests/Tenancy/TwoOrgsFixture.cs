@@ -127,6 +127,18 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only delivery record.</summary>
     public static readonly Guid WebhookDeliveryBId = new("b0000000-0000-4000-8000-000000000094");
 
+    /// <summary>F-024: A's only cron schedule, the positive control for the schedule probes.</summary>
+    public static readonly Guid ScheduleAId = new("a0000000-0000-4000-8000-0000000000b1");
+
+    /// <summary>F-024: B's only cron schedule.</summary>
+    public static readonly Guid ScheduleBId = new("b0000000-0000-4000-8000-0000000000b2");
+
+    /// <summary>F-024: A's only due-time row (of A's only schedule).</summary>
+    public static readonly Guid ScheduleOccurrenceAId = new("a0000000-0000-4000-8000-0000000000b3");
+
+    /// <summary>F-024: B's only due-time row.</summary>
+    public static readonly Guid ScheduleOccurrenceBId = new("b0000000-0000-4000-8000-0000000000b4");
+
     /// <summary>F-027: A's only API token, the positive control for the API probes.</summary>
     public static readonly Guid ApiTokenAId = new("a0000000-0000-4000-8000-0000000000a1");
 
@@ -653,6 +665,52 @@ public sealed class TwoOrgsFixture : IDisposable
                 DedupeKey = WebhookDedupeKey,
                 Outcome = "queued",
                 ReceivedAt = DateTimeOffset.UtcNow,
+            });
+
+        // F-024: one schedule per organization (and one due-time row hanging off each), so the
+        // read/write/find probes are not vacuous and the two unique indexes - (ProjectId, Cron, TimeZone)
+        // and (ScheduleId, DueAt) - each have a row to collide with.
+        var dueAt = new DateTimeOffset(2026, 11, 16, 3, 0, 0, TimeSpan.Zero);
+        context.Set<ProjectSchedule>().AddRange(
+            new ProjectSchedule
+            {
+                Id = ScheduleAId,
+                OrganizationId = OrgAId,
+                ProjectId = ProjectAId,
+                Cron = "0 3 * * *",
+                TimeZone = "UTC",
+                CreatedByUserId = OrgAOwnerUserId,
+                LastEvaluatedAt = dueAt,
+            },
+            new ProjectSchedule
+            {
+                Id = ScheduleBId,
+                OrganizationId = OrgBId,
+                ProjectId = ProjectBId,
+                Cron = "0 3 * * *",
+                TimeZone = "UTC",
+                CreatedByUserId = OrgBOwnerUserId,
+                LastEvaluatedAt = dueAt,
+            });
+
+        context.Set<ScheduleOccurrence>().AddRange(
+            new ScheduleOccurrence
+            {
+                Id = ScheduleOccurrenceAId,
+                OrganizationId = OrgAId,
+                ScheduleId = ScheduleAId,
+                DueAt = dueAt,
+                Outcome = "queued",
+                RecordedAt = dueAt,
+            },
+            new ScheduleOccurrence
+            {
+                Id = ScheduleOccurrenceBId,
+                OrganizationId = OrgBId,
+                ScheduleId = ScheduleBId,
+                DueAt = dueAt,
+                Outcome = "queued",
+                RecordedAt = dueAt,
             });
 
         context.SaveChanges();

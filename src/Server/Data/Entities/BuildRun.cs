@@ -66,6 +66,14 @@ public static class BuildRunTriggerType
     /// (a Freestyle run) can be replayed, and the run page says why when it cannot.
     /// </summary>
     public const string Replay = "Replay";
+
+    /// <summary>
+    /// Card F-024's scheduled trigger: the cron clock queued the run with the definitions' defaults. Like a
+    /// webhook delivery nobody was signed in, so it carries no <see cref="BuildRun.TriggerUserId"/>; in every
+    /// other respect it is the run a member's click queues - the same F-028/F-029 gate, the same queue, the
+    /// same build numbering, the same worker contract.
+    /// </summary>
+    public const string Schedule = "Schedule";
 }
 
 /// <summary>

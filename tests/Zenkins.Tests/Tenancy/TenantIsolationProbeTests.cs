@@ -367,6 +367,59 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             TwoOrgsFixture.WebhookDeliveryBId,
             CancellationToken);
 
+    // ---- F-024: cron schedules and their due-time ledger -----------------
+
+    [Fact]
+    public Task Schedules_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<ProjectSchedule>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Schedule_due_time_rows_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<ScheduleOccurrence>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_schedule_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<ProjectSchedule>(
+            _fixture,
+            () => new ProjectSchedule
+            {
+                // Only the tenant field is wrong; the project, expression and zone are legal.
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                Cron = "*/5 * * * *",
+                TimeZone = "UTC",
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_schedule_due_time_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<ScheduleOccurrence>(
+            _fixture,
+            () => new ScheduleOccurrence
+            {
+                // A due time no other row uses, so the rejection is the tenant guard's - never a key clash.
+                ScheduleId = TwoOrgsFixture.ScheduleAId,
+                DueAt = new DateTimeOffset(2026, 11, 17, 3, 0, 0, TimeSpan.Zero),
+                Outcome = "missed",
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_schedules() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<ProjectSchedule>(
+            _fixture,
+            TwoOrgsFixture.ScheduleAId,
+            TwoOrgsFixture.ScheduleBId,
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_schedule_due_times() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<ScheduleOccurrence>(
+            _fixture,
+            TwoOrgsFixture.ScheduleOccurrenceAId,
+            TwoOrgsFixture.ScheduleOccurrenceBId,
+            CancellationToken);
+
     [Fact]
     public void Every_tenant_owned_entity_is_covered_by_the_harness()
     {

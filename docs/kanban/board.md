@@ -16,7 +16,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [I-005](issues/i-005-worker-git-remote-probe.md) | Worker git remote probe: branches and heads without a clone, over the pull model | P1 | M | | none |
 | [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | M | | F-020 |
 | [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | L | | I-005, F-017, F-036 |
-| [F-024](issues/f-024-scheduled-triggers.md) | Scheduled triggers: cron per project, with an honest overlap and miss policy | P1 | M | | F-021, F-029 |
 | [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | M | | I-005, F-017 |
 | [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | M | | F-036 |
 | [F-030](issues/f-030-stage-grouping.md) | Stage grouping: named stages in the frozen spec, with status and duration | P2 | L | | F-014, F-015, F-020 |
@@ -34,6 +33,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-013](issues/q-013-theme-shell-test-strength.md) | The theme shell tests do not pin the load order, the trigger wiring or the cookie's negative cases | P2 | S | | none |
 | [Q-014](issues/q-014-artifact-zip-temp-snapshot-flake.md) | The artifact zip fact snapshots the OS temp directory and fails whenever anything else writes there | P2 | S | | none |
 | [Q-017](issues/q-017-idempotency-fingerprint-and-cap-replay.md) | The idempotency fingerprint drops invalid tags before hashing, and replay-vs-queue-cap has no fact | P3 | S | | none |
+| [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | S | | none |
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | S | | none |
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Duplicate choice entries accepted; a Freestyle row's inherited pipeline path | P3 | S | | none |
 
@@ -98,4 +98,5 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-016](issues/q-016-postgres-trigger-cap-fact.md) | The trigger-side queue cap has no provider-discriminating fact — SQLite cannot see its lock either | P2 | 2026-11-16 |
 | [B-008](issues/b-008-idempotency-key-scope.md) | Idempotency-Key has no project and no payload dimension, so a reused key answers with another project's run | P1 | 2026-11-16 |
 | [Q-015](issues/q-015-api-token-stamp-and-test-gaps.md) | F-027's review leftovers: the last-used stamp still fails loud and wide, and two fixes have no regression net | P3 | 2026-11-16 |
+| [F-024](issues/f-024-scheduled-triggers.md) | Scheduled triggers: cron per project, with an honest overlap and miss policy | P1 | 2026-11-16 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | 2026-11-16 |

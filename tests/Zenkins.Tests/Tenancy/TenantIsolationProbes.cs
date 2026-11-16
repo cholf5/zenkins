@@ -40,6 +40,11 @@ public static class TenantIsolationProbes
             // TenantIsolationApiProbeTests (a foreign token is refused; a foreign project/run id is one
             // bare 404 on every route; a key binds only inside the token that sent it).
             typeof(ApiToken), typeof(ApiIdempotencyRecord),
+
+            // F-024: the per-project cron schedules and their due-time ledger. Probed by
+            // TenantIsolationProbeTests (each tenant sees only its own; a cross-tenant write is refused;
+            // a Find after a tenant switch finds nothing).
+            typeof(ProjectSchedule), typeof(ScheduleOccurrence),
         ];
 
     /// <summary>

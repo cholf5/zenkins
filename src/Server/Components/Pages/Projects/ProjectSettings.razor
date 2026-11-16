@@ -4,9 +4,13 @@
 @using Zenkins.Server.Secrets
 @using Zenkins.Shared.Projects
 @using Zenkins.Server.Webhooks
+@using Zenkins.Server.Schedules
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
 @inject WebhookService WebhookManagement
+@inject ScheduleService ScheduleManagement
+@inject TimeProvider Clock
+@inject ScheduleOptions ScheduleConfiguration
 @inject GitCredentialService CredentialService
 @inject NavigationManager Navigation
 
@@ -250,6 +254,255 @@
                     </div>
                     <div class="bb:mt-4">
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save limits</BbButton>
+                    </div>
+                </form>
+            </BbCardContent>
+        </BbCard>
+
+        @* Card F-024: the cron schedules. Both kinds carry them (a Freestyle project has no repository
+           file to declare one in, and the clock is the Server's), so the card sits outside the
+           Pipeline-only section below. Every decision a due time makes is listed under it: queued,
+           skipped (with the reason) or missed - the page never silently drops a due time. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Schedules</BbCardTitle>
+                <BbCardDescription>
+                    A cron expression in an IANA time zone queues one run with the definition's defaults
+                    at every due time. Five fields: minute hour day-of-month month day-of-week.
+                    A due time that arrives while a run of this project is already queued or running is
+                    <span class="bb:font-medium">skipped</span> unless the schedule says otherwise, and a due
+                    time the Server was not running for is recorded as missed - never replayed.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_schedulePreview is { } preview)
+                {
+                    <div id="schedule-preview" class="bb:mb-4 bb:rounded-md bb:border bb:border-input bb:p-3">
+                        <p class="bb:text-sm bb:font-medium">Next runs for @(PreviewCron) in @(PreviewZone)</p>
+                        @if (preview.IsValid)
+                        {
+                            <ul class="bb:mt-2 bb:list-disc bb:space-y-1 bb:pl-5 bb:text-sm">
+                                @foreach (var due in preview.DueTimes)
+                                {
+                                    <li>
+                                        <span class="bb:font-mono">@due.ToString("yyyy-MM-dd HH:mm")</span> UTC
+                                        <span class="bb:text-muted-foreground">(@LocalTime(due, PreviewZone))</span>
+                                    </li>
+                                }
+                            </ul>
+                            <p class="bb:mt-2 bb:text-xs bb:text-muted-foreground">
+                                Nothing is saved by a preview. Adjust the expression above and save when it looks right.
+                            </p>
+                        }
+                        else
+                        {
+                            <p id="schedule-preview-error" role="alert" class="bb:mt-2 bb:text-sm bb:text-destructive">
+                                @preview.Message
+                            </p>
+                        }
+                    </div>
+                }
+
+                @if (_schedules.Count == 0)
+                {
+                    <p id="schedules-empty" class="bb:mb-4 bb:text-sm bb:text-muted-foreground">
+                        No schedule yet. A project can carry up to
+                        @ScheduleErrorCodes.MaxSchedulesPerProject schedules.
+                    </p>
+                }
+                else
+                {
+                    <ul id="schedule-list" class="bb:mb-6 bb:space-y-4">
+                        @foreach (var schedule in _schedules)
+                        {
+                            <li id="schedule-@schedule.Id" class="bb:rounded-md bb:border bb:border-input bb:p-3">
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-2">
+                                    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                        <code class="bb:text-sm">@schedule.Cron</code>
+                                        <BbBadge Variant="BadgeVariant.Outline">@schedule.TimeZone</BbBadge>
+                                        @if (schedule.Enabled)
+                                        {
+                                            <BbBadge Variant="BadgeVariant.Secondary">Enabled</BbBadge>
+                                        }
+                                        else
+                                        {
+                                            <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                                        }
+                                        <BbBadge Variant="BadgeVariant.Outline">
+                                            @(schedule.QueueAnyway ? "Queues anyway" : "Skips when busy")
+                                        </BbBadge>
+                                    </div>
+                                    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                        <form method="post"
+                                              action="@($"/projects/{_project.Id}/schedules/{schedule.Id}/toggle")"
+                                              data-zenkins-antiforgery>
+                                            <input type="hidden" name="Flag" value="@ScheduleEndpoints.FlagEnabled" />
+                                            <input type="hidden" name="Value" value="@(schedule.Enabled ? "false" : "true")" />
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">
+                                                @(schedule.Enabled ? "Disable" : "Enable")
+                                            </BbButton>
+                                        </form>
+                                        <form method="post"
+                                              action="@($"/projects/{_project.Id}/schedules/{schedule.Id}/toggle")"
+                                              data-zenkins-antiforgery>
+                                            <input type="hidden" name="Flag" value="@ScheduleEndpoints.FlagQueueAnyway" />
+                                            <input type="hidden" name="Value" value="@(schedule.QueueAnyway ? "false" : "true")" />
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">
+                                                @(schedule.QueueAnyway ? "Skip when busy" : "Queue anyway")
+                                            </BbButton>
+                                        </form>
+                                        <form method="post"
+                                              action="@($"/projects/{_project.Id}/schedules/{schedule.Id}/delete")"
+                                              data-zenkins-antiforgery>
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete</BbButton>
+                                        </form>
+                                    </div>
+                                </div>
+                                <dl class="bb:mt-3 bb:grid bb:grid-cols-1 bb:gap-2 bb:text-sm bb:sm:grid-cols-2">
+                                    <div>
+                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Next runs</dt>
+                                        <dd>
+                                            @if (schedule.HasNextDue)
+                                            {
+                                                <ul class="bb:space-y-0.5">
+                                                    @foreach (var due in schedule.NextDueTimes)
+                                                    {
+                                                        <li>
+                                                            <span class="bb:font-mono">@due.ToString("yyyy-MM-dd HH:mm")</span> UTC
+                                                            <span class="bb:text-muted-foreground">(@LocalTime(due, schedule.TimeZone))</span>
+                                                        </li>
+                                                    }
+                                                </ul>
+                                            }
+                                            else
+                                            {
+                                                <span class="bb:text-destructive">The expression never fires.</span>
+                                            }
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Last evaluated</dt>
+                                        <dd>
+                                            @if (schedule.LastEvaluatedAt is { } evaluatedAt)
+                                            {
+                                                <span>@evaluatedAt.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="bb:text-muted-foreground">Not yet</span>
+                                            }
+                                        </dd>
+                                    </div>
+                                </dl>
+                                @if (schedule.LastMissedCount > 0)
+                                {
+                                    @* The count is exact even when the list is not: it is the last evaluation's own
+                                       number, kept on the schedule so the ledger's retention cannot shrink it. When the
+                                       evaluation's window was capped (review L1) the sentence says so - the number is
+                                       the newest window's, not the whole outage's, and a reader must not be left to
+                                       infer that from a row the list never shows. *@
+                                    <p id="schedule-missed-@schedule.Id" class="bb:mt-3 bb:text-sm">
+                                        <span class="bb:font-medium">@schedule.LastMissedCount due time(s)</span>
+                                        recorded as missed - the Server was not evaluating this schedule then.
+                                        @if (schedule.LastMissedWindowTruncated)
+                                        {
+                                            <span>
+                                                Only the newest @((int)ScheduleConfiguration.MissWindow.TotalHours)
+                                                hours are counted; earlier missed due times are not listed.
+                                            </span>
+                                        }
+                                    </p>
+                                }
+                                <div class="bb:mt-3">
+                                    <p class="bb:text-xs bb:font-medium bb:text-muted-foreground">Last outcomes</p>
+                                    @if (schedule.RecentOutcomes.Count == 0)
+                                    {
+                                        <p class="bb:mt-1 bb:text-sm bb:text-muted-foreground">
+                                            Nothing yet - the first due time has not arrived.
+                                        </p>
+                                    }
+                                    else
+                                    {
+                                        <ul id="schedule-outcomes-@schedule.Id" class="bb:mt-1 bb:space-y-1 bb:text-sm">
+                                            @foreach (var outcome in schedule.RecentOutcomes)
+                                            {
+                                                <li class="bb:flex bb:flex-wrap bb:items-baseline bb:gap-2">
+                                                    <span class="bb:font-mono bb:text-xs">@outcome.DueAt.ToString("yyyy-MM-dd HH:mm")</span>
+                                                    <BbBadge Variant="@OutcomeVariant(outcome.Outcome)">@outcome.Outcome</BbBadge>
+                                                    <span>@outcome.Description</span>
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+
+                <form id="schedule-create-form"
+                      method="post"
+                      action="@($"/projects/{_project.Id}/schedules/create")"
+                      data-zenkins-antiforgery>
+                    <div class="bb:space-y-4">
+                        <div class="bb:grid bb:grid-cols-1 bb:gap-4 bb:sm:grid-cols-2">
+                            <div>
+                                <label for="schedule-cron" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Cron expression</label>
+                                <input id="schedule-cron"
+                                       name="Cron"
+                                       required
+                                       maxlength="@Zenkins.Server.Schedules.ScheduleCron.MaxLength"
+                                       value="@SubmittedCron"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
+                                       placeholder="0 3 * * *" />
+                                <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                    <code>minute hour day-of-month month day-of-week</code>. Ranges, lists and steps
+                                    work (<code>*/15 9-17 * * MON-FRI</code>); named macros such as
+                                    <code>@@daily</code> and a seconds field are refused.
+                                </p>
+                            </div>
+                            <div>
+                                <label for="schedule-timezone" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Time zone</label>
+                                <input id="schedule-timezone"
+                                       name="TimeZone"
+                                       required
+                                       maxlength="@ScheduleErrorCodes.MaxTimeZoneLength"
+                                       value="@SubmittedTimeZone"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
+                                       placeholder="Europe/Berlin" />
+                                <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                    An IANA id (<code>Europe/Berlin</code>, <code>America/New_York</code>,
+                                    <code>Asia/Tokyo</code>, <code>UTC</code>). Daylight saving is the zone's own:
+                                    a clock time the zone skips is recorded, not run.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="bb:space-y-2">
+                            <label for="schedule-queue-anyway" class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                                <input id="schedule-queue-anyway" type="checkbox" name="QueueAnyway" value="true" />
+                                <input type="hidden" name="QueueAnyway" value="false" />
+                                <span>
+                                    Queue anyway: if a run of this project is still queued or running at a due time,
+                                    queue another (the project's queue cap still applies).
+                                </span>
+                            </label>
+                            <label for="schedule-enabled" class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                                <input id="schedule-enabled" type="checkbox" name="Enabled" value="true" checked />
+                                <input type="hidden" name="Enabled" value="false" />
+                                <span>Enabled: evaluate this schedule (a disabled one records every due time as skipped).</span>
+                            </label>
+                        </div>
+                        <div class="bb:flex bb:flex-wrap bb:gap-2">
+                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Add schedule</BbButton>
+                            @* One form, two submits: the preview button names itself, so the same field values the
+                               save would post answer "when would this run?" without storing anything. *@
+                            <button type="submit"
+                                    name="Action"
+                                    value="preview"
+                                    class="bb:h-9 bb:rounded-md bb:border bb:border-input bb:px-4 bb:text-sm bb:font-medium bb:hover:bg-accent">
+                                Preview next runs
+                            </button>
+                        </div>
                     </div>
                 </form>
             </BbCardContent>
@@ -734,6 +987,24 @@
     [SupplyParameterFromQuery(Name = "error")]
     private string? SettingsErrorCode { get; set; }
 
+    /// <summary>Card F-024: the project's schedules, with their next due times and their last outcomes.</summary>
+    private IReadOnlyList<ScheduleView> _schedules = [];
+
+    /// <summary>Card F-024: the preview computed from the echoed expression and zone (null when none was asked).</summary>
+    private SchedulePreview? _schedulePreview;
+
+    /// <summary>Card F-024: the expression and zone the create form echoes back after a preview or a refusal.</summary>
+    [SupplyParameterFromQuery(Name = "previewCron")]
+    private string? PreviewCron { get; set; }
+
+    [SupplyParameterFromQuery(Name = "previewZone")]
+    private string? PreviewZone { get; set; }
+
+    /// <summary>Card F-024: the values the create form shows (a preview keeps the operator's input).</summary>
+    private string? SubmittedCron => PreviewCron;
+
+    private string? SubmittedTimeZone => PreviewZone;
+
     [SupplyParameterFromQuery(Name = "credentialName")]
     private string? SubmittedCredentialName { get; set; }
 
@@ -752,6 +1023,17 @@
         "project-enabled" =>
             "The project is enabled. Triggers queue runs again; canceled runs stay canceled and nothing was replayed.",
         "limits-saved" => "The project's limits were saved.",
+        // F-024's schedules.
+        ScheduleEndpoints.NoticeCreated =>
+            "The schedule was saved. Its first due time is the next one the expression names.",
+        ScheduleEndpoints.NoticeDeleted => "The schedule was deleted; the runs it already queued stay.",
+        ScheduleEndpoints.NoticeEnabled => "The schedule is enabled again.",
+        ScheduleEndpoints.NoticeDisabled =>
+            "The schedule is paused: every due time it passes is recorded as skipped, and nothing is queued.",
+        ScheduleEndpoints.NoticeQueueAnyway =>
+            "The schedule now queues anyway when a run of this project is still in flight (the queue cap still applies).",
+        ScheduleEndpoints.NoticeSkipOverlap =>
+            "The schedule skips a due time while a run of this project is still queued or running.",
         // D-003's credential outcomes.
         GitCredentialEndpoints.NoticeCreated => "The Git credential was created.",
         GitCredentialEndpoints.NoticeRotated => "The Git credential was rotated; the previous value is no longer stored.",
@@ -774,7 +1056,9 @@
     private string? SettingsMessage =>
         SettingsErrorCode is null
             ? null
-            : ProjectErrorCodes.MessageFor(SettingsErrorCode) ?? "The change was not accepted.";
+            : ProjectErrorCodes.MessageFor(SettingsErrorCode)
+                ?? ScheduleErrorCodes.MessageFor(SettingsErrorCode)
+                ?? "The change was not accepted.";
 
     /// <summary>
     /// The field-level error a credential form redirected back with. The value never travels in a
@@ -826,6 +1110,20 @@
             _webhooks = webhooks.Webhooks;
         }
 
+        // F-024: the schedules card. Any member of the organization may read and manage them (like the
+        // webhooks above); the preview is computed here from the values a preview/refusal echoed back, so it
+        // reads like the save that follows rather than like a client-side guess.
+        if (_session is { HasOrganization: true } scheduler)
+        {
+            var schedules = await ScheduleManagement.ListAsync(scheduler.UserId, ProjectId);
+            _schedules = schedules.Schedules;
+        }
+
+        if (!string.IsNullOrWhiteSpace(PreviewCron) || !string.IsNullOrWhiteSpace(PreviewZone))
+        {
+            _schedulePreview = SchedulePreview.Compute(PreviewCron, PreviewZone, Clock.GetUtcNow());
+        }
+
         // D-003: credentials are listed only for an Owner. The page gate above is the first half,
         // the service's Owner check the second; a Member's list answer is the Forbidden result and
         // the page renders no names (the same asymmetry stance the secrets page keeps).
@@ -862,6 +1160,24 @@
         assignment.AssignedAt is { } assignedAt
             ? assignedAt.ToString("yyyy-MM-dd HH:mm") + " UTC"
             : "Not recorded";
+
+    /// <summary>
+    /// Card F-024: one UTC due instant in the schedule's own zone, so an operator can check the expression
+    /// against the wall clock they configured it for. An unknown zone (a row written out of band) shows the UTC
+    /// time alone rather than inventing a local one.
+    /// </summary>
+    private static string LocalTime(DateTimeOffset utc, string? timeZone) =>
+        ScheduleEvaluator.TryResolveZone(timeZone, out var zone)
+            ? $"{TimeZoneInfo.ConvertTime(utc, zone):yyyy-MM-dd HH:mm} {timeZone}"
+            : "local time unknown";
+
+    /// <summary>Card F-024: the badge colour an outcome reads with: queued is good, a skip is neutral, a miss warns.</summary>
+    private static BadgeVariant OutcomeVariant(string outcome) => outcome switch
+    {
+        ScheduleOutcomes.Queued => BadgeVariant.Default,
+        ScheduleOutcomes.Missed => BadgeVariant.Destructive,
+        _ => BadgeVariant.Secondary,
+    };
 
     /// <summary>
     /// A real 404 for a foreign or missing id. The status-code-pages middleware must not re-execute

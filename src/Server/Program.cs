@@ -18,6 +18,7 @@ using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Organizations;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
+using Zenkins.Server.Schedules;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Webhooks;
 using Zenkins.Server.Workers;
@@ -55,6 +56,10 @@ builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
 builder.Services.AddZenkinsWorkers();
 builder.Services.AddZenkinsRuns();
+
+// F-024: per-project cron schedules - the settings card's service, the due-time ledger and the sweeper that
+// queues a run at each due time (through the same insert path, and the same F-028/F-029 gate, as every trigger).
+builder.Services.AddZenkinsSchedules();
 builder.Services.AddZenkinsDashboard();
 builder.Services.AddZenkinsLogs(builder.Configuration);
 builder.Services.AddZenkinsSecrets();
@@ -225,6 +230,9 @@ app.MapOrganizationEndpoints();
 // Project create/edit/delete (F-003). Same form-bound, antiforgery-validated shape; the service
 // enforces membership (create/edit) and Owner-only deletion.
 app.MapProjectEndpoints();
+
+// F-024: the settings tab's schedule forms (create/preview, toggle, delete).
+app.MapScheduleEndpoints();
 
 // Secret create/rotate/delete (F-012). Owner-only, form-bound; there is deliberately no
 // value-returning route at all - SecretRouteShapeTests pins the route table.

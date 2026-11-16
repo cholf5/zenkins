@@ -50,6 +50,14 @@ this product already has the pattern at worker level (`Workers.IsDisabled` with 
       `ApiV1RunApiTests.A_disabled_project_answers_409_project_disabled_and_queues_nothing`.
       AC2 still stays unticked: `skipped-disabled` for schedules/polls needs
       F-024/F-025, so two of the four named surfaces remain open.
+
+      **Update 2026-11-16 (F-024): the schedules half is now covered.** A due time that arrives while
+      the project is disabled queues nothing and writes the shared code: `ScheduleOccurrence.Outcome =
+      skipped-disabled` (verbatim `ProjectTriggerRefusals.SkippedDisabled`, with `project-disabled` as
+      its detail), proven by
+      `ScheduleTests.A_disabled_project_records_skipped_disabled_and_queues_nothing` - the constant
+      that had no writer now has one. AC2 stays unticked for the **poll** half alone (F-025), i.e. one
+      of the four named surfaces is still open.
 - [x] Runs queued at the moment of disabling are canceled with reason
       `project-disabled` — a disabled job never builds something it queued while
       enabled. A running run is left alone (canceling it would be a second,

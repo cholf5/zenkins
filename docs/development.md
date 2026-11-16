@@ -32,12 +32,24 @@ loop (`dotnet run` from a clone).
 > `Idempotency-Key`'s project and payload scope, 2 for the token stamp's best-effort bound and the
 > token list's Owner check) plus 1 `Category=Postgres` fact for the trigger-side queue cap. Still no new
 > category and no new exclusion.
+> F-024 (scheduled triggers) added **48** tests on 2026-11-16: 24 for the cron arithmetic and its
+> time-zone behaviour (9 facts plus a 15-row `Theory` for the refused expressions - the DST gap and the
+> repeated hour in both directions, the Vixie day rule, IANA zones, "this never fires"), 18 facts for
+> the schedule itself (one run per due time with the definitions' defaults, the overlap skip naming the
+> in-flight run, "queue anyway" and its F-029 cap, the no-backfill miss accounting and its folded count,
+> the disabled project/schedule skips, the already-recorded due time - including the shape where a tick
+> has both a missed backlog and a run to queue, and the fact that a lost due time does not stall the
+> next one - a DST gap through a real tick, and the settings card's create/preview/toggle/delete forms),
+> and 6 for the tenancy harness (the two new tenant-owned entities: read isolation, cross-tenant write
+> refusal and Find-after-switch, in both directions). Still no new category and no new exclusion - the
+> sextuple filter is unchanged.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines against a real run: **fast 1172, all seven 1198** (Milestone 12, Recovery 4,
-> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 3). Every command in the POSIX
+> and re-baselines against a real run: **fast 1220, all seven 1246** (Milestone 12, Recovery 4,
+> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 3 - the last one skipping without
+> `ZENKINS_TEST_POSTGRES`). Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -205,7 +217,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~4½ min on the reference machine (1172 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~4½ min on the reference machine (1220 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -215,7 +227,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1198 at the time of writing) but
+filter runs **all seven** (1246 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only
@@ -501,6 +513,20 @@ Run artifacts (PRD §3.7, card F-016) live in a local directory, not the databas
 The caps are enforced by the server on every request (the worker also pre-checks with the same keys to
 fail early; a worker's console app reads them as `Artifacts__MaxFileBytes`). There is **no retention
 policy** in v1: an artifact lives until its run is deleted.
+
+### Scheduled triggers (the sweeper's knobs)
+
+Cron schedules (PRD §3.13, card F-024) are evaluated by a background sweeper. Five keys tune it, all in
+[`src/Server/appsettings.json`](../src/Server/appsettings.json); the policy they express is PRD §3.5's
+overlap/miss rule, and the defaults are that policy verbatim:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Schedules:TickSeconds` | `30` | How often every schedule is evaluated. A due time is queued on the first tick at or after it, so this is also the normal lateness of a run. Keep it below `MaxDueLatenessSeconds`. |
+| `Schedules:MaxDueLatenessSeconds` | `300` | How late a due time may still be queued. Later than this - or an evaluation whose own watermark is that old, i.e. nothing was evaluating the schedule - records every due time in the window as `missed` instead. This is the "no backfill after downtime" bound. |
+| `Schedules:MissWindowHours` | `24` | How far back one evaluation enumerates missed due times. Older than this is summarised ("earlier misses are not listed") rather than enumerated, so a long outage costs one bounded pass. |
+| `Schedules:MaxRecordedMisses` | `20` | The most individual `missed` rows one evaluation writes. The remainder is folded into the oldest kept row's `CollapsedDueTimes`, so the total the page states stays exact. |
+| `Schedules:RetainedOutcomes` | `20` | How many due-time rows one schedule keeps. Older rows are deleted by the same tick that writes new ones. |
 
 ### Worker Git behaviour (shallow clones and pinned commits)
 

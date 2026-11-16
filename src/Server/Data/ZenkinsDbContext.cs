@@ -9,6 +9,7 @@ using Zenkins.Server.Api;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Artifacts;
+using Zenkins.Server.Schedules;
 using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
@@ -121,6 +122,13 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
 
     /// <summary>First-run guard; at most one row ever exists (see <see cref="BootstrapMarker"/>).</summary>
     public DbSet<BootstrapMarker> BootstrapMarkers => Set<BootstrapMarker>();
+
+    /// <summary>Per-project cron schedules (F-024): the expression, its zone and the overlap switch.</summary>
+    public DbSet<ProjectSchedule> ProjectSchedules => Set<ProjectSchedule>();
+
+    /// <summary>The due-time ledger of every schedule (F-024): one row per (schedule, due time), the
+    /// record of what happened and the guard against queueing twice.</summary>
+    public DbSet<ScheduleOccurrence> ScheduleOccurrences => Set<ScheduleOccurrence>();
 
     // Every query starts by resolving a DbSet, so this is the one place that catches a tenant switch
     // before Find/Include can short-circuit on rows tracked under the previous tenant.
@@ -259,6 +267,24 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             .Where(project => project.Id == projectId)
             .ExecuteUpdateAsync(update => update
                 .SetProperty(project => project.UpdatedAt, project => project.UpdatedAt),
+                cancellationToken);
+
+    /// <summary>
+    /// F-024: locks one schedule row for the duration of its evaluation - the same deliberate no-op write
+    /// <see cref="LockProjectForTriggerAsync"/> performs on a project, applied to the schedule. Two schedulers
+    /// (two Server instances, or two ticks of one) that both decide the same due time is due therefore
+    /// serialize here: the second one re-reads the watermark the first committed and finds nothing left to do.
+    /// The unique <c>(ScheduleId, DueAt)</c> index below it is the guard for any future caller that stages
+    /// outside this lock.
+    /// </summary>
+    /// <returns>1 when the schedule row was locked, 0 when it no longer exists.</returns>
+    public Task<int> LockScheduleForEvaluationAsync(
+        Guid scheduleId,
+        CancellationToken cancellationToken = default) =>
+        ProjectSchedules
+            .Where(schedule => schedule.Id == scheduleId)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(schedule => schedule.UpdatedAt, schedule => schedule.UpdatedAt),
                 cancellationToken);
 
     /// <summary>
@@ -992,6 +1018,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // unique TokenHash, unique (OrganizationId, Name) and (ApiTokenId, Key)). The rules live next
         // to the feature (src/Server/Api).
         modelBuilder.ConfigureApi(this);
+
+        // F-024: the per-project cron schedules and their due-time ledger (tenant-owned; unique
+        // (ProjectId, Cron, TimeZone) and (ScheduleId, DueAt)). The rules live next to the feature
+        // (src/Server/Schedules).
+        modelBuilder.ConfigureSchedules(this);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
