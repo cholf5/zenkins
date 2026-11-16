@@ -137,3 +137,34 @@ box in the report (10.0.400) would want a 10.0.4xx SDK that ships 10.0.14 or new
   pinned compiler: `artifacts/logs/b004-q020-b009-gate.log`.
 - Not verified: the Windows box itself (restore without `NuGetAudit=false`, its assets version, its
   `--vulnerable` output, and an AOT publish there), and the Linux runner.
+
+## Progress 2026-11-16 — fixed and verified on Windows, awaiting the CI witness
+
+`Directory.Packages.props` cannot carry the pin: the compiler arrives as an implicit
+`PublishAot` reference, and central package management rejects both a `PackageVersion` for it
+(NU1009) and an explicit versioned reference (NU1008). The version is therefore set through the item
+the SDK itself reads — `KnownILCompilerPack`'s `ILCompilerPackVersion` in `Directory.Build.targets`,
+fed by `ZenkinsILCompilerVersion` in `Directory.Build.props` — and that it takes effect was proven by
+moving the number and watching `project.assets.json` follow.
+
+10.0.14 is the choice: GHSA-p3jp-9v83-76w9 covers `>= 10.0.0, < 10.0.14`, and 10.0.14 is both the
+first patched release on the line and the version this SDK band already ships, so machines that built
+fine keep their exact compiler while the affected one moves to the fix. `global.json` keeps
+`latestFeature` deliberately — narrowing it would reject the machines this fixes — because the
+compiler no longer follows the installed SDK.
+
+On the Windows box that could not build at all (`10.0.400` SDK, whose stock `ILCompilerPackVersion`
+is the affected `10.0.11`):
+
+- Plain `dotnet build Zenkins.slnx -c Release` → **0 warnings, 0 errors, no NU1903**, no
+  `NuGetAudit=false`, `TreatWarningsAsErrors` untouched.
+- `project.assets.json` → `Microsoft.DotNet.ILCompiler/10.0.14` plus the matching
+  `Microsoft.NETCore.App.Runtime.NativeAOT.win-x64/10.0.14`.
+- `dotnet list package --vulnerable --include-transitive` → nothing on any of the six projects.
+- `dotnet publish src/Worker -r win-x64 -p:PublishAot=true` → a 13.7 MB native `PE32+` that prints
+  `Zenkins Worker 1.0.0`. This was the residual risk the card carried — a new compiler against an old
+  runtime pack — and it does not materialise: both sides are 10.0.14.
+
+Environment note for anyone publishing AOT on Windows: the first attempt failed with `MSB3073` because
+`findvcvarsall.bat` captured `'vswhere.exe' is not recognized` into the linker path; adding the Visual
+Studio Installer directory to `PATH` fixed it. Nothing to do with this repository.

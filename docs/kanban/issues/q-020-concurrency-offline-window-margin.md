@@ -4,7 +4,7 @@ title: The concurrency mass trigger gives the offline window no margin, so a sta
 type: test
 priority: P2
 size: S
-status: review
+status: done
 created: 2026-11-16
 updated: 2026-11-16
 blocked: windows: the new fact has only run on POSIX
@@ -126,3 +126,22 @@ occurrence explains itself.
     `artifacts/logs/b004-q020-b009-gate.log`).
 - Two cores / the Windows runner: **not run here** (AC4 above). Nothing in the fact depends on the
   platform, and the numbers it asserts come from the server's rows rather than from wall-clock sleeps.
+
+## Resolution 2026-11-16 — measured on Windows, and the window was wrong there too
+
+The fix raises the harness window to 15 s and proves the margin with a loopback relay it can close,
+rather than by sleeping. The relay is also the answer to a POSIX trap: the test host is the worker's
+parent, so `SIGSTOP`ing the child wedges .NET's process bookkeeping (reproduced twice, then in a
+three-process minimum), which is why the stall is produced by stopping heartbeats *arriving* instead.
+
+Verified on Windows 10 (20 cores, `cb2ec4d`):
+
+- `Category=Concurrency` → **8/8**, including the new stall fact (~62 s), twice identically.
+- With the window at 15 s the measured silence was **6.009 s** and no run was lost; with the window
+  put back to 5 s the same measurement (**6.202 s**) turned the fact red with
+  "worker 'stall-c' was already Offline after 6.2s without a heartbeat, inside the 5s window: the
+  window has no margin".
+
+That last line matters beyond this card: the silent period is a stable ~6 s once the heartbeats stop,
+so the old 5 s window had no margin **regardless of core count** — two cores merely made CI more
+likely to reach it. The fact is a real gate, not a green-making ritual.

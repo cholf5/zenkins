@@ -12,7 +12,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
-| [B-004](issues/b-004-windows-shim-facts-skip.md) | Nine shim-observed Git facts skip on Windows — a compiled shim TestAsset would run them there | P3 | M | windows: AC1 partial, AC2 unrun | none |
 | [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | M | | F-020 |
 | [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | L | | I-005, F-017, F-036 |
 | [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | M | | I-005, F-017 |
@@ -32,7 +31,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-017](issues/q-017-idempotency-fingerprint-and-cap-replay.md) | The idempotency fingerprint drops invalid tags before hashing, and replay-vs-queue-cap has no fact | P3 | S | | none |
 | [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | S | | none |
 | [Q-019](issues/q-019-tenant-scan-escapde-base64-collision.md) | A short organization name collides with machine-generated base64 in the tenant page scan | P2 | S | | none |
-| [Q-020](issues/q-020-concurrency-offline-window-margin.md) | The concurrency mass trigger gives the offline window no margin, so a stalled heartbeat on a 2-core runner reads as a product failure | P2 | S | | none |
 | [Q-021](issues/q-021-theme-cascade-model-blind-spots.md) | The theme cascade model counts element selectors as zero and ignores @layer, so it can pass what a browser rejects | P2 | S | | none |
 | [B-009](issues/b-009-ilcompiler-audit-blocks-fresh-build.md) | A fresh Windows machine cannot restore — NU1903 on ILCompiler 10.0.11, and warnings are errors | P2 | S | windows: reproducible there; not on macOS | none |
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | S | | none |
@@ -103,4 +101,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [I-005](issues/i-005-worker-git-remote-probe.md) | Worker git remote probe: branches and heads without a clone, over the pull model | P1 | 2026-11-16 |
 | [B-007](issues/b-007-missing-base-token-palette.md) | The app defines no base token palette — dark/light changes nothing until a base color is picked | P1 | 2026-11-16 |
 | [Q-013](issues/q-013-theme-shell-test-strength.md) | The theme shell tests do not pin the load order, the trigger wiring or the cookie's negative cases | P2 | 2026-11-16 |
+| [B-004](issues/b-004-windows-shim-facts-skip.md) | Nine shim-observed Git facts skip on Windows — a compiled shim TestAsset would run them there | P3 | 2026-11-16 |
+| [Q-020](issues/q-020-concurrency-offline-window-margin.md) | The concurrency mass trigger gives the offline window no margin, so a stalled heartbeat reads as a product failure | P2 | 2026-11-16 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | 2026-11-16 |

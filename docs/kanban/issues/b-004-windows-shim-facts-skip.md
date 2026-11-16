@@ -4,7 +4,7 @@ title: Nine shim-observed Git facts skip on Windows - a compiled shim TestAsset 
 type: test
 priority: P3
 size: M
-status: review
+status: done
 created: 2026-11-15
 updated: 2026-11-16
 blocked: windows: AC1 partial, AC2 red on CI and fixed, unverified here
@@ -178,3 +178,24 @@ re-implementing git's parser in a test (which is `SshdCloneTests`' job, and it h
   from the actual and expected strings in the CI log plus the escaping rule in the product, which is
   the whole diff. AC2 stays unticked until someone reruns `--filter Category=Git` on Windows and sees
   those eight facts pass (0 skipped).
+
+## Resolution 2026-11-16 — verified on a real Windows machine
+
+The shim work itself was already right; what failed on Windows was one assertion the shim had only
+just started exercising. `GitSshConstructionTests` compared a bare Windows path against
+`GIT_SSH_COMMAND`, but the product quotes and escapes those paths for git's shell parser, so every `\`
+arrives doubled — a POSIX path has none, which is why the fact passed everywhere it had ever run. The
+assertion now asks the product for the quoted form instead of re-implementing git's parsing in a test.
+
+Verified on Windows 10 (10.0.400 SDK, 20 cores, `gh` clone of `cb2ec4d`):
+
+- `Category=Git` → **64 total, 63 passed, 1 skipped, 0 failed**; the formerly failing ssh fact green,
+  `GitSshConstructionTests` alone 8/8. The one skip is the POSIX-only script-versus-compiled parity
+  fact, by design.
+- No `-p:NuGetAudit=false` anywhere and `TreatWarningsAsErrors` untouched: the build was clean on its
+  own once B-009 pinned the compiler.
+- Two consecutive runs agreed.
+
+So all eight formerly guarded facts now run on Windows and pass, and the POSIX path still uses the
+shell scripts. AC1 was partial when filed (the compiled form had never started from a Windows
+`Process.Start`); it is complete as of this run.

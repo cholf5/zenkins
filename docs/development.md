@@ -964,3 +964,8 @@ the pushed commit so an overlapping push to the same branch cannot move it.
 Not implemented yet: nothing in the run path above — the remaining shell is the standalone Workers page
 (worker registration/heartbeat work; the page is a preview), and unknown/duplicate-trigger handling for
 provider-specific webhook event types beyond `push`.
+
+- Publishing the Worker AOT from a Windows shell needs the Visual Studio Installer directory on
+  `PATH`: without `vswhere.exe`, `findvcvarsall.bat` captures the "not recognized" text into the
+  linker path and ILCompiler reports `MSB3073 error 123`. This is a Windows toolchain quirk, not a
+  repository setting — the compile itself succeeds with the pinned compiler.
