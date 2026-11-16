@@ -43,6 +43,13 @@ this product already has the pattern at worker level (`Workers.IsDisabled` with 
       is no API endpoint to answer it), and schedules/polls are F-024/F-025 (not
       landed: `ProjectTriggerRefusals.SkippedDisabled` and the shared gate are
       declared for them, nothing records it yet).
+
+      **Update 2026-11-16: the API's 409 is now covered by F-027.**
+      `POST /api/v1/projects/{id}/runs` answers `409` with `error: project-disabled`
+      (and queues nothing), proven by
+      `ApiV1RunApiTests.A_disabled_project_answers_409_project_disabled_and_queues_nothing`.
+      AC2 still stays unticked: `skipped-disabled` for schedules/polls needs
+      F-024/F-025, so two of the four named surfaces remain open.
 - [x] Runs queued at the moment of disabling are canceled with reason
       `project-disabled` — a disabled job never builds something it queued while
       enabled. A running run is left alone (canceling it would be a second,

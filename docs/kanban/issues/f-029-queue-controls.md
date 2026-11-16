@@ -36,15 +36,17 @@ which, because duplicating a non-atomic check would make B-002 worse.
 - [x] `Project.QuietPeriodSeconds` (default 0): a queued run is not claimable until
       the period has passed; a trigger during the period is a normal queued run (no
       coalescing in this card).
-- [ ] `Project.MaxQueuedRuns` (null = unlimited): a trigger beyond the cap is
+- [x] `Project.MaxQueuedRuns` (null = unlimited): a trigger beyond the cap is
       refused before any insert, with a field error on the form, 409 on the API and
       `queue-full` on a webhook delivery row.
 
-      **Partial — the API's 409 is F-027's.** The refusal happens before any insert,
-      the form shows the field-level code (`?runError=queue-full`, rendered with the
-      observed numbers) and a webhook delivery records `queue-full` and answers 2xx;
-      the run service returns the dedicated `Refused` status that an API maps to 409,
-      but no JSON API exists yet to answer it.
+      **Complete (2026-11-16).** The refusal happens before any insert, the form shows
+      the field-level code (`?runError=queue-full`, rendered with the observed
+      numbers), a webhook delivery records `queue-full` and answers 2xx, and F-027's
+      `POST /api/v1/projects/{id}/runs` now answers `409` with `error: queue-full` -
+      proven by
+      `ApiV1RunApiTests.A_full_queue_answers_409_queue_full_and_queues_nothing`
+      (one queued run, cap 1, the API refuses, the run count does not move).
 - [x] The claims stay correct under concurrency: two workers claiming at the same
       instant cannot both take the second slot of a `MaxConcurrentRuns = 1` project
       (this is the property B-002's report says is missing).
@@ -284,5 +286,5 @@ does the committed regression actually pin the project row lock?
   product's own compare-and-set admits two, so **the count is load-bearing** — that is all. It is a
   sequence, it reproduces on SQLite, and the two paths differ in more than the lock; the card now
   says so instead of over-claiming.
-- AC3 stays unticked for the API's 409 (F-027). Existing projects keep their unlimited defaults;
+- AC3 was the API's 409, now closed by F-027. Existing projects keep their unlimited defaults;
   the trigger form, the webhook delivery row and the settings page all echo the observed values.

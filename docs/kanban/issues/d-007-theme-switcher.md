@@ -4,9 +4,9 @@ title: Multi-theme switcher in the app bar (dark/light, base gray scale, primary
 type: feature
 priority: P2
 size: M
-status: review
+status: done
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 blocked: none
 ---
 
@@ -165,6 +165,10 @@ both old labels absent.
 | ID | Severity | Description | Status | Resolution |
 |---|---|---|---|---|
 | — | — | Interactive flip in the blocked-storage + dark-cookie corner (d-001 follow-up). | Deferred | First paint is correct since this card; the hydration-time flip needs a package hook that does not exist. Recorded in the Development Log. |
+| B-007 | High | The app defines no base token palette, so with no base color picked `--primary`/`--background`/`--border` are undefined and a dark/light flip changes nothing. Real-Chromium evidence in review. | Open | Pre-existing (D-001 era), not introduced here. Filed as B-007 — it caps the value of every choice this card offers. |
+| Q-013 | Medium | The three shell tests only check that the two asset URLs answer 200: moving `theme-init.js` into `<body>`, or emptying `themes.css`, leaves them green. | Open | Filed as Q-013 with the positional and body-content assertions. |
+| — | Low | The trigger is 36px (`bb:h-9 bb:w-9`) beside the 40px user-menu button, so "lines up" is only true vertically. | Open | Needs either `bb:h-10 bb:w-10` or the user menu dropped to `h-9`. |
+| — | Low | With no cookie, `data-default-dark="false"` overrides the package script's `matchMedia` fallback, so a blocked-storage browser on a dark OS gets a light first paint. | Open | Correct fix is to omit the attribute when there is no valid cookie value (a `bool?` parse in `ThemePreference`), letting the two scripts agree. Narrow impact, not a regression. |
 
 ## Verification
 
@@ -189,3 +193,35 @@ both old labels absent.
   interactive picker behavior (popover, persistence, no-flash reload) is not
   machine-verified here and is left to the reviewer's manual pass above; the
   HTTP tests pin everything reachable without a browser.
+
+### 2026-11-16 — independent review: PASS
+
+Reviewed in a separate clean clone at `eceb019`, with real HTTP requests and a real browser rather
+than a reading of the tests. All four criteria hold, and the Background's factual claims were
+re-derived rather than taken on trust.
+
+- The trigger was captured from real rendered HTML: an icon-only ghost button with
+  `aria-label="Customize theme"`, adjacent to the user menu, and `BbDarkModeToggle` is gone from the
+  source (the old `Switch to dark/light mode` labels appear zero times).
+- Both assets are genuinely served and genuinely needed: `themes.css` answers 200 with 22,668 bytes
+  and carries the five base-gray and seventeen primary palettes, while the served
+  `blazorblueprint.css` (166,990 bytes) contains zero `data-base-color` / `data-primary-color`
+  definitions — so the Background's "zero hits" claim is true, and the pre-card `App.razor` loaded
+  neither asset.
+- Load order is real: `blazorblueprint.css` < `css/themes.css` < `app.css`, and
+  `theme-persistence.js` < `theme-init.js` < `</head>`, both scripts blocking. Real Chromium
+  computed styles confirm the accent changes the UI (`--primary` resolves and `.bb:bg-primary`
+  computes `oklch(0.541 0.281 293.009)`, switching under `class="dark"`).
+- The cookie contract is intact: real requests give `class="dark"` + `data-default-dark="true"` for
+  `dark`, `false` for no cookie and for `light`, and `false` for the non-canonical `Dark` — ordinal
+  matching, as the card says. Executing the two served scripts in order against a fake DOM showed a
+  dark cookie survives both a throwing `localStorage` and an OS light preference.
+- One high-severity finding, **pre-existing and not a regression**: with no base color selected the
+  base token palette is undefined, so dark/light has no visual effect for most users. It is filed as
+  B-007; the weaker test assertions it exposed are Q-013.
+- The full fast suite's only failure on the accepted tree was
+  `ArtifactStreamingTests.A_directory_download_is_zipped_on_the_fly_and_writes_no_temp_archive`,
+  reproduced on a clean `eceb019` worktree (1 green / 2 red) — unrelated to this card and filed as
+  Q-014.
+
+**Verdict: PASS.** Status → done; board row moved to Done (2026-11-16).
