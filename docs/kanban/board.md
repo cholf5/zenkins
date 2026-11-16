@@ -15,8 +15,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-020](issues/f-020-freestyle-job-kind.md) | Freestyle job kind: repository-free projects with server-configured script steps | P1 | L | | none |
 | [F-021](issues/f-021-parameterized-builds.md) | Parameterized builds: project definitions, trigger values and a frozen run snapshot (both kinds) | P1 | M | | F-020 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | M | | D-001 |
-| [B-003](issues/b-003-dashboard-ceiling-count-interference.md) | Dashboard ceiling tests share one fixture and both seed 200 runs — the count assertion sees 401 | P2 | S | | none |
-| [B-004](issues/b-004-windows-shim-facts-skip.md) | Nine shim-observed Git facts skip on Windows — a compiled shim TestAsset would run them there | P3 | M | | none |
+| [B-004](issues/b-004-windows-shim-facts-skip.md) | Nine shim-observed Git facts skip on Windows — a compiled shim TestAsset would run them there | P3 | M | windows: AC1 partial, AC2 unrun | none |
 | [I-005](issues/i-005-worker-git-remote-probe.md) | Worker git remote probe: branches and heads without a clone, over the pull model | P1 | M | | none |
 | [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | M | | F-020 |
 | [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | L | | I-005, F-017, F-036 |
@@ -90,3 +89,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-005](issues/b-005-first-three-os-gate-defects.md) | Two product defects the first three-OS CI gate caught — cancel race and key-ring path shape | P1 | 2026-11-15 |
 | [Q-010](issues/q-010-tag-validation-asymmetry.md) | Tag validation asymmetry: the trigger accepts a union no single worker can cover (Q-005 hardening) | P2 | 2026-11-15 |
 | [Q-011](issues/q-011-pipelines-test-temp-leak.md) | Pipelines tests leak per-run temp roots — Dispose swallows only IOException (found by P-001) | P3 | 2026-11-15 |
+| [B-003](issues/b-003-dashboard-ceiling-count-interference.md) | Dashboard ceiling tests share one fixture and both seed 200 runs — the count assertion sees 401 | P2 | 2026-11-16 |

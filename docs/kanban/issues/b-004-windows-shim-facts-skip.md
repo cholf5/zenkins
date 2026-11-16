@@ -4,10 +4,10 @@ title: Nine shim-observed Git facts skip on Windows - a compiled shim TestAsset 
 type: test
 priority: P3
 size: M
-status: todo
+status: review
 created: 2026-11-15
-updated: 2026-11-15
-blocked: none
+updated: 2026-11-16
+blocked: windows: AC1 partial, AC2 unrun
 ---
 
 ## Goal
@@ -38,15 +38,71 @@ need for the skips and restore those observations on Windows.
 ## Acceptance Criteria
 
 - [ ] The recording shims exist in a compiled form usable from a Windows `Process.Start`.
-- [ ] The nine facts run (not skip) on a Windows machine and pass.
-- [ ] The POSIX path keeps using the shell scripts; the shim log format stays identical for both.
+      Partial: the compiled TestAsset exists, starts as a native process and drives a real clone on
+      POSIX; starting it from a Windows `Process.Start` is unverified — no Windows machine here.
+- [ ] The nine facts run (not skip) on a Windows machine and pass. Unverified: the guards are gone
+      (8 of them, see Resolution) and those facts are green on POSIX, but the Windows run itself has
+      not happened.
+- [x] The POSIX path keeps using the shell scripts; the shim log format stays identical for both.
 
 ## Subtasks
 
-- [ ] Add the TestAsset project and locate its binary like the E2E locates ArgvEcho.
-- [ ] Parameterise the shim by environment (log path, real git/ssh path), keep the exact log lines.
+- [x] Add the TestAsset project and locate its binary like the E2E locates ArgvEcho.
+- [x] Parameterise the shim by environment (log path, real git/ssh path), keep the exact log lines.
 - [ ] Point `RecordingGitShim`/`RecordingSshShim`/`CreateHangingGit` at the compiled form on
       Windows and drop the `RecordingShimUnavailableReason` guards.
+      Done for `RecordingGitShim` and `CreateHangingGit`. The ssh half is vacuous today: no fact
+      carries a `RecordingShimUnavailableReason` guard around `RecordingSshShim` — its three
+      consumers are gated by `SshdGitServer.UnavailabilityReason()` instead, which is a different
+      card's surface. Left untouched.
+
+## Resolution
+
+`tests/Zenkins.Tests/TestAssets/RecordingShim` is a console TestAsset with two roles selected by
+`ZENKINS_RECORDING_SHIM_ROLE` (`git` records and execs the real git; `hang` records both its own
+pid and a sleeping child's, then waits). `RecordingShimAsset` locates the apphost next to the DLL
+the way the E2E locates ArgvEcho — `<name>.exe` on Windows, `<name>` on POSIX — which also settles
+the `.exe` suffix the `Path.Combine(BinDirectory, "git")` shape would have missed.
+
+The log format is pinned from both sides: the POSIX shell script text moved into a shared
+`PosixScript(...)`, and a new fact compares the script's log bytes against the compiled shim's log
+bytes for the same invocation. Twelve lines, `\n` terminated, no CR.
+
+All eight `RecordingShimUnavailableReason` guards are gone (definition and call sites: zero
+references left in code). The ninth fact the card's title counts —
+`GitSshConstructionTests.The_askpass_helper_is_0700_and_answers_both_prompts` — never had a guard;
+it already branches on `OperatingSystem.IsWindows()`. The two facts that build a `RecordingGitShim`
+but deliberately never execute it (`GitSshConstructionTests` known-hosts pin, `GitCredentialSecrecyTests`
+token-in-URL) stay guard-free and still assert an empty shim log.
+
+## Verification
+
+- POSIX (macOS 26.5 / arm64, .NET 10.0.403): `--filter Category=Git` → 62/62, 0 skipped;
+  `--filter Category=Dashboard` → 13/13; full suite → 1129/1129, 0 skipped; Release build of the
+  solution green. Reviewer reran all of it independently.
+- Reviewer's own byte comparison of the script log against the compiled shim log: identical, 12
+  lines, zero CR. Exit codes pass through (real git's own code, `127` when the real binary is
+  missing, `64` on an unknown role).
+- Change surface: `Zenkins.slnx`, `tests/Zenkins.Tests/Zenkins.Tests.csproj`, and `tests/**` only.
+  `src/` untouched; ssh-side files not in the diff.
+
+## Windows verification still owed
+
+1. `--filter Category=Git` on Windows reports 0 skipped and the eight formerly guarded facts
+   actually run and pass.
+2. `RecordingShim.exe` really starts from the worker's `Process.Start` (shim facts 1/3/4 green).
+3. The five chains pass through the compiled shim: HTTPS clone, submodule recursion, missing-LFS
+   warning, ssh construction, ambient credential hardening — watch `GitLfsTests`' PATH mirror on
+   the copy branch for a `git` 127.
+4. Both timeout facts: the hang role writes exactly two pids and `Kill(entireProcessTree)` reaps
+   both.
+5. Format equivalence on Windows: shim fact 1's literal twelve lines plus the no-CR assertion green
+   (fact 2 self-skips there by design — the two forms only coexist on POSIX).
+
+Known Windows-side risks carried on purpose, none of them verified: `GitLfsTests` does not clear
+`GIT_EXEC_PATH` (git for Windows also resolves `git-lfs` there, so the missing-LFS branch may not
+trigger); the PATH mirror copies instead of symlinking there; the ambient-helper control group
+relies on git for Windows running the helper through its own `sh`.
 
 ## Dependencies
 
@@ -62,4 +118,5 @@ Steps:
 Expected:
 - the nine facts report as passed, not skipped.
 
-Result: not yet run (card opened by the CI-repair session; the skips are the recorded interim).
+Result: POSIX PASS (the eight formerly guarded facts run and pass, 0 skipped); Windows not yet run
+(2026-11-16).

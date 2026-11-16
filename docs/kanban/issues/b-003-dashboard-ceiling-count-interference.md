@@ -4,9 +4,9 @@ title: Dashboard ceiling tests share one fixture and both seed 200 runs — the 
 type: bug
 priority: P2
 size: S
-status: todo
+status: done
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 blocked: none
 ---
 
@@ -39,16 +39,35 @@ Expected: 201, Actual: 401` at `Dashboard/DashboardQueryTests.cs:337`.
 
 ## Acceptance Criteria
 
-- [ ] The Dashboard category (`--filter Category=Dashboard`) passes 13/13.
-- [ ] The fix restores per-test isolation (per-test fixture, cleanup between
+- [x] The Dashboard category (`--filter Category=Dashboard`) passes 13/13.
+- [x] The fix restores per-test isolation (per-test fixture, cleanup between
       tests, or seed scoping) rather than relaxing the 201 assertion.
-- [ ] The full suite no longer fails on this test.
+- [x] The full suite no longer fails on this test.
 
 ## Subtasks
 
-- [ ] Pick the isolation shape (the repo's other class fixtures seed through
+- [x] Pick the isolation shape (the repo's other class fixtures seed through
       `TwoOrgsFixture` too — check how they avoid the same collision).
-- [ ] Implement and verify 13/13 plus a full-suite run.
+- [x] Implement and verify 13/13 plus a full-suite run.
+
+## Resolution
+
+`DashboardQueryCeilingTests` dropped `IClassFixture<DashboardPageFixture>` for a per-instance
+`private readonly DashboardPageFixture _host = new()` plus `IDisposable`; xunit v3 builds a fresh
+test-class instance per fact, so each fact gets its own temporary SQLite database and host and the
+200 seeded runs no longer accumulate across the two facts. The `201` assertion is untouched.
+
+The card's second concern — how the other Dashboard classes avoid this — has a narrow answer:
+they hold a single fact each, so a class fixture cannot collide there. Only this class had two
+facts seeding 200 runs apiece, so only this class needed per-test isolation.
+
+## Verification
+
+- `dotnet test --filter Category=Dashboard` → 13 passed / 0 failed / 0 skipped (implementer and
+  reviewer, independently).
+- `dotnet test` (full suite) → 1129 passed / 0 failed / 0 skipped, three consecutive runs.
+- Reviewer confirmed the diff carries no change inside the assertion block: the only hunks are the
+  class declaration, the fixture field, `Dispose`, and the mechanism comment.
 
 ## Dependencies
 
@@ -64,7 +83,7 @@ Steps:
 Expected:
 - 13/13 passed.
 
-Result: not yet run (card opened by D-007's session; no fix attempted there).
+Result: PASS — 13/13 (2026-11-16).
 
 ## Bugs
 
