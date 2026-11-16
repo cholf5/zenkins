@@ -120,3 +120,22 @@ Expected:
 
 Result: POSIX PASS (the eight formerly guarded facts run and pass, 0 skipped); Windows not yet run
 (2026-11-16).
+
+## Update 2026-11-16 — the first real Windows run is red, and it is not the shim
+
+The guards are gone, so CI's `windows-latest` gate now runs these facts for real. Run 43870254355
+(F-024's push) and run 43830386630 both fail one of them:
+
+`GitSshConstructionTests.An_ssh_clone_uses_the_key_file_and_deletes_it_afterwards` at
+`GitSshConstructionTests.cs:218` — `Assert.Contains(work.TempPath …, ssh command line)` reports the
+substring not found, while the string it searched is the real command line beginning
+`ssh -F "C:\Users\<runner>\AppData\Local\Te…`. So the shim launched, `ssh` ran, and the assertion
+about the `-F` config path's shape is what disagrees — a path-shape expectation, not a missing shim.
+
+That makes B-004's AC2 not merely unverified but **failing**: the eight facts do now run on Windows,
+and one of them does not pass. Diagnosis needs a Windows machine with the repo (the compiled shim
+exists there, so this is reproducible locally rather than only in CI).
+
+Same run also fails `Concurrency.ConcurrencyMassTriggerTests`
+(`Twelve_runs_across_three_workers_are_claimed_and_executed_exactly_once`: three of twelve runs `Lost`
+with `worker-offline`), which the previous Windows run did not — tracked separately, not here.

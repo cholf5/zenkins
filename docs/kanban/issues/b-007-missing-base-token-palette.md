@@ -4,7 +4,7 @@ title: The app never defines the base token palette — dark/light changes nothi
 type: bug
 priority: P1
 size: M
-status: todo
+status: review
 created: 2026-11-16
 updated: 2026-11-16
 blocked: none
@@ -37,24 +37,24 @@ every theme choice the switcher offers, which is why it is filed as P1 rather th
 
 ## Acceptance Criteria
 
-- [ ] `styles/theme.css` defines the full base token set on `:root` and `.dark`: background,
+- [x] `styles/theme.css` defines the full base token set on `:root` and `.dark`: background,
       foreground, card, popover, primary, primary-foreground, secondary, muted, muted-foreground,
       accent, accent-foreground, destructive, border, input, ring and the sidebar group.
-- [ ] The values match the library's own defaults (zinc base + default primary), so a user who
+- [x] The values match the library's own defaults (zinc base + default primary), so a user who
       picks nothing sees the same rendering as one who picks zinc — not a third, accidental theme.
-- [ ] Default dark mode stays off (`ThemeOptions.DefaultDarkMode = false`) and the default radius
+- [x] Default dark mode stays off (`ThemeOptions.DefaultDarkMode = false`) and the default radius
       stays `0.5rem`, so the token set does not silently change the app's current look beyond
       making it coherent.
-- [ ] A real-CSS test pins it: with no data attributes, `--primary` resolves non-empty and a
+- [x] A real-CSS test pins it: with no data attributes, `--primary` resolves non-empty and a
       `bb:bg-primary` element computes a non-transparent background, in both light and dark.
-- [ ] `app.css:21`'s comment is corrected or removed.
+- [x] `app.css:21`'s comment is corrected or removed.
 
 ## Subtasks
 
-- [ ] Take the base set from the package README's "Custom theme" section (or copy zinc + default
+- [x] Take the base set from the package README's "Theming" section (or copy zinc + default
       from `themes.css`) and land it as `:root` / `.dark` blocks in `styles/theme.css`.
-- [ ] Add the computed-style test next to the Category=Theme shell tests.
-- [ ] Cross-check the `.dark` block against `themes.css`'s `.dark[data-base-color=…]` shape so both
+- [x] Add the computed-style test next to the Category=Theme shell tests.
+- [x] Cross-check the `.dark` block against `themes.css`'s `.dark[data-base-color=…]` shape so both
       paths agree.
 
 ## Dependencies
