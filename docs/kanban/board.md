@@ -34,6 +34,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-017](issues/q-017-idempotency-fingerprint-and-cap-replay.md) | The idempotency fingerprint drops invalid tags before hashing, and replay-vs-queue-cap has no fact | P3 | S | | none |
 | [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | S | | none |
 | [Q-019](issues/q-019-tenant-scan-escapde-base64-collision.md) | A short organization name collides with machine-generated base64 in the tenant page scan | P2 | S | | none |
+| [Q-020](issues/q-020-concurrency-offline-window-margin.md) | The concurrency mass trigger gives the offline window no margin, so a stalled heartbeat on a 2-core runner reads as a product failure | P2 | S | | none |
 | [B-009](issues/b-009-ilcompiler-audit-blocks-fresh-build.md) | A fresh Windows machine cannot restore — NU1903 on ILCompiler 10.0.11, and warnings are errors | P2 | S | windows: reproducible there; not on macOS | none |
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | S | | none |
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Duplicate choice entries accepted; a Freestyle row's inherited pipeline path | P3 | S | | none |
