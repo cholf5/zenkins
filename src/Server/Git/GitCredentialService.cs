@@ -156,6 +156,22 @@ public enum GitCredentialFetchStatus
 /// <summary>The decrypted material handed to one run. Never rendered by a page or a user endpoint.</summary>
 public sealed record GitCredentialMaterialView(string Kind, string Value, string? UserName);
 
+/// <summary>
+/// Who is asking for material, for the one log line both worker fetch paths write (card I-005 adds the
+/// probe path). Exactly one of <see cref="RunId"/>/<see cref="ProbeId"/> is set: the two scopes are the
+/// two reasons a worker may decrypt a project's credential, and the log keeps them apart without
+/// inventing a different line shape.
+/// </summary>
+/// <param name="WorkerId">The authenticated worker.</param>
+/// <param name="RunId">The run whose lease authorized this fetch, when it is a run.</param>
+/// <param name="ProbeId">The probe whose lease authorized this fetch, when it is a probe.</param>
+/// <remarks>
+/// A record cannot express "exactly one of two", so the shape is enforced where it matters: the one decrypt
+/// entry (<see cref="GitCredentialService.FetchMaterialForProjectAsync"/>) throws for a scope that names both
+/// or neither. A future third caller therefore cannot reach the material with a scope that proved nothing.
+/// </remarks>
+public sealed record GitCredentialFetchScope(Guid WorkerId, Guid? RunId = null, Guid? ProbeId = null);
+
 /// <summary>The answer of a worker's fetch: material on success, nothing otherwise.</summary>
 public sealed record GitCredentialFetchResult(
     GitCredentialFetchStatus Status,
@@ -714,16 +730,50 @@ public sealed class GitCredentialService(
             || run.WorkerId != worker.Id
             || IsTerminal(run.Status))
         {
-            LogMiss(runId, workerToken.WorkerId);
+            LogMiss(new GitCredentialFetchScope(workerToken.WorkerId ?? Guid.Empty, RunId: runId));
             return GitCredentialFetchResult.NotFound();
         }
 
+        return await FetchMaterialForProjectAsync(
+            run.ProjectId,
+            new GitCredentialFetchScope(worker.Id, RunId: runId),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// The single decrypt step both worker fetch paths share (cards F-013 and I-005): read the project's
+    /// assigned credential, decrypt it and answer the material.
+    /// <para>
+    /// <b>It proves nothing about who is asking.</b> Each caller owns its own authorization - a run lease
+    /// (<see cref="FetchMaterialForRunAsync"/>) or a probe lease (the probe service) - and calls this only
+    /// after that check passed. It is <c>internal</c> for exactly that reason: the two authorized pods are
+    /// the only places that may decrypt, so no future endpoint can grow a third, broader path by accident.
+    /// </para>
+    /// </summary>
+    internal async Task<GitCredentialFetchResult> FetchMaterialForProjectAsync(
+        Guid projectId,
+        GitCredentialFetchScope scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+
+        // The scope's documented shape is exactly one proven lease - a run or a probe. This method decrypts
+        // without checking either, so it refuses a scope that names both or neither: a future third caller
+        // that forgot to prove a lease fails here, loudly, instead of growing a broader path by accident.
+        if (scope.RunId.HasValue == scope.ProbeId.HasValue)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(GitCredentialFetchScope)} must name exactly one lease (RunId xor ProbeId); "
+                + "this method decrypts on the caller's authority and cannot infer it.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var project = await context.Projects.SingleOrDefaultAsync(
-            candidate => candidate.Id == run.ProjectId,
+            candidate => candidate.Id == projectId,
             cancellationToken);
         if (project?.GitCredentialId is not { } credentialId)
         {
-            LogMiss(runId, worker.Id);
+            LogMiss(scope);
             return GitCredentialFetchResult.NotFound();
         }
 
@@ -732,7 +782,7 @@ public sealed class GitCredentialService(
             cancellationToken);
         if (credential is null)
         {
-            LogMiss(runId, worker.Id);
+            LogMiss(scope);
             return GitCredentialFetchResult.NotFound();
         }
 
@@ -755,10 +805,11 @@ public sealed class GitCredentialService(
         }
 
         logger.LogInformation(
-            "Git credential delivered. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} GitCredentialId={GitCredentialId} Kind={Kind}",
+            "Git credential delivered. OrganizationId={OrganizationId} WorkerId={WorkerId} RunId={RunId} ProbeId={ProbeId} GitCredentialId={GitCredentialId} Kind={Kind}",
             credential.OrganizationId,
-            runId,
-            worker.Id,
+            scope.WorkerId,
+            scope.RunId,
+            scope.ProbeId,
             credential.Id,
             credential.Kind);
         return GitCredentialFetchResult.Success(
@@ -770,11 +821,13 @@ public sealed class GitCredentialService(
     /// assigned to this worker", "unknown id" and "no credential configured" must be indistinguishable
     /// to anyone reading the server log.
     /// </summary>
-    private void LogMiss(Guid runId, Guid? workerId) =>
+    private void LogMiss(GitCredentialFetchScope scope) =>
         logger.LogInformation(
-            "Git credential request resolved no material. RunId={RunId} WorkerId={WorkerId}",
-            runId,
-            workerId);
+            scope.RunId is { } runId
+                ? "Git credential request resolved no material. RunId={RunId} WorkerId={WorkerId}"
+                : "Git credential request resolved no material. ProbeId={ProbeId} WorkerId={WorkerId}",
+            scope.RunId ?? scope.ProbeId ?? Guid.Empty,
+            scope.WorkerId);
 
     private static bool IsTerminal(string status) =>
         status is BuildRunStatus.Success

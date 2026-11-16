@@ -128,4 +128,27 @@ public sealed class Project : ITenantOwned
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Card I-005: the outcome of the project's most recent Git remote probe - a
+    /// <see cref="Zenkins.Shared.Probes.GitProbeOutcomes"/> value, or <see langword="null"/> for a project
+    /// that was never probed.
+    /// <para>
+    /// <b>This is the "last outcome on the project" the card requires.</b> The probe itself is transient
+    /// (in-memory, see the probe registry), but a failure must stay visible for a person reading the
+    /// project page - and must never be mistaken for "no change" (which is why the value is the outcome
+    /// word, not a boolean or a ref count). Null says "never probed", which is distinct from a recorded
+    /// failure.
+    /// </para>
+    /// </summary>
+    public string? LastProbeOutcome { get; set; }
+
+    /// <summary>When the most recent probe settled (I-005); null when none ever did.</summary>
+    public DateTimeOffset? LastProbeAt { get; set; }
+
+    /// <summary>
+    /// The most recent probe's diagnostic words (a failure's stderr tail, or the Server's "nobody
+    /// claimed it" sentence), bounded like the column. Null when there was nothing to say.
+    /// </summary>
+    public string? LastProbeMessage { get; set; }
 }

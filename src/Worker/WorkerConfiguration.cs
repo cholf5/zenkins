@@ -47,7 +47,29 @@ public sealed record WorkerConfiguration(
     int LogBufferLines,
     int GitDepth = WorkerConfiguration.DefaultGitDepth,
     string? GitKnownHostsPath = null,
-    TimeSpan? GitOperationTimeout = null)
+    TimeSpan? GitOperationTimeout = null,
+
+    /// <summary>
+    /// argv[0] of every git invocation (card I-005). <c>git</c> from <c>PATH</c> by default; a deployment
+    /// with a pinned git binary names it here, and the probe tests point it at a recording shim.
+    /// </summary>
+    string GitExecutable = WorkerConfiguration.DefaultGitExecutable,
+
+    /// <summary>
+    /// Whether this worker answers Git remote probes (card I-005). Off means it registers with
+    /// <c>canProbe: false</c> and never asks for one - the Server then never hands it a probe.
+    /// </summary>
+    bool ProbesEnabled = true,
+
+    /// <summary>
+    /// How many probes this worker runs at once (card I-005). Deliberately its own number, not
+    /// <see cref="MaxConcurrency"/>: probing is a light remote read that must not be blocked by a build
+    /// occupying every build slot.
+    /// </summary>
+    int ProbeConcurrency = WorkerConfiguration.DefaultProbeConcurrency,
+
+    /// <summary>The budget of one probe's <c>git ls-remote</c> (card I-005); expiry is a typed timeout.</summary>
+    TimeSpan? ProbeTimeout = null)
 {
     public const string ServerUrlVariable = "ZENKINS_SERVER_URL";
     public const string RegistrationTokenVariable = "ZENKINS_REGISTRATION_TOKEN";
@@ -63,6 +85,10 @@ public sealed record WorkerConfiguration(
     public const string GitDepthVariable = "ZENKINS_GIT_DEPTH";
     public const string GitKnownHostsVariable = "ZENKINS_GIT_KNOWN_HOSTS";
     public const string GitTimeoutSecondsVariable = "ZENKINS_GIT_TIMEOUT_SECONDS";
+    public const string GitExecutableVariable = "ZENKINS_GIT_EXECUTABLE";
+    public const string ProbesEnabledVariable = "ZENKINS_PROBES_ENABLED";
+    public const string ProbeConcurrencyVariable = "ZENKINS_PROBE_CONCURRENCY";
+    public const string ProbeTimeoutSecondsVariable = "ZENKINS_PROBE_TIMEOUT_SECONDS";
 
     /// <summary>PRD §3.4.5: default heartbeat interval and maximum concurrent tasks of 1.</summary>
     public const int DefaultHeartbeatSeconds = 15;
@@ -109,6 +135,22 @@ public sealed record WorkerConfiguration(
 
     /// <summary>One git invocation's default budget: a clone of a large repository, not a hung one.</summary>
     public static readonly TimeSpan DefaultGitOperationTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>argv[0] of git in production: the one on the worker's <c>PATH</c>.</summary>
+    public const string DefaultGitExecutable = "git";
+
+    /// <summary>
+    /// Card I-005 defaults: probing on, one probe at a time, a 30s budget for one <c>git ls-remote</c>.
+    /// The budget sits well inside the Server's default caller wait (60s), so a hung remote is a typed
+    /// <c>git-timeout</c> the caller actually receives.
+    /// </summary>
+    public const int DefaultProbeConcurrency = 1;
+
+    public static readonly TimeSpan DefaultProbeTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>Sane bounds for <c>ZENKINS_PROBE_CONCURRENCY</c> (same limits as the build loops).</summary>
+    public const int MinProbeConcurrency = 1;
+    public const int MaxProbeConcurrency = 64;
 
     /// <summary>Bounds for <c>ZENKINS_GIT_DEPTH</c>: 0 (full) up to a six-digit depth.</summary>
     public const int MinGitDepth = 0;
@@ -280,6 +322,56 @@ public sealed record WorkerConfiguration(
                 + $"between {MinGitTimeoutSeconds} and {MaxGitTimeoutSeconds}.");
         }
 
+        // I-005: the Git remote probe knobs. Probing defaults ON (a worker that can answer is useful
+        // immediately); an operator turning it off registers canProbe=false.
+        var gitExecutable = environment.GetValueOrDefault(GitExecutableVariable)?.Trim();
+        if (string.IsNullOrEmpty(gitExecutable))
+        {
+            gitExecutable = DefaultGitExecutable;
+        }
+
+        var probesEnabledText = environment.GetValueOrDefault(ProbesEnabledVariable)?.Trim();
+        bool probesEnabled;
+        if (string.IsNullOrEmpty(probesEnabledText))
+        {
+            probesEnabled = true;
+        }
+        else if (!bool.TryParse(probesEnabledText, out probesEnabled))
+        {
+            return WorkerConfigurationResult.Invalid(
+                $"configuration error: {ProbesEnabledVariable}='{probesEnabledText}' is not 'true' or 'false'.");
+        }
+
+        var probeConcurrencyText = environment.GetValueOrDefault(ProbeConcurrencyVariable)?.Trim();
+        int probeConcurrency;
+        if (string.IsNullOrEmpty(probeConcurrencyText))
+        {
+            probeConcurrency = DefaultProbeConcurrency;
+        }
+        else if (!int.TryParse(probeConcurrencyText, NumberStyles.Integer, CultureInfo.InvariantCulture, out probeConcurrency)
+            || probeConcurrency < MinProbeConcurrency
+            || probeConcurrency > MaxProbeConcurrency)
+        {
+            return WorkerConfigurationResult.Invalid(
+                $"configuration error: {ProbeConcurrencyVariable}='{probeConcurrencyText}' is not a whole number "
+                + $"between {MinProbeConcurrency} and {MaxProbeConcurrency}.");
+        }
+
+        var probeTimeoutText = environment.GetValueOrDefault(ProbeTimeoutSecondsVariable)?.Trim();
+        int probeTimeoutSeconds;
+        if (string.IsNullOrEmpty(probeTimeoutText))
+        {
+            probeTimeoutSeconds = (int)DefaultProbeTimeout.TotalSeconds;
+        }
+        else if (!int.TryParse(probeTimeoutText, NumberStyles.Integer, CultureInfo.InvariantCulture, out probeTimeoutSeconds)
+            || probeTimeoutSeconds < MinGitTimeoutSeconds
+            || probeTimeoutSeconds > MaxGitTimeoutSeconds)
+        {
+            return WorkerConfigurationResult.Invalid(
+                $"configuration error: {ProbeTimeoutSecondsVariable}='{probeTimeoutText}' is not a whole number "
+                + $"between {MinGitTimeoutSeconds} and {MaxGitTimeoutSeconds}.");
+        }
+
         return WorkerConfigurationResult.Valid(new WorkerConfiguration(
             serverUrl,
             string.IsNullOrEmpty(registrationToken) ? null : registrationToken,
@@ -294,10 +386,18 @@ public sealed record WorkerConfiguration(
             logBufferLines,
             gitDepth,
             gitKnownHostsPath,
-            TimeSpan.FromSeconds(gitTimeoutSeconds)));
+            TimeSpan.FromSeconds(gitTimeoutSeconds),
+            gitExecutable,
+            probesEnabled,
+            probeConcurrency,
+            TimeSpan.FromSeconds(probeTimeoutSeconds)));
     }
 
-    /// <summary>Builds the registration payload the server expects (PRD §3.4.2 fields).</summary>
+    /// <summary>
+    /// Builds the registration payload the server expects (PRD §3.4.2 fields). Card I-005 adds
+    /// <c>canProbe</c>: only a worker that runs the probe loop says yes, so a Server never hands a probe to
+    /// a build that cannot answer it.
+    /// </summary>
     public WorkerRegistrationRequest BuildRegistrationRequest() => new(
         WorkerName,
         PlatformName(),
@@ -305,7 +405,8 @@ public sealed record WorkerConfiguration(
         Version,
         Tags,
         Environment.ProcessorCount,
-        MaxConcurrency);
+        MaxConcurrency,
+        ProbesEnabled);
 
     /// <summary>The same capabilities, refreshed on every heartbeat.</summary>
     public WorkerHeartbeatRequest BuildHeartbeatRequest() => new(
@@ -314,7 +415,8 @@ public sealed record WorkerConfiguration(
         Version,
         Tags,
         Environment.ProcessorCount,
-        MaxConcurrency);
+        MaxConcurrency,
+        ProbesEnabled);
 
     /// <summary>
     /// The per-run Git layer's options for one run's work directory (card F-013). F-014 builds a
@@ -330,10 +432,30 @@ public sealed record WorkerConfiguration(
         new()
         {
             Work = work,
+            GitExecutable = GitExecutable,
             Depth = GitDepth,
             KnownHostsPath = string.IsNullOrEmpty(GitKnownHostsPath) ? null : GitKnownHostsPath,
             OperationTimeout = GitOperationTimeout ?? DefaultGitOperationTimeout,
             RunDeadline = runDeadline,
+            Log = log,
+        };
+
+    /// <summary>
+    /// The probe's own options for one scratch tree (card I-005): the shared git plumbing's knobs plus the
+    /// probe's own budget. The clone's depth/known-hosts settings apply too - a probe authenticates
+    /// exactly like a clone of the same repository, so it must not use a different trust policy.
+    /// </summary>
+    public Git.GitRefsProbeOptions BuildProbeOptions(
+        ProbeWorkDirectory probe,
+        Action<string>? log = null) =>
+        new()
+        {
+            RootPath = probe.RootPath,
+            TempPath = probe.TempPath,
+            HardeningPath = probe.HardeningPath,
+            GitExecutable = GitExecutable,
+            OperationTimeout = ProbeTimeout ?? DefaultProbeTimeout,
+            KnownHostsPath = string.IsNullOrEmpty(GitKnownHostsPath) ? null : GitKnownHostsPath,
             Log = log,
         };
 

@@ -8,9 +8,11 @@ namespace Zenkins.Worker;
 /// The worker's state machine (cards F-005 + F-007): load-or-register the credential, then run two
 /// concurrent loops until shutdown - the heartbeat loop (retrying transport failures with capped
 /// exponential backoff + jitter) and <see cref="WorkerConfiguration.MaxConcurrency"/> run-execution
-/// loops (<see cref="WorkerRunLoop"/>: claim → execute → report). Shutdown is graceful: one
-/// best-effort final heartbeat, exit code 0; a process killed mid-run gets no completed report (the
-/// run's Lost transition is F-010's business).
+/// loops (<see cref="WorkerRunLoop"/>: claim → execute → report). Card I-005 adds
+/// <see cref="WorkerConfiguration.ProbeConcurrency"/> probe loops beside them (claim a probe →
+/// <c>git ls-remote</c> → report), so probing never competes with a build for a slot. Shutdown is
+/// graceful: one best-effort final heartbeat, exit code 0; a process killed mid-run gets no completed
+/// report (the run's Lost transition is F-010's business).
 /// <para>
 /// <b>State transitions are logged</b> (registered, first heartbeat, reconnects, failures with the
 /// next retry delay, claimed runs); individual successful heartbeats are silent so a healthy worker
@@ -84,7 +86,29 @@ public sealed class WorkerRunner(
                 errorLog,
                 cancelSignal).RunAsync(shutdown))
             .ToArray();
-        await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops]);
+
+        // I-005: the probe loops. Their own count (ProbeConcurrency), independent of the build slots, and
+        // only when the worker announced the capability - a worker that turned probing off never claims.
+        var probeLoops = configuration.ProbesEnabled
+            ? Enumerable.Range(0, configuration.ProbeConcurrency)
+                .Select(_ => new WorkerProbeLoop(
+                    configuration,
+                    api,
+                    workerToken,
+                    workDirectories,
+                    BackoffScheduler.Default(),
+                    log,
+                    errorLog).RunAsync(shutdown))
+                .ToArray()
+            : [];
+
+        if (probeLoops.Length > 0)
+        {
+            Log($"answering Git remote probes on {probeLoops.Length} loop(s); "
+                + $"each probe's git budget is {(configuration.ProbeTimeout ?? WorkerConfiguration.DefaultProbeTimeout).TotalSeconds:0}s.");
+        }
+
+        await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops, .. probeLoops]);
 
         await SendFinalHeartbeatAsync(workerToken);
         Log("stopped cleanly.");

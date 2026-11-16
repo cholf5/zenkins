@@ -26,6 +26,13 @@ public sealed class GitCredentialClient
     /// <summary>The worker API route (mirrors <c>GitCredentialEndpoints.WorkerFetchPath</c>).</summary>
     public const string RouteFormat = "api/workers/runs/{0}/git-credential";
 
+    /// <summary>
+    /// Card I-005's probe-scoped route (mirrors <c>GitCredentialEndpoints.ProbeFetchPath</c>): the same
+    /// material, addressed by a probe id. The two routes are separate on purpose - the Server resolves a
+    /// different lease behind each - so neither id can be replayed on the other.
+    /// </summary>
+    public const string ProbeRouteFormat = "api/workers/probes/{0}/git-credential";
+
     /// <summary>The per-request ceiling: a hung server must not hold the clone forever.</summary>
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
 
@@ -42,16 +49,35 @@ public sealed class GitCredentialClient
     /// server has none for this worker (the 404 answer).
     /// </summary>
     /// <exception cref="GitException">The server answered something other than 200/404.</exception>
-    public async Task<GitCredentialMaterial?> FetchAsync(
+    public Task<GitCredentialMaterial?> FetchAsync(
         string workerToken,
         Guid runId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        FetchAsync(workerToken, RouteFormat, runId, "run", cancellationToken);
+
+    /// <summary>
+    /// Fetches the material for one probe this worker holds (card I-005), or <see langword="null"/> when
+    /// the server has none (the 404 answer). Same shapes, same timeouts and the same secrecy rules as the
+    /// run fetch - only the route differs, because the Server authorizes a different lease behind it.
+    /// </summary>
+    public Task<GitCredentialMaterial?> FetchForProbeAsync(
+        string workerToken,
+        Guid probeId,
+        CancellationToken cancellationToken = default) =>
+        FetchAsync(workerToken, ProbeRouteFormat, probeId, "probe", cancellationToken);
+
+    private async Task<GitCredentialMaterial?> FetchAsync(
+        string workerToken,
+        string routeFormat,
+        Guid id,
+        string subject,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workerToken);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            string.Format(System.Globalization.CultureInfo.InvariantCulture, RouteFormat, runId.ToString("D")));
+            string.Format(System.Globalization.CultureInfo.InvariantCulture, routeFormat, id.ToString("D")));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", workerToken);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -65,7 +91,7 @@ public sealed class GitCredentialClient
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new GitException(
-                $"the server did not answer the Git credential request for run {runId} within "
+                $"the server did not answer the Git credential request for {subject} {id} within "
                 + $"{RequestTimeout.TotalSeconds:0}s.",
                 GitFailureKind.Failed);
         }
@@ -80,19 +106,19 @@ public sealed class GitCredentialClient
             if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
                 throw new GitException(
-                    "the server rejected the worker's token while fetching the run's Git credential.",
+                    $"the server rejected the worker's token while fetching the {subject}'s Git credential.",
                     GitFailureKind.AuthenticationRejected);
             }
 
             if (response.StatusCode != HttpStatusCode.OK)
             {
                 throw new GitException(
-                    $"the server answered {(int)response.StatusCode} while fetching the Git credential for run {runId}.",
+                    $"the server answered {(int)response.StatusCode} while fetching the Git credential for {subject} {id}.",
                     GitFailureKind.Failed);
             }
 
             var body = await response.Content.ReadAsStringAsync(timeout.Token);
-            return Parse(body, runId);
+            return Parse(body, id);
         }
     }
 
@@ -100,7 +126,7 @@ public sealed class GitCredentialClient
     /// Parses the material body (<c>{ kind, value, userName }</c>). The value is the secret, so a
     /// malformed body produces a message about the shape only - never a dump of what arrived.
     /// </summary>
-    private static GitCredentialMaterial Parse(string body, Guid runId)
+    private static GitCredentialMaterial Parse(string body, Guid subjectId)
     {
         JsonDocument document;
         try
@@ -110,7 +136,7 @@ public sealed class GitCredentialClient
         catch (JsonException)
         {
             throw new GitException(
-                $"the Git credential response for run {runId} was not valid JSON.",
+                $"the Git credential response for {subjectId} was not valid JSON.",
                 GitFailureKind.Failed);
         }
 
@@ -124,7 +150,7 @@ public sealed class GitCredentialClient
                 || valueElement.ValueKind != JsonValueKind.String)
             {
                 throw new GitException(
-                    $"the Git credential response for run {runId} did not have the expected kind/value shape.",
+                    $"the Git credential response for {subjectId} did not have the expected kind/value shape.",
                     GitFailureKind.Failed);
             }
 
@@ -136,7 +162,7 @@ public sealed class GitCredentialClient
             catch (ArgumentException)
             {
                 throw new GitException(
-                    $"the Git credential response for run {runId} named an unsupported kind.",
+                    $"the Git credential response for {subjectId} named an unsupported kind.",
                     GitFailureKind.Credential);
             }
 

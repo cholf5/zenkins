@@ -13,6 +13,7 @@ using Zenkins.Server.Schedules;
 using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
+using Zenkins.Shared.Probes;
 using Zenkins.Shared.Projects;
 using Zenkins.Shared.Tenancy;
 
@@ -285,6 +286,38 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             .Where(schedule => schedule.Id == scheduleId)
             .ExecuteUpdateAsync(update => update
                 .SetProperty(schedule => schedule.UpdatedAt, schedule => schedule.UpdatedAt),
+                cancellationToken);
+
+    /// <summary>
+    /// I-005: writes one probe's outcome onto its project - the three "last probe" columns only.
+    /// <para>
+    /// <b>Why a guarded statement instead of loading and saving the row.</b> A probe is not a project
+    /// edit: loading the row and calling <see cref="SaveChangesAsync(bool, CancellationToken)"/> would let
+    /// the timestamp stamping move <c>Projects.UpdatedAt</c>, so a poller probing every minute would make
+    /// the overview claim the project was edited every minute. This statement sets exactly the probe
+    /// columns (and re-writes <c>UpdatedAt</c> to itself, the same deliberate no-op the lock methods use),
+    /// so the project's edit history stays the operator's. The WHERE is the tenant query filter, so a
+    /// foreign project id updates nothing.
+    /// </para>
+    /// <para>
+    /// A guarded <c>ExecuteUpdate</c> on a tenant-owned entity outside a system scope - the SET is fixed,
+    /// never caller-supplied (see the class doc's bypass discipline).
+    /// </para>
+    /// </summary>
+    /// <returns>1 when the project row was found and updated, 0 when it no longer exists.</returns>
+    public Task<int> TryRecordProjectProbeOutcomeAsync(
+        Guid projectId,
+        string outcome,
+        DateTimeOffset probedAt,
+        string? message,
+        CancellationToken cancellationToken = default) =>
+        Projects
+            .Where(project => project.Id == projectId)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(project => project.LastProbeOutcome, outcome)
+                .SetProperty(project => project.LastProbeAt, (DateTimeOffset?)probedAt)
+                .SetProperty(project => project.LastProbeMessage, message)
+                .SetProperty(project => project.UpdatedAt, project => project.UpdatedAt),
                 cancellationToken);
 
     /// <summary>
@@ -755,6 +788,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             entity.Property(project => project.DisabledReason).HasMaxLength(ProjectValidation.MaxDisabledReasonLength);
             entity.Property(project => project.DisabledByUserId).HasMaxLength(450);
 
+            // I-005: the probe's last outcome on the project - the word itself (bounded) and the
+            // diagnostic the probe carried. The outcome's closed vocabulary is a check constraint below.
+            entity.Property(project => project.LastProbeOutcome).HasMaxLength(32);
+            entity.Property(project => project.LastProbeMessage).HasMaxLength(200);
+
             // F-029: the three queue controls. The check constraints restate the validation the service
             // performs, so a row written out of band (raw SQL, a future caller) cannot declare a limit
             // no claim could satisfy: a concurrency cap below 1 or a queue cap below 1 is a configured
@@ -778,6 +816,15 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 table.HasCheckConstraint(
                     "CK_Projects_MaxQueuedRuns",
                     "\"MaxQueuedRuns\" IS NULL OR \"MaxQueuedRuns\" >= 1");
+
+                // I-005: the last probe outcome is one of the shared vocabulary's words (or NULL for a
+                // project that was never probed). The constraint keeps an out-of-band writer from
+                // inventing a word no caller can interpret - the same discipline the status columns use.
+                table.HasCheckConstraint(
+                    "CK_Projects_LastProbeOutcome",
+                    "\"LastProbeOutcome\" IS NULL OR \"LastProbeOutcome\" IN ("
+                    + string.Join(", ", GitProbeOutcomes.All.Select(outcome => $"'" + outcome + "'"))
+                    + ")");
             });
 
             entity.HasQueryFilter(project => project.OrganizationId == CurrentOrganizationId);

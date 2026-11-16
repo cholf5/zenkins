@@ -650,6 +650,10 @@ authoritative list with ranges and defaults):
 | `ZENKINS_GIT_DEPTH` | `0` (full clone) | Shallow-clone depth. Webhook runs are pinned to the pushed commit — a depth that excludes it fails the run honestly; see [`docs/development.md`](development.md) §4. |
 | `ZENKINS_GIT_KNOWN_HOSTS` | unset (accept-new) | Pin an SSH `known_hosts` file and make unknown host keys a hard failure. |
 | `ZENKINS_GIT_TIMEOUT_SECONDS` | `300` | Budget of one git invocation. |
+| `ZENKINS_GIT_EXECUTABLE` | `git` | argv[0] of every git invocation, for a deployment that pins the binary. |
+| `ZENKINS_PROBES_ENABLED` | `true` | Whether this worker answers Git remote probes ("what branches exist right now?", no clone). Off registers `canProbe: false` and the Server never hands it one; `docs/development.md` §4 has the Server-side knobs. |
+| `ZENKINS_PROBE_CONCURRENCY` | `1` | Probes run at once, independent of the build slots. |
+| `ZENKINS_PROBE_TIMEOUT_SECONDS` | `30` | Budget of one probe's `git ls-remote`. |
 
 Tags and required tags: the trigger accepts a run's required tags when every tag is declared by at
 least one registered worker, but a run is claimed only by a single worker whose own tags cover all

@@ -190,6 +190,31 @@
                             <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Updated</dt>
                             <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                         </div>
+                        <div class="bb:sm:col-span-3" id="project-last-probe">
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Last remote probe</dt>
+                            <dd>
+                                @* I-005: a probe is not a run, so it has no history page of its own - the
+                                   project states its most recent outcome here. "Never probed" and a recorded
+                                   failure must never read the same, and a failure must never look like
+                                   "no new commits". *@
+                                @if (_project.LastProbeOutcome is null)
+                                {
+                                    <span class="bb:text-muted-foreground">Never probed.</span>
+                                }
+                                else
+                                {
+                                    <span class="bb:font-medium" id="project-last-probe-outcome">@_project.LastProbeOutcome</span>
+                                    @if (_project.LastProbeAt is { } probedAt)
+                                    {
+                                        <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@probedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                                    }
+                                    @if (_project.LastProbeMessage is { } probeMessage)
+                                    {
+                                        <span class="bb:mt-1 bb:block bb:text-xs bb:text-muted-foreground">@probeMessage</span>
+                                    }
+                                }
+                            </dd>
+                        </div>
                     </dl>
                 </BbCardContent>
             </BbCard>

@@ -72,7 +72,21 @@ public sealed record ProjectView(
     int QuietPeriodSeconds = 0,
 
     /// <summary>F-029: the project's queue cap; <see langword="null"/> means unlimited.</summary>
-    int? MaxQueuedRuns = null);
+    int? MaxQueuedRuns = null,
+
+    /// <summary>
+    /// Card I-005: the most recent Git remote probe's outcome (a
+    /// <c>Zenkins.Shared.Probes.GitProbeOutcomes</c> value), or <see langword="null"/> when the project
+    /// has never been probed. The overview states it, so a probe failure is visible to a person and not
+    /// only in a log line - and "never probed" stays distinguishable from "probed, and it failed".
+    /// </summary>
+    string? LastProbeOutcome = null,
+
+    /// <summary>Card I-005: when that probe settled.</summary>
+    DateTimeOffset? LastProbeAt = null,
+
+    /// <summary>Card I-005: the probe's diagnostic words, if it had any.</summary>
+    string? LastProbeMessage = null);
 
 /// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
 /// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
@@ -752,5 +766,8 @@ public sealed class ProjectService(
         disabledByEmail,
         project.MaxConcurrentRuns,
         project.QuietPeriodSeconds,
-        project.MaxQueuedRuns);
+        project.MaxQueuedRuns,
+        project.LastProbeOutcome,
+        project.LastProbeAt,
+        project.LastProbeMessage);
 }

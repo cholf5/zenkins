@@ -635,6 +635,17 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
+                    b.Property<DateTimeOffset?>("LastProbeAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastProbeMessage")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("LastProbeOutcome")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<int?>("MaxConcurrentRuns")
                         .HasColumnType("integer");
 
@@ -676,6 +687,8 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("Projects", t =>
                         {
                             t.HasCheckConstraint("CK_Projects_Kind", "\"Kind\" IN ('pipeline', 'freestyle')");
+
+                            t.HasCheckConstraint("CK_Projects_LastProbeOutcome", "\"LastProbeOutcome\" IS NULL OR \"LastProbeOutcome\" IN ('refs', 'git-auth-rejected', 'git-unreachable', 'git-timeout', 'git-failed', 'no-worker')");
 
                             t.HasCheckConstraint("CK_Projects_MaxConcurrentRuns", "\"MaxConcurrentRuns\" IS NULL OR \"MaxConcurrentRuns\" >= 1");
 
@@ -1027,6 +1040,9 @@ namespace Zenkins.Server.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
+
+                    b.Property<bool>("CanProbe")
+                        .HasColumnType("boolean");
 
                     b.Property<int>("CpuCount")
                         .HasColumnType("integer");

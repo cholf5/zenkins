@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Zenkins.Shared.Artifacts;
+using Zenkins.Shared.Probes;
 using Zenkins.Shared.RunCancellation;
 using Zenkins.Worker.Git;
 
@@ -16,7 +17,10 @@ public sealed record WorkerRegistrationRequest(
     string Version,
     string Tags,
     int CpuCount,
-    int MaxConcurrency);
+    int MaxConcurrency,
+
+    /// <summary>Card I-005: whether this worker answers Git remote probes (absent = no, on the server).</summary>
+    bool CanProbe = false);
 
 /// <summary>Heartbeat payload; capability fields refresh the server row.</summary>
 public sealed record WorkerHeartbeatRequest(
@@ -25,7 +29,10 @@ public sealed record WorkerHeartbeatRequest(
     string Version,
     string Tags,
     int CpuCount,
-    int MaxConcurrency);
+    int MaxConcurrency,
+
+    /// <summary>Card I-005: the refreshed probe capability (absent leaves the server's value alone).</summary>
+    bool? CanProbe = null);
 
 public sealed record WorkerRegistrationResponse(string WorkerId, string WorkerToken, string WorkerName);
 
@@ -150,6 +157,31 @@ public sealed record WorkerSecretRequest(string Name);
 
 /// <summary>The fetched value, for the worker's per-run in-memory cache only - never written to disk.</summary>
 public sealed record WorkerSecretResponse(string Name, string Value);
+
+/// <summary>
+/// A Git remote probe leased to this worker (card I-005): the probe's id, the repository snapshot to run
+/// <c>git ls-remote</c> against, and until when the lease holds. No credential rides here - it is fetched
+/// at probe time, through the probe-scoped credential route.
+/// </summary>
+public sealed record WorkerProbeClaimResponse(
+    Guid ProbeId,
+    Guid ProjectId,
+    string RepositoryUrl,
+    DateTimeOffset LeaseExpiresAt);
+
+/// <summary>
+/// A probe's answer: a <c>Zenkins.Shared.Probes.GitProbeOutcomes</c> value, the heads and remote HEAD on
+/// success, or the diagnostic on failure. The shared contract validates it on both sides.
+/// </summary>
+public sealed record WorkerProbeReportRequest(
+    string Outcome,
+    GitProbeRef[]? Heads = null,
+    string? HeadSha = null,
+    string? HeadBranch = null,
+    string? Message = null);
+
+/// <summary>The probe report's answer (one word; the worker needs nothing else).</summary>
+public sealed record WorkerProbeReportResponse(string Status);
 
 /// <summary>The server answered with a definitive failure (e.g. 401); retries cannot fix it.</summary>
 public sealed class WorkerApiRejectedException(string message, int statusCode) : Exception(message)
@@ -326,6 +358,72 @@ public sealed class WorkerApiClient(HttpClient httpClient)
         Guid runId,
         CancellationToken cancellationToken) =>
         new GitCredentialClient(httpClient).FetchAsync(workerToken, runId, cancellationToken);
+
+    /// <summary>
+    /// Asks for the next Git remote probe (card I-005). Returns <see langword="null"/> for the 204 answer
+    /// (nothing to probe right now) - a claim never learns why.
+    /// <para>
+    /// A 404 here is a Server that predates this card (the route does not exist): it surfaces as a
+    /// <see cref="WorkerApiRejectedException"/> and the probe loop stops for the process's lifetime
+    /// instead of retrying a route that will never appear.
+    /// </para>
+    /// </summary>
+    public async Task<WorkerProbeClaimResponse?> ClaimProbeAsync(
+        string workerToken,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(HttpMethod.Post, "api/workers/probes/claim", workerToken),
+            cancellationToken);
+        await EnsureSuccessAsync(inFlight.Response, "claiming a Git probe", inFlight.Timeout);
+        if ((int)inFlight.Response.StatusCode == 204)
+        {
+            return null;
+        }
+
+        return await inFlight.Response.Content
+            .ReadFromJsonAsync(WorkerJsonContext.Default.WorkerProbeClaimResponse, inFlight.Timeout)
+            ?? throw new WorkerApiRejectedException(
+                "the server returned an empty probe claim response.",
+                (int)inFlight.Response.StatusCode);
+    }
+
+    /// <summary>
+    /// Reports one probe's answer (card I-005). Its definitive 4xx answers (the probe is gone, the lease
+    /// was lost or the payload was refused) surface as <see cref="WorkerApiRejectedException"/> and the
+    /// probe is given up - retrying a refused report cannot make it acceptable.
+    /// </summary>
+    public async Task ReportProbeAsync(
+        string workerToken,
+        Guid probeId,
+        WorkerProbeReportRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/probes/{probeId}/report",
+                workerToken,
+                request,
+                WorkerJsonContext.Default.WorkerProbeReportRequest),
+            cancellationToken);
+        await EnsureSuccessAsync(
+            inFlight.Response,
+            "reporting a Git probe",
+            inFlight.Timeout,
+            isRunReport: true);
+    }
+
+    /// <summary>
+    /// The material for one probe this worker holds (card I-005): the probe-scoped twin of
+    /// <see cref="FetchGitCredentialAsync"/>. <c>null</c> means "no credential assigned" and the probe
+    /// runs anonymously.
+    /// </summary>
+    public Task<GitCredentialMaterial?> FetchProbeGitCredentialAsync(
+        string workerToken,
+        Guid probeId,
+        CancellationToken cancellationToken) =>
+        new GitCredentialClient(httpClient).FetchForProbeAsync(workerToken, probeId, cancellationToken);
 
     /// <summary>
     /// Reports a finished run with its exit code (0 → Success, non-zero → Failed on the server) and,
@@ -751,6 +849,12 @@ public sealed record WorkerArtifactErrorResponse(string Error, string Message);
 [JsonSerializable(typeof(WorkerStepResponse))]
 [JsonSerializable(typeof(WorkerSecretRequest))]
 [JsonSerializable(typeof(WorkerSecretResponse))]
+// I-005: the Git remote probe's claim and report (source-generated, like every other wire type).
+[JsonSerializable(typeof(WorkerProbeClaimResponse))]
+[JsonSerializable(typeof(GitProbeRef))]
+[JsonSerializable(typeof(GitProbeRef[]))]
+[JsonSerializable(typeof(WorkerProbeReportRequest))]
+[JsonSerializable(typeof(WorkerProbeReportResponse))]
 [JsonSerializable(typeof(ArtifactCreateRequest))]
 [JsonSerializable(typeof(ArtifactCreateResponse))]
 [JsonSerializable(typeof(ArtifactFileEntry))]

@@ -16,6 +16,7 @@ using Zenkins.Server.Dashboard;
 using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Organizations;
+using Zenkins.Server.Probes;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
 using Zenkins.Server.Schedules;
@@ -64,6 +65,10 @@ builder.Services.AddZenkinsDashboard();
 builder.Services.AddZenkinsLogs(builder.Configuration);
 builder.Services.AddZenkinsSecrets();
 builder.Services.AddZenkinsGit();
+
+// I-005: the Git remote probe primitive - an in-memory queue/lease (see GitProbeRegistry) and the
+// two worker endpoints that answer it. Probes ride the existing pull channel; no build slot, no run.
+builder.Services.AddZenkinsProbes();
 
 // F-016: the local artifact store (App_Data/artifacts), the upload/download service and the sweeper that
 // closes abandoned uploads and orphaned directories.
@@ -247,6 +252,10 @@ app.MapWorkerEndpoints();
 // Run trigger form (F-003's authenticated form shape) and the token-authenticated run claim and
 // reporting API (F-006); the background lease sweeper is registered by AddZenkinsRuns.
 app.MapRunEndpoints();
+
+// I-005: the probe claim/report API. The requesting side is a Server feature calling
+// GitProbeService, never a route (see ProbeEndpoints).
+app.MapProbeEndpoints();
 
 // F-016: the worker artifact API (create/files/finalize) and the per-artifact download.
 app.MapArtifactEndpoints();

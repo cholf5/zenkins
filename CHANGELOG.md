@@ -8,6 +8,18 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **Worker Git remote probe (I-005).** The Server can now ask a Worker "what heads does this repository
+  have right now?" and get `refs/heads/* → sha` plus the remote HEAD back, without cloning and without
+  the Server running git or dialing a Worker: a probe is a work item claimed through the existing pull
+  channel (`POST /api/workers/probes/claim` / `…/report`), run as one `git ls-remote` with the project's
+  delivered credential, and answered as refs or a typed failure (`git-auth-rejected`,
+  `git-unreachable`, `git-timeout`, plus `git-failed` for anything else). A probe takes no build slot,
+  creates no run and appears on no dashboard or history page; its in-flight queue is in server memory
+  (single-Server, a lost probe is re-requested) while its last outcome is persisted on the project and
+  stated on its overview. Probes are deduped per (project, repository), non-probe-capable Workers
+  (including every pre-I-005 binary) are never handed one, and no probe-capable Worker means a bounded
+  `no-worker` answer rather than an endless wait. This is the primitive F-023 (multibranch) and F-025
+  (SCM polling) build on; no scheduling ships with it.
 - **License chosen: Apache-2.0.** The 1.0.0 source distribution shipped with no license granted
   (the PRD said TBD); that entry below stays as the historical record. The decision is now made:
   the Apache License, Version 2.0 text is in `LICENSE` (SPDX: `Apache-2.0`), the PRD and README

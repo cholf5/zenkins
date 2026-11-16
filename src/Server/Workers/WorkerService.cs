@@ -52,7 +52,14 @@ public sealed record WorkerRegistrationInput(
     string? Version,
     string? Tags,
     int? CpuCount,
-    int? MaxConcurrency);
+    int? MaxConcurrency,
+
+    /// <summary>
+    /// Card I-005: whether this Worker can answer Git remote probes. <see langword="null"/> is what a
+    /// Worker built before the probe card sends, and it means <b>no</b> - see
+    /// <see cref="Zenkins.Shared.Probes.GitProbeCapability"/>.
+    /// </summary>
+    bool? CanProbe = null);
 
 /// <summary>The raw heartbeat payload. Every capability field is optional (refresh when present).</summary>
 public sealed record WorkerHeartbeatInput(
@@ -61,7 +68,14 @@ public sealed record WorkerHeartbeatInput(
     string? Version,
     string? Tags,
     int? CpuCount,
-    int? MaxConcurrency);
+    int? MaxConcurrency,
+
+    /// <summary>
+    /// Card I-005: the refreshed capability flag. Absent (null) leaves the stored value alone, so an
+    /// old Worker's heartbeat cannot silently revoke a capability a new registration granted - and a
+    /// new Worker that turned probing off sends <c>false</c>, which does revoke it.
+    /// </summary>
+    bool? CanProbe = null);
 
 /// <summary>A worker as the /workers pages show it (roster and detail, card D-005).</summary>
 public sealed record WorkerView(
@@ -76,7 +90,10 @@ public sealed record WorkerView(
     int MaxConcurrency,
     DateTimeOffset? LastHeartbeatAt,
     DateTimeOffset CreatedAt,
-    bool IsDisabled = false);
+    bool IsDisabled = false,
+
+    /// <summary>Card I-005: whether this Worker can be handed Git remote probes.</summary>
+    bool CanProbe = false);
 
 /// <summary>A registration token as the Owner's token list shows it. No secrets.</summary>
 public sealed record WorkerRegistrationTokenView(
@@ -304,7 +321,8 @@ public sealed class WorkerService(
         worker.MaxConcurrency,
         worker.LastHeartbeatAt,
         worker.CreatedAt,
-        worker.IsDisabled);
+        worker.IsDisabled,
+        worker.CanProbe);
 
     /// <summary>
     /// Disables or re-enables a worker (card D-005, Owner-only). Disable is the reversible
@@ -576,6 +594,11 @@ public sealed class WorkerService(
 
         var worker = await context.Workers.SingleOrDefaultAsync(
             candidate => candidate.Name == name, cancellationToken);
+
+        // I-005: the capability is what this registration says, never what the old row said. Absent is
+        // false, so a pre-probe binary re-registering over a probe-capable row stops being handed probes
+        // instead of inheriting a promise it cannot keep.
+        var canProbe = input.CanProbe == true;
         if (worker is null)
         {
             worker = new Worker
@@ -588,6 +611,7 @@ public sealed class WorkerService(
                 Tags = tags,
                 CpuCount = cpuCount,
                 MaxConcurrency = maxConcurrency,
+                CanProbe = canProbe,
             };
             context.Workers.Add(worker);
         }
@@ -599,6 +623,7 @@ public sealed class WorkerService(
             worker.Tags = tags;
             worker.CpuCount = cpuCount;
             worker.MaxConcurrency = maxConcurrency;
+            worker.CanProbe = canProbe;
         }
 
         // Re-registration replaces identity: previous active worker tokens stop working immediately.
@@ -723,6 +748,13 @@ public sealed class WorkerService(
         if (maxConcurrency is not null)
         {
             worker.MaxConcurrency = maxConcurrency.Value;
+        }
+
+        // I-005: refresh only when the payload says something. An old Worker omits the field, and
+        // clearing a capability because a heartbeat did not repeat it would make probes flap.
+        if (input.CanProbe is { } canProbe)
+        {
+            worker.CanProbe = canProbe;
         }
 
         tokenRow.LastUsedAt = now;

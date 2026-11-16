@@ -76,6 +76,12 @@
                         <dd id="worker-tags">@(string.IsNullOrEmpty(_worker.Tags) ? "-" : _worker.Tags)</dd>
                     </div>
                     <div>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Remote probes</dt>
+                        @* I-005: only a Worker that announced the capability is handed probes, so the
+                           fact deserves to be visible rather than inferred from silence. *@
+                        <dd id="worker-can-probe">@(_worker.CanProbe ? "Yes" : "No")</dd>
+                    </div>
+                    <div>
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Registered</dt>
                         <dd>@_worker.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                     </div>

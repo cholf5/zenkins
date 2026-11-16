@@ -64,6 +64,18 @@ public sealed class Worker : ITenantOwned
     /// <summary>Registration counts as the first heartbeat; every heartbeat refreshes this.</summary>
     public DateTimeOffset? LastHeartbeatAt { get; set; }
 
+    /// <summary>
+    /// Card I-005: whether this Worker said it can answer Git remote probes (<c>canProbe</c> on
+    /// registration and heartbeat).
+    /// <para>
+    /// <b>Default false, and absent means false.</b> A Worker built before the probe card does not send
+    /// the field, so it is never handed a probe - an upgrade that skips workers stays valid, and a
+    /// pre-probe binary re-registering over a probe-capable row clears the flag rather than inheriting it.
+    /// The probe claim reads this column before leasing anything.
+    /// </para>
+    /// </summary>
+    public bool CanProbe { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

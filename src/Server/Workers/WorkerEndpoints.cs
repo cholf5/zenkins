@@ -297,10 +297,16 @@ public static class WorkerEndpoints
         string? Version,
         string? Tags,
         int? CpuCount,
-        int? MaxConcurrency)
+        int? MaxConcurrency,
+
+        /// <summary>
+        /// Card I-005: whether this Worker can answer Git remote probes. A Worker built before the
+        /// probe card omits it, and the service reads "absent" as <b>no</b> (never as "probably").
+        /// </summary>
+        bool? CanProbe = null)
     {
         public WorkerRegistrationInput ToInput() =>
-            new(Name, Os, Architecture, Version, Tags, CpuCount, MaxConcurrency);
+            new(Name, Os, Architecture, Version, Tags, CpuCount, MaxConcurrency, CanProbe);
     }
 
     public sealed record WorkerHeartbeatRequest(
@@ -309,10 +315,13 @@ public static class WorkerEndpoints
         string? Version,
         string? Tags,
         int? CpuCount,
-        int? MaxConcurrency)
+        int? MaxConcurrency,
+
+        /// <summary>Card I-005: the refreshed probe capability; absent leaves the stored value alone.</summary>
+        bool? CanProbe = null)
     {
         public WorkerHeartbeatInput ToInput() =>
-            new(Os, Architecture, Version, Tags, CpuCount, MaxConcurrency);
+            new(Os, Architecture, Version, Tags, CpuCount, MaxConcurrency, CanProbe);
     }
 
     public sealed record WorkerRegistrationResponse(Guid WorkerId, string WorkerToken, string WorkerName);

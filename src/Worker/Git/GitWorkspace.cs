@@ -351,104 +351,21 @@ public sealed class GitWorkspace
     // Credential environment
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// One invocation's environment: the shared composition (card I-005 extracted it so the probe path
+    /// uses exactly this plumbing), plus the worker's own overrides.
+    /// </summary>
     private Dictionary<string, string?> BuildEnvironment(
         GitUrl url,
         GitCredentialFiles carrier,
-        GitCredentialMaterial? credential)
-    {
-        // Card F-018: every composition starts from GitEnvironment.Base, which cuts off the host's
-        // credential sources (global/system config, credential helpers, ask-pass programs, ssh agent
-        // and ~/.ssh/config). The empty config files live in the run's hardening/ directory.
-        var hardeningDirectory = _options.Work.HardeningPath;
-        Dictionary<string, string?> environment;
-        switch (url.Transport)
-        {
-            case GitTransport.Http when credential is { Kind: GitCredentialKind.HttpsToken }:
-                environment = GitEnvironment.ForHttpsToken(carrier, hardeningDirectory);
-                break;
-
-            case GitTransport.Http when credential is { Kind: GitCredentialKind.SshKey }:
-                throw new GitException(
-                    "the project's Git credential is an SSH key but the repository URL uses http(s); "
-                    + "use an SSH URL or store an HTTPS token.",
-                    GitFailureKind.Credential);
-
-            case GitTransport.Http:
-                // No credential assigned and an http(s) remote: the clone runs anonymously. The base
-                // environment already dropped every helper, so the host's stored token cannot answer
-                // the remote's challenge - which is what makes the run page's "no credential assigned"
-                // statement true rather than an assumption.
-                environment = GitEnvironment.Base(hardeningDirectory);
-                break;
-
-            case GitTransport.Ssh when credential is { Kind: GitCredentialKind.SshKey }:
-                environment = GitEnvironment.ForSshKey(
-                    carrier,
-                    KnownHostsFile(),
-                    _options.KnownHostsPath is null
-                        ? GitEnvironment.DefaultHostKeyPolicy
-                        : GitEnvironment.PinnedHostKeyPolicy,
-                    hardeningDirectory);
-                break;
-
-            case GitTransport.Ssh when credential is { Kind: GitCredentialKind.HttpsToken }:
-                throw new GitException(
-                    "the project's Git credential is an HTTPS token but the repository URL uses ssh; "
-                    + "use an http(s) URL or store an SSH key.",
-                    GitFailureKind.Credential);
-
-            case GitTransport.Ssh:
-                // No credential assigned and an ssh remote: offer no identity at all, so a key that
-                // happens to sit in the worker's ~/.ssh is not used.
-                environment = GitEnvironment.ForSshWithoutCredential(
-                    KnownHostsFile(),
-                    _options.KnownHostsPath is null
-                        ? GitEnvironment.DefaultHostKeyPolicy
-                        : GitEnvironment.PinnedHostKeyPolicy,
-                    hardeningDirectory);
-                break;
-
-            default:
-                environment = GitEnvironment.Base(hardeningDirectory);
-                break;
-        }
-
-        foreach (var (name, value) in _options.EnvironmentOverrides)
-        {
-            environment[name] = value;
-        }
-
-        return environment;
-    }
-
-    /// <summary>
-    /// The known-hosts file for this run: the configured pin when
-    /// <c>ZENKINS_GIT_KNOWN_HOSTS</c> is set, otherwise an empty per-run file - never the operator's
-    /// <c>~/.ssh/known_hosts</c>, which a worker must not write to.
-    /// </summary>
-    private string KnownHostsFile()
-    {
-        if (!string.IsNullOrWhiteSpace(_options.KnownHostsPath))
-        {
-            var configured = Path.GetFullPath(_options.KnownHostsPath);
-            if (!File.Exists(configured))
-            {
-                throw new GitException(
-                    $"ZENKINS_GIT_KNOWN_HOSTS points at '{configured}', which does not exist.",
-                    GitFailureKind.Credential);
-            }
-
-            return configured;
-        }
-
-        var perRun = Path.Combine(_options.Work.TempPath, "known_hosts");
-        if (!File.Exists(perRun))
-        {
-            File.WriteAllText(perRun, string.Empty);
-        }
-
-        return perRun;
-    }
+        GitCredentialMaterial? credential) =>
+        GitCredentialEnvironment.Build(
+            url,
+            credential,
+            carrier,
+            _options.KnownHostsPath,
+            _options.Work.HardeningPath,
+            _options.EnvironmentOverrides);
 
     // ------------------------------------------------------------------
     // LFS
@@ -594,51 +511,13 @@ public sealed class GitWorkspace
         return target;
     }
 
-    private GitException ClassifyCloneFailure(GitCommandResult result, GitUrl url, string branch)
-    {
-        var tail = Summarize(result);
-        var text = string.Join('\n', result.Lines);
-        var display = DisplayName(url);
-
-        if (Contains(text, "Remote branch") && Contains(text, "not found")
-            || Contains(text, "couldn't find remote ref")
-            || Contains(text, "Could not find remote branch"))
-        {
-            return new GitException(
-                $"the branch '{branch}' does not exist in '{display}'. "
-                + "Check the project's default branch and the repository URL.",
-                GitFailureKind.BranchNotFound);
-        }
-
-        if (Contains(text, "Authentication failed")
-            || Contains(text, "could not read Username")
-            || Contains(text, "could not read Password")
-            || Contains(text, "Permission denied (publickey)")
-            || Contains(text, "terminal prompts disabled")
-            || Contains(text, "Invalid username or password")
-            || Contains(text, "HTTP Basic: Access denied"))
-        {
-            return new GitException(
-                $"the remote '{display}' rejected the credential for this project (git exit {result.ExitCode}: {tail}).",
-                GitFailureKind.AuthenticationRejected);
-        }
-
-        if (Contains(text, "Could not resolve host")
-            || Contains(text, "Connection refused")
-            || Contains(text, "Connection timed out")
-            || Contains(text, "unable to access")
-            || Contains(text, "SSL certificate")
-            || Contains(text, "Network is unreachable"))
-        {
-            return new GitException(
-                $"the remote '{display}' could not be reached (git exit {result.ExitCode}: {tail}).",
-                GitFailureKind.Unreachable);
-        }
-
-        return new GitException(
-            $"git clone of the branch '{branch}' from '{display}' failed (git exit {result.ExitCode}: {tail}).",
-            GitFailureKind.Failed);
-    }
+    /// <summary>
+    /// Classifies a failed clone through the shared table (cards F-013 and I-005): the branch first, then
+    /// auth/unreachable, then the generic fallback - see
+    /// <see cref="GitFailureClassification.ClassifyCloneFailure"/> for why that order is the diagnosis.
+    /// </summary>
+    private GitException ClassifyCloneFailure(GitCommandResult result, GitUrl url, string branch) =>
+        GitFailureClassification.ClassifyCloneFailure(result, DisplayName(url), branch);
 
     private async Task<string> RevParseHeadAsync(CancellationToken cancellationToken)
     {
@@ -673,16 +552,8 @@ public sealed class GitWorkspace
     /// plumbing, but the operator's overrides - which is what lets a test's <c>PATH</c> reach the
     /// <c>git-lfs</c> stub and git's config overrides apply.
     /// </summary>
-    private Dictionary<string, string?> LocalEnvironment()
-    {
-        var environment = GitEnvironment.Base(_options.Work.HardeningPath);
-        foreach (var (name, value) in _options.EnvironmentOverrides)
-        {
-            environment[name] = value;
-        }
-
-        return environment;
-    }
+    private Dictionary<string, string?> LocalEnvironment() =>
+        GitCredentialEnvironment.Base(_options.Work.HardeningPath, _options.EnvironmentOverrides);
 
     /// <summary>
     /// One invocation's budget: the configured per-operation timeout, cut down by what is left of the
@@ -715,9 +586,7 @@ public sealed class GitWorkspace
         url.Transport == GitTransport.Local ? url.CloneUrl : url.Describe();
 
     private static string Summarize(GitCommandResult result) =>
-        string.IsNullOrEmpty(result.StandardErrorTail)
-            ? "no stderr output"
-            : result.StandardErrorTail;
+        GitFailureClassification.Summarize(result);
 
     private static bool Contains(string text, string value) =>
         text.Contains(value, StringComparison.OrdinalIgnoreCase);

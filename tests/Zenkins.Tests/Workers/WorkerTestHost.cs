@@ -92,6 +92,10 @@ public sealed class WorkerTestHost : IDisposable
 
     /// <summary>A canonical registration payload for the tests. <c>tags</c> may be null (not sent).
     /// </summary>
+    /// <param name="canProbe">
+    /// Card I-005: the Git probe capability. <see langword="false"/> is what a pre-probe Worker sends; the
+    /// server reads "absent" the same way, so the default here is the old-worker shape.
+    /// </param>
     public static object RegistrationPayload(
         string name = "build-agent-1",
         string os = "Linux",
@@ -99,7 +103,8 @@ public sealed class WorkerTestHost : IDisposable
         string version = "1.0.0",
         string? tags = "dotnet,ci",
         int cpuCount = 8,
-        int maxConcurrency = 2) => new
+        int maxConcurrency = 2,
+        bool canProbe = false) => new
     {
         name,
         os,
@@ -108,15 +113,21 @@ public sealed class WorkerTestHost : IDisposable
         tags,
         cpuCount,
         maxConcurrency,
+        canProbe,
     };
 
+    /// <param name="canProbe">
+    /// Card I-005: the refreshed probe capability. <see langword="null"/> omits it (an old Worker's
+    /// heartbeat), which leaves the server's stored value alone.
+    /// </param>
     public static object HeartbeatPayload(
         string? os = null,
         string? architecture = null,
         string? version = null,
         string? tags = null,
         int? cpuCount = null,
-        int? maxConcurrency = null) => new
+        int? maxConcurrency = null,
+        bool? canProbe = null) => new
     {
         os,
         architecture,
@@ -124,6 +135,7 @@ public sealed class WorkerTestHost : IDisposable
         tags,
         cpuCount,
         maxConcurrency,
+        canProbe,
     };
 
     /// <summary>Reads the JSON string property the worker API returns (camelCase).</summary>

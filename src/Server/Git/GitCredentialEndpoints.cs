@@ -64,6 +64,14 @@ public static class GitCredentialEndpoints
     /// <summary>The worker fetch route template.</summary>
     public const string WorkerFetchPath = "/api/workers/runs/{runId:guid}/git-credential";
 
+    /// <summary>
+    /// Card I-005's probe-scoped fetch: the same material, addressed by a probe id instead of a run id.
+    /// Two routes, two leases - a probe id cannot fetch a run's credential and a run id cannot reach
+    /// this one, which is the card's "the two scopes never replay each other". Same <c>no-store</c>
+    /// answer, same bodyless 404 for every miss.
+    /// </summary>
+    public const string ProbeFetchPath = "/api/workers/probes/{probeId:guid}/git-credential";
+
     /// <summary>Maps the management endpoints, the settings list and the worker fetch.</summary>
     public static IEndpointRouteBuilder MapGitCredentialEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -86,6 +94,11 @@ public static class GitCredentialEndpoints
         endpoints.MapPost(DetachPath, DetachAsync).RequireAuthorization();
 
         endpoints.MapGet(WorkerFetchPath, FetchMaterialAsync);
+
+        // I-005: the probe-scoped fetch. It lives here, beside the run-scoped one, because this is the
+        // credential surface - and because the two answer shapes must stay identical by being written
+        // once. The authorization behind it is the probe lease (GitProbeService), never the run's.
+        endpoints.MapGet(ProbeFetchPath, FetchProbeMaterialAsync);
         return endpoints;
     }
 
@@ -289,6 +302,30 @@ public static class GitCredentialEndpoints
 
             // Deliberately bodyless and identical for every miss (unknown run, foreign tenant, another
             // worker's run, no credential configured): nothing to distinguish, nothing to probe.
+            _ => Results.NotFound(),
+        };
+    }
+
+    /// <summary>
+    /// Card I-005: the probe-scoped material fetch. Exactly the run-scoped answers - a 401 for a dead
+    /// token, one bodyless 404 for every other miss, material with <c>no-store</c> on success - because
+    /// the two paths deliver the same secret through the same shape; only the lease that authorizes them
+    /// differs.
+    /// </summary>
+    private static async Task<IResult> FetchProbeMaterialAsync(
+        Guid probeId,
+        HttpContext httpContext,
+        Zenkins.Server.Probes.GitProbeService probes)
+    {
+        var result = await probes.FetchMaterialForProbeAsync(
+            WorkerEndpoints.BearerToken(httpContext),
+            probeId,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            GitCredentialFetchStatus.Success => WithNoStore(httpContext, Results.Json(result.Material)),
+            GitCredentialFetchStatus.InvalidToken => Results.Unauthorized(),
             _ => Results.NotFound(),
         };
     }

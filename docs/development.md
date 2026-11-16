@@ -43,6 +43,18 @@ loop (`dotnet run` from a clone).
 > and 6 for the tenancy harness (the two new tenant-owned entities: read isolation, cross-tenant write
 > refusal and Find-after-switch, in both directions). Still no new category and no new exclusion - the
 > sextuple filter is unchanged.
+> I-005 (the Worker Git remote probe) added **18** tests on 2026-11-16: 6 for the probe's own git layer
+> (heads + remote HEAD in one invocation against a real bare repository, an empty repository as a
+> success, and the typed failures a real wrong token / refused connection / killed budget produce) and 7
+> for the primitive over the product's surfaces (the full in-process worker path with no run created and
+> the dashboard untouched, a probe answered while every build slot is busy, a recorded failure that is
+> never "no change", the bounded `no-worker` answer, three callers sharing one probe and one worker
+> conversation, the two credential scopes not replaying each other, and the tenant boundary), plus 2 for
+> the capability promise (a pre-I-005 re-registration clears `canProbe` and the worker page says so; a
+> heartbeat that omits the field leaves the stored value alone), and 3 pinning F-013's clone diagnosis that
+> the shared classifier now carries (the missing branch answers before an auth-sounding stderr, the two
+> shared kinds survive, and a silent git still yields "no stderr output" rather than a bare `: )`). Still no
+> new category and no new exclusion - the sextuple filter is unchanged.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
@@ -217,7 +229,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~4½ min on the reference machine (1220 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1238 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -227,7 +239,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1246 at the time of writing) but
+filter runs **all seven** (1264 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only
@@ -530,15 +542,19 @@ overlap/miss rule, and the defaults are that policy verbatim:
 
 ### Worker Git behaviour (shallow clones and pinned commits)
 
-The worker clones each run's repository itself; three environment variables configure it
-(`ZENKINS_GIT_DEPTH`, `ZENKINS_GIT_KNOWN_HOSTS`, `ZENKINS_GIT_TIMEOUT_SECONDS` - see
-[`WorkerConfiguration`](../src/Worker/WorkerConfiguration.cs) for the accepted ranges).
+The worker clones each run's repository itself, and it also answers Git remote probes (card I-005: one
+`git ls-remote`, no clone). Both use the same git plumbing, so the same variables configure them - see
+[`WorkerConfiguration`](../src/Worker/WorkerConfiguration.cs) for the accepted ranges.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `ZENKINS_GIT_DEPTH` | `0` (full clone) | Passed as `--depth` when positive. A speed knob for large repositories; git ignores it on a plain local path. |
 | `ZENKINS_GIT_KNOWN_HOSTS` | unset (accept-new per run) | Pins SSH host keys. Never the operator's `~/.ssh/known_hosts`. |
 | `ZENKINS_GIT_TIMEOUT_SECONDS` | 300 | Budget of one git invocation, further capped by what is left of the run's deadline. |
+| `ZENKINS_GIT_EXECUTABLE` | `git` | argv[0] of every git invocation (a pinned binary instead of the one on `PATH`). |
+| `ZENKINS_PROBES_ENABLED` | `true` | Whether this worker answers Git remote probes. Off registers `canProbe: false`, and the Server then never hands it a probe; a pre-I-005 worker binary omits the flag and is read the same way. |
+| `ZENKINS_PROBE_CONCURRENCY` | `1` | Probes run at once, independent of `ZENKINS_WORKER_CONCURRENCY`: a probe is a light remote read and must not wait for a build slot. |
+| `ZENKINS_PROBE_TIMEOUT_SECONDS` | `30` | Budget of one probe's `git ls-remote`; expiry kills the process tree and reports `git-timeout`. |
 
 **Shallow clones and webhook runs pull in opposite directions.** A manual run clones its branch and
 builds the tip. A webhook run (card F-017) is pinned to the commit its push named, so after the clone
@@ -550,6 +566,35 @@ always succeeds. With `ZENKINS_GIT_DEPTH > 0` the named commit can fall **outsid
 `git-*` failure. That is the honest outcome - it never silently builds the branch tip - but if you
 enable a shallow depth, size it to cover the push-to-clone gap, or keep webhook-triggered projects on
 `0`.
+
+### Git remote probes (the branch-discovery primitive)
+
+A probe answers "what heads does this repository have right now?" without cloning, and it is the
+primitive F-023/F-025 build on. It rides the existing pull channel: the Server queues a probe, a Worker
+claims it, runs `git ls-remote` with the project's assigned credential, and reports the refs or a typed
+failure. The Server never runs git and never dials a Worker. Five keys tune it, all in
+[`src/Server/appsettings.json`](../src/Server/appsettings.json) (defaults also in
+`ProbeOptions.Defaults`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Probes:WaitSeconds` | `60` | How long one requesting caller waits for a claimant before the probe is settled as `no-worker`. This is the bounded wait: "nobody is there" is an answer with a timestamp. |
+| `Probes:PollMilliseconds` | `250` | How often the waiting caller re-reads the probe's state. |
+| `Probes:LeaseSeconds` | `120` | How long one Worker's lease lasts. A worker that dies before reporting loses nothing - the probe is re-offered after this window, and the caller waits at most one lease past `WaitSeconds`. |
+| `Probes:DedupeSeconds` | `15` | How long a completed probe stays joinable, so every caller inside the interval shares one probe (and one credential use) instead of starting its own. |
+| `Probes:RetentionSeconds` | `600` | How long a settled probe is remembered by the in-memory queue. |
+
+The Worker's own `ZENKINS_PROBE_TIMEOUT_SECONDS` (30s by default) is the probe's git budget; it sits
+well inside `Probes:WaitSeconds`, so a hung remote is a typed `git-timeout` the caller receives rather
+than a wait that expires first.
+
+The queue and its leases live **in server memory** on purpose: the product is single-Server, and a
+probe is a short-lived question whose answer nobody replays - if the process restarts, the caller is
+gone too and F-023/F-025 ask again. What survives a restart is the outcome's visibility: the last
+probe result is persisted on the project (`Projects.LastProbeOutcome`/`LastProbeAt`/`LastProbeMessage`)
+and stated on its overview. A probe is **not a run**: it takes no build slot, never appears in the queue,
+the dashboard counts or the run history, and its credential is delivered only to the Worker holding that
+probe's lease - a probe id cannot fetch a run's material and a run id cannot fetch a probe's.
 
 ### Reverse proxy (TLS termination)
 
