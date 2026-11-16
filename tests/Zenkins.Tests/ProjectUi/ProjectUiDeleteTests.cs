@@ -46,6 +46,9 @@ public sealed class ProjectUiDeleteTests
                 RequiredTags = string.Empty,
                 GitBranch = WebhooksTestHost.DefaultBranch,
                 PipelinePath = "pipeline.lua",
+
+                // F-036: the project's only run, so #1.
+                Number = 1,
             };
             context.BuildRuns.Add(run);
             await context.SaveChangesAsync();

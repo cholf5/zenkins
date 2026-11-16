@@ -331,8 +331,14 @@ public sealed class WorkerRunLoop(
     /// The server-provided run environment (F-007) plus the run's resolved build parameters (F-021).
     /// One layer, so one precedence story: the trigger's values win over anything a step declares,
     /// exactly like the <c>ZENKINS_*</c> metadata beside them.
+    /// <para>
+    /// Card F-036 adds the run's identity in the shape people name a build by: <c>ZENKINS_BUILD_NUMBER</c>
+    /// (the project-scoped <c>#N</c> every page prints, so a step can tag an artifact or a notification with
+    /// it without parsing a guid) beside <c>ZENKINS_BUILD_ID</c> (the very guid <c>ZENKINS_RUN_ID</c> already
+    /// carried - kept, never replaced, because a script may name either).
+    /// </para>
     /// </summary>
-    private static Dictionary<string, string?> BuildRunEnvironment(
+    internal static Dictionary<string, string?> BuildRunEnvironment(
         WorkerClaimResponse claim,
         string workerName)
     {
@@ -355,6 +361,15 @@ public sealed class WorkerRunLoop(
         environment["ZENKINS_RUN_ID"] = claim.RunId.ToString();
         environment["ZENKINS_WORKER_NAME"] = workerName;
         environment["ZENKINS_PROJECT_ID"] = claim.ProjectId.ToString();
+
+        // F-036: the build's identity as a person names it, and the one guid a script can quote. A claim
+        // without a number (an older server) leaves ZENKINS_BUILD_NUMBER unset rather than writing a 0
+        // that would look like a real build.
+        environment["ZENKINS_BUILD_ID"] = claim.RunId.ToString();
+        if (claim.Number is > 0 and var number)
+        {
+            environment["ZENKINS_BUILD_NUMBER"] = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
 
         return environment;
     }

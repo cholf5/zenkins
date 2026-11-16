@@ -421,6 +421,9 @@ public sealed class TwoOrgsFixture : IDisposable
                 RequiredTags = string.Empty,
                 GitBranch = "main",
                 PipelinePath = "pipeline.lua",
+
+                // F-036: each organization's first run is #1 (numbering is per project).
+                Number = 1,
             },
             new BuildRun
             {
@@ -432,6 +435,9 @@ public sealed class TwoOrgsFixture : IDisposable
                 RequiredTags = "dotnet",
                 GitBranch = "main",
                 PipelinePath = "pipeline.lua",
+
+                // F-036: numbering is per project, so organization B's first run is #1 as well.
+                Number = 1,
             });
 
         // F-027: one API token per organization, all three scopes, so an API probe has a working

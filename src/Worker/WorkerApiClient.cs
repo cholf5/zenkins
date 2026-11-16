@@ -76,7 +76,15 @@ public sealed record WorkerClaimResponse(
     DateTimeOffset LeaseExpiresAt,
     string? Commit = null,
     string? PipelineSpecJson = null,
-    IReadOnlyDictionary<string, string>? Parameters = null);
+    IReadOnlyDictionary<string, string>? Parameters = null,
+
+    /// <summary>
+    /// Card F-036: the run's per-project build number, which the worker injects as
+    /// <c>ZENKINS_BUILD_NUMBER</c>. Nullable so an older server's claim (and a claim parsed from a
+    /// document that predates the field) still binds - a missing number then simply leaves the variable
+    /// unset rather than failing the whole claim.
+    /// </summary>
+    int? Number = null);
 
 /// <summary>
 /// The accepted report's answer (card F-014 extends the bodyless answer): the run's execution deadline,

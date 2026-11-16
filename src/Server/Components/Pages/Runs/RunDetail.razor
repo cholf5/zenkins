@@ -1,4 +1,5 @@
 @page "/runs/{RunId:guid}"
+@page "/projects/{ProjectId:guid}/runs/{Number:int}"
 @attribute [Authorize]
 @using Zenkins.Server.Artifacts
 @using Zenkins.Shared.Artifacts
@@ -8,7 +9,11 @@
 @inject RunLogAccess RunLogAccess
 @inject ArtifactService ArtifactsService
 
-<PageTitle>Run @(_run?.Id.ToString("N")[..8] ?? "") · Zenkins</PageTitle>
+@* Card F-036: one page, two shapes. `/runs/{guid}` stays exactly as it was (every bookmark, every log
+   hub ticket, every PRG target), and `/projects/{id}/runs/{number}` renders the same run under the name
+   people actually use. The number route resolves the run inside the project, so a foreign project id is
+   the same 404 a missing number is. *@
+<PageTitle>@RunHeading · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
     @if (_run is null)
@@ -21,7 +26,7 @@
     {
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                <BbCardTitle As="h1" tabindex="-1">Run @(_run.Id.ToString("N")[..8])</BbCardTitle>
+                <BbCardTitle As="h1" tabindex="-1">@RunHeading</BbCardTitle>
                 <RunStatusBadge Status="@_run.Status" />
                 @* F-028: the project's trigger brake, visible from the run that was in flight when it
                    happened - the run itself is untouched. *@
@@ -41,15 +46,110 @@
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Cancel run</BbButton>
                     </form>
                 }
+
+                @* Card F-037: two intents, two buttons - a rebuild keeps the original's inputs (the commit
+                   it pinned included) and a replay re-runs the definition text that run carried. Both are
+                   forms because both are POSTs (antiforgery), and both are offered only when the service
+                   would really accept them (`RunReruns` is the single predicate). *@
+                @if (_run.CanRebuild)
+                {
+                    <form method="post" action="@($"/runs/{_run.Id}/rebuild")" data-zenkins-antiforgery>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Rebuild</BbButton>
+                    </form>
+                }
+                @if (_run.CanReplay)
+                {
+                    <form method="post" action="@($"/runs/{_run.Id}/replay")" data-zenkins-antiforgery>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Replay</BbButton>
+                    </form>
+                }
+                else if (_run.IsTerminal)
+                {
+                    @* The AC's "the button's tooltip says why it is absent": replay only exists where the
+                       run's snapshot IS its definition. *@
+                    <button type="button" id="run-replay-unavailable" disabled
+                            title="Replay re-runs a run's own definition text. This run stores the pipeline spec its worker produced, not the source that produced it, so there is nothing to replay - use Rebuild, which re-runs the commit this run pinned."
+                            class="bb:cursor-not-allowed bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-1.5 bb:text-sm bb:text-muted-foreground">
+                        Replay
+                    </button>
+                }
                 <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">All runs</BbButton>
             </div>
         </div>
+
+        @* Card F-036: the run's permanent address. What a person reads is the name they would say out loud
+           (`#12`); the href is the permalink it belongs to. The guid route keeps working beside it (F-036's
+           AC), so this is the canonical link, not the only one. *@
+        <p id="run-permalink" class="bb:text-sm bb:text-muted-foreground">
+            Permalink
+            <a href="@Permalink" class="bb:underline bb:underline-offset-4">@PermalinkText</a>
+        </p>
+
+        @* Card F-037: which run this one came from, linked by number (the guid is the fallback when the
+           original's row is gone, which is honest rather than a dead link that looks like ours). *@
+        @if (_run.RebuiltFromRunId is { } originId)
+        {
+            var verb = _run.TriggerType == BuildRunTriggerType.Replay ? "replayed from" : "rebuilt from";
+            <p id="run-rebuilt-from" class="bb:text-sm bb:text-muted-foreground">
+                This run is @verb
+                @if (_run.RebuiltFromNumber is { } originNumber)
+                {
+                    <a id="run-rebuilt-from-link" href="@($"/projects/{_run.ProjectId}/runs/{originNumber}")"
+                       class="bb:font-medium bb:text-primary bb:hover:underline">#@originNumber</a><span>.</span>
+                }
+                else
+                {
+                    <span class="bb:font-mono">@originId.ToString("N")[..8]</span>
+                    <span>(the original run's row is gone, so its number cannot be resolved).</span>
+                }
+            </p>
+        }
 
         @if (Notice is { } notice)
         {
             <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
                 <p>@notice</p>
             </div>
+        }
+
+        @* Card F-037: a refused rebuild/replay says why, in the run's own words (the PRG carries only the
+           stable code; this map turns it into a sentence). *@
+        @if (RerunError is { } rerunError)
+        {
+            <div id="run-rerun-error" role="alert"
+                 class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm">
+                <p class="bb:font-medium bb:text-destructive">Nothing was queued.</p>
+                <p>@rerunError</p>
+            </div>
+        }
+
+        @* Card F-037's "Rebuild with parameters…": one form, defaults prefilled from the original, and the
+           same validation the trigger form uses (the service resolves the values against today's
+           definitions). Rendered only when the run can be rebuilt and really carried parameters. *@
+        @if (_run.CanRebuild && _run.Parameters is { Count: > 0 } rebuildParameters)
+        {
+            <details id="run-rebuild-parameters" class="bb:rounded-md bb:border bb:border-input bb:p-3">
+                <summary class="bb:cursor-pointer bb:text-sm bb:font-medium">Rebuild with parameters…</summary>
+                <form method="post" action="@($"/runs/{_run.Id}/rebuild")" data-zenkins-antiforgery
+                      class="bb:mt-3 bb:space-y-3">
+                    <p class="bb:text-xs bb:text-muted-foreground">
+                        The values this run was triggered with are prefilled; edit what a rebuild should
+                        differ in. Everything else - branch, commit, tags, timeout and the definition -
+                        still comes from run #@_run.Number.
+                    </p>
+                    @foreach (var (name, value) in rebuildParameters.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                    {
+                        <div>
+                            <label for="@($"rebuild-parameter-{name}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@name</label>
+                            <input id="@($"rebuild-parameter-{name}")"
+                                   name="@($"Parameters[{name}]")"
+                                   value="@value"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
+                        </div>
+                    }
+                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Rebuild with these parameters</BbButton>
+                </form>
+            </details>
         }
 
         @* F-028 / TC-002: a run that was already executing when its project was disabled keeps running
@@ -104,6 +204,17 @@
                         <dt class="bb:text-muted-foreground">Failing step</dt>
                         <dd id="run-failure-step" class="bb:break-all">@FailingStepText()</dd>
                     </div>
+                    @* Card F-037's wording: a rebuild pins a commit, and if the remote no longer has it nothing
+                       can be checked out. Saying so is the difference between "git failed" and "this rebuild
+                       cannot work until the commit is back" - and it states the deliberate part too: the
+                       branch head is NOT built as a fallback. *@
+                    @if (RebuildCommitNotice is { } rebuildNotice)
+                    {
+                        <div class="bb:flex bb:gap-2">
+                            <dt class="bb:text-muted-foreground">Rebuild</dt>
+                            <dd id="run-rebuild-commit-notice">@rebuildNotice</dd>
+                        </div>
+                    }
                 </dl>
             </div>
         }
@@ -378,13 +489,48 @@
 </div>
 
 @code {
+    /// <summary>The guid route (F-003's original, still the PRG target of every trigger).</summary>
     [Parameter]
     public Guid RunId { get; set; }
+
+    /// <summary>
+    /// Card F-036: the number route's project id. Set only when the page was reached as
+    /// <c>/projects/{id}/runs/{number}</c>; the pair is what resolves the run, so a foreign project id is
+    /// the same 404 a missing number is.
+    /// </summary>
+    [Parameter]
+    public Guid? ProjectId { get; set; }
+
+    /// <summary>Card F-036: the build number from the number route.</summary>
+    [Parameter]
+    public int? Number { get; set; }
 
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
     private RunView? _run;
+
+    /// <summary>
+    /// The page's heading: <c>Run #N</c> whenever the run has a number (card F-036's "everything
+    /// human-facing shows #N"), and the short id only for a row no writer ever numbered.
+    /// </summary>
+    private string RunHeading => _run is null
+        ? "Run"
+        : _run.Number is { } number ? $"Run #{number}" : $"Run {_run.Id.ToString("N")[..8]}";
+
+    /// <summary>Card F-036: the run's canonical permalink, relative so the page works on any host.</summary>
+    private string Permalink => _run is null
+        ? string.Empty
+        : _run.Number is { } number
+            ? $"/projects/{_run.ProjectId}/runs/{number}"
+            : $"/runs/{_run.Id}";
+
+    /// <summary>
+    /// What the permalink line shows: the build number (`#12`), because that is the name a person says out
+    /// loud - the address is the link, not the label. A row with no number falls back to its path, which is
+    /// the only thing that identifies it.
+    /// </summary>
+    private string PermalinkText => _run?.Number is { } number ? $"#{number}" : Permalink;
 
     /// <summary>The subscription ticket the log panel presents to the browser hub. Only minted for
     /// a member session after the run itself was readable - the page is the only minter.</summary>
@@ -403,6 +549,84 @@
 
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
+
+    /// <summary>Card F-037: the stable code a refused rebuild (or replay) redirected back with.</summary>
+    [SupplyParameterFromQuery(Name = "rebuildError")]
+    private string? RebuildErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "replayError")]
+    private string? ReplayErrorCode { get; set; }
+
+    /// <summary>
+    /// Card F-037: the refusal in words. The code is all the redirect can carry, so every code the service
+    /// can answer has a sentence here - including the parameter codes, which are the trigger form's own
+    /// vocabulary (the re-run re-resolves the original's values against today's definitions).
+    /// </summary>
+    private string? RerunError => (RebuildErrorCode ?? ReplayErrorCode) switch
+    {
+        RunErrorCodes.RebuildNotTerminal =>
+            "This run had not finished, so there was nothing to rebuild or replay.",
+        RunErrorCodes.RebuildNoCommit =>
+            "This run recorded no commit, so a rebuild could not pin one and would build whatever the "
+            + "branch points at now. Start a fresh run instead.",
+        RunErrorCodes.RebuildKindChanged =>
+            "The project's kind no longer matches the run's, so this run cannot be re-executed as the "
+            + "project is now.",
+        RunErrorCodes.RebuildSpecUnavailable =>
+            "The definition this run executed is not readable any more, so there is nothing to re-execute.",
+        RunErrorCodes.RebuildCredentialMissing =>
+            "The Git credential assigned to this project no longer exists. Assign one on the project's "
+            + "settings tab, then rebuild.",
+        RunErrorCodes.ReplayUnavailable =>
+            "This run stores the pipeline spec its worker produced, not the source that produced it, so it "
+            + "cannot be replayed as a definition. Use Rebuild instead.",
+        RunErrorCodes.ParameterUnknown =>
+            "One of the run's parameter names is no longer defined on this project, so it cannot be "
+            + "re-executed with the same values.",
+        RunErrorCodes.ParameterInvalid =>
+            "One of the run's parameter values does not fit its type any more (the definition changed).",
+        RunErrorCodes.FieldInvalid =>
+            "That request could not be read, so nothing was queued. Try again.",
+        ProjectTriggerRefusals.ProjectDisabled =>
+            "This project is disabled, so nothing new is queued for it.",
+        ProjectTriggerRefusals.QueueFull =>
+            "The project's queue is full, so the rebuild waits its turn in the project's settings.",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Card F-037: what a rebuild's git failure means. Only a re-run that pinned a commit can hit it, and the
+    /// sentence names the commit and the number it came from instead of leaving the operator to guess why a
+    /// build the remote used to serve cannot clone.
+    /// </summary>
+    private string? RebuildCommitNotice
+    {
+        get
+        {
+            if (_run is null || _run.RebuiltFromRunId is null)
+            {
+                return null;
+            }
+
+            if (_run.FailureReason is not { } reason
+                || !reason.StartsWith("git-", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (_run.GitCommit is not { } commit)
+            {
+                return null;
+            }
+
+            var origin = _run.RebuiltFromNumber is { } originNumber
+                ? $"#{originNumber}"
+                : _run.RebuiltFromRunId.Value.ToString("N")[..8];
+            return $"This run pinned commit {commit} - the commit run {origin} built - and the remote could "
+                + "not provide it. A rewritten history removes commits; the branch head is deliberately not "
+                + "built in its place. Rebuild the newer run instead, or restore the commit.";
+        }
+    }
 
     private string? Notice => NoticeCode switch
     {
@@ -424,7 +648,7 @@
             return;
         }
 
-        _run = await RunsService.GetRunAsync(RunId);
+        _run = await ResolveRunAsync();
         if (_run is null && HttpContext is not null)
         {
             // A real 404 for a foreign or missing id; the /not-found re-execute is disabled for
@@ -441,9 +665,20 @@
         if (_run is not null && session.Organization is { } organization)
         {
             _accessTicket = RunLogAccess.MintTicket(session.UserId, organization.OrganizationId);
-            _artifacts = await ArtifactsService.GetRunArtifactsAsync(RunId);
+            _artifacts = await ArtifactsService.GetRunArtifactsAsync(_run.Id);
         }
     }
+
+    /// <summary>
+    /// Card F-036: the two routes resolve the same run. The number route looks it up inside its project
+    /// (a foreign project id answers null, so no existence oracle), and the guid route keeps doing exactly
+    /// what it always did - both then render the same page and act on <see cref="RunView.Id"/>, so the
+    /// cancel/rebuild forms and the log panel never depend on which URL was opened.
+    /// </summary>
+    private Task<RunView?> ResolveRunAsync() =>
+        Number is { } number && ProjectId is { } projectId
+            ? RunsService.GetRunByNumberAsync(projectId, number)
+            : RunsService.GetRunAsync(RunId);
 
     /// <summary>
     /// F-018: the run's failure reason in words (empty for a reason a page cannot translate). The

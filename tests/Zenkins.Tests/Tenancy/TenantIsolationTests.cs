@@ -331,6 +331,10 @@ public sealed class TenantIsolationTests : IDisposable
                 RequiredTags = string.Empty,
                 GitBranch = "main",
                 PipelinePath = "pipeline.lua",
+
+                // F-036: the fixture already seeded #1 on this project; the unique (ProjectId, Number)
+                // index is what would otherwise turn this probe into a number clash.
+                Number = 2,
             };
             context.BuildRuns.Add(anotherRun);
             context.Set<Artifact>().Add(new Artifact

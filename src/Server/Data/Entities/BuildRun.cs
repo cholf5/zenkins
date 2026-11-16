@@ -48,6 +48,24 @@ public static class BuildRunTriggerType
     /// in - and is otherwise the same run a member's click queues (the same validation, gate and queue).
     /// </summary>
     public const string Api = "Api";
+
+    /// <summary>
+    /// Card F-037's <b>Rebuild</b>: a member re-ran a finished run with the same inputs - the branch,
+    /// the commit the original run pinned, its parameters, tags and timeout, and the definition that
+    /// original executed. <see cref="BuildRun.RebuiltFromRunId"/> names the run it came from. It is an
+    /// ordinary queued run in every other respect: the same F-028/F-029 gate, the same queue and the
+    /// same numbering as a fresh trigger.
+    /// </summary>
+    public const string Rebuild = "Rebuild";
+
+    /// <summary>
+    /// Card F-037's <b>Replay</b>: a member re-ran a finished run against the definition text that run
+    /// itself carried, ignoring whatever the project or the repository says now. Distinct from
+    /// <see cref="Rebuild"/> on purpose - replaying a repository pipeline would pretend the frozen spec
+    /// is the source that produced it, so today only a run whose definition <em>is</em> the stored text
+    /// (a Freestyle run) can be replayed, and the run page says why when it cannot.
+    /// </summary>
+    public const string Replay = "Replay";
 }
 
 /// <summary>
@@ -67,6 +85,26 @@ public static class BuildRunTriggerType
 public sealed class BuildRun : ITenantOwned
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+
+    /// <summary>
+    /// The run's build number inside its project (card F-036): a positive integer assigned at trigger
+    /// time, displayed as <c>#N</c> everywhere a person reads it and used by the permalinks
+    /// (<c>/projects/{id}/runs/{number}</c>).
+    /// <para>
+    /// <b>Per project, and atomic.</b> The unique index on <c>(ProjectId, Number)</c> is the guard, not a
+    /// pre-flight check: the staging routine reads <c>MAX(Number) + 1</c> while it holds the project row
+    /// lock (the F-028/F-029 gate's own lock), so two concurrent triggers of one project serialize and a
+    /// lost race is retried once against the index rather than silently reusing a number. Numbers are
+    /// never reused and never renumbered: a run keeps the number it was queued with even after the queue
+    /// is cancelled or the project's limits change.
+    /// </para>
+    /// <para>
+    /// <b>Backfilled.</b> Runs that predate the column were numbered by the migration in creation order
+    /// (<c>CreatedAt</c>, then <c>Id</c>), deterministically, per project - the migration and its ordering
+    /// are the only writer that ever assigns a number outside the trigger path.
+    /// </para>
+    /// </summary>
+    public int Number { get; set; }
 
     /// <inheritdoc />
     public Guid OrganizationId { get; set; }
@@ -198,6 +236,15 @@ public sealed class BuildRun : ITenantOwned
     /// <c>timeout</c>, F-009). Becomes the run's <see cref="FailureReason"/> when the worker
     /// reports the kill - the server, not the worker, owns the wording.</summary>
     public string? CancelReason { get; set; }
+
+    /// <summary>
+    /// Card F-037: the finished run this one re-executed (a rebuild or a replay), or <see langword="null"/>.
+    /// Deliberately <b>no foreign key</b>: deleting a project cascades its runs away, and a surviving
+    /// rebuild must not lose its history to the original's disappearance. The run page renders
+    /// "rebuilt from #N" by resolving this id to the original's <see cref="Number"/> at read time, and
+    /// falls back to the short id when the original is gone.
+    /// </summary>
+    public Guid? RebuiltFromRunId { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

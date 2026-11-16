@@ -547,6 +547,7 @@ worker/
 #### Run 信息
 
 - Run ID
+- Build Number（每个 Project 内递增的正整数，显示为 `#N`）
 - Project
 - Pipeline
 - Git Branch
@@ -559,6 +560,40 @@ worker/
 - End Time
 - Duration
 - Status
+
+#### Build Number 与固定链接
+
+Run ID 是 guid，人读不出来、也打不出来；因此每个 Run 另有一个**项目内**的构建号。
+
+| 规则 | 含义 |
+|---|---|
+| 分配时机 | 触发写入的同一个事务内、持有项目行锁时分配（`MAX(Number) + 1`），并由 `(ProjectId, Number)` 唯一索引兜底 |
+| 单调性 | 只增不减，不复用、不重排；取消或删除队列中的 Run 也不回收编号 |
+| 正整数 | 数据库约束 `CHECK (Number > 0)` 保证；没有「第 0 号构建」这种东西，带外写入会被拒 |
+| 显示 | 所有面向人的地方都显示 `#N`：Run 列表、Run 页、项目页最近一次 Run、Dashboard、日志下载文件名、通知、API |
+| 环境变量 | Step 的环境里 `ZENKINS_BUILD_NUMBER` 是本编号，`ZENKINS_BUILD_ID` 是 guid（与既有的 `ZENKINS_RUN_ID` 相同） |
+| 历史数据 | 迁移按 `(CreatedAt, Id)` 的确定性顺序一次性回填，且不可能产生重复 |
+
+固定链接（固定链接是给人贴的地址，guid 路由继续保留，已有书签与日志票据都不受影响）：
+
+- `/projects/{id}/runs/{number}` 渲染该 Run（唯一地址，非跳转）。
+- `/projects/{id}/runs/last` 跳转到该项目最新一个 Run；没有 Run 时 404。
+- `/projects/{id}/lastSuccessful` 跳转到该项目最新一个成功的 Run；没有成功过就 404（绝不拿失败的顶替）。
+
+#### 重建与重放（Rebuild / Replay）
+
+对**已结束**的 Run，可以一键再跑一次。两个意图必须分开，因为混在一起会悄悄换掉要构建的代码：
+
+| 意图 | 复用什么 | 不读什么 |
+|---|---|---|
+| Rebuild | 原 Run 的全部输入：分支、**原 Run 钉住的 commit**、参数、必需标签、超时，以及原 Run 实际执行的定义（Freestyle 步骤改了也仍跑旧的） | 不读当前位置的分支头 |
+| Replay | 只有原 Run 自己的定义文本（今天即 Freestyle 的冻结 spec） | 不读项目当前定义、也不读仓库当前内容 |
+
+- 仓库流水线的 Run 存的是 worker 产出的冻结 spec、而不是产出它的源码，所以它对 Replay **不提供**按钮：把 spec 当定义重跑会抹掉定义阶段。按钮缺席时会说明原因。
+- Rebuild 的 commit 在远端不存在时，克隆按 `git-*` 失败原因如实失败，**不会**退回去构建分支头；Run 页会写明它钉的是哪个 commit、来自 `#N`。
+- 重建与重放都是新的 Run（`Trigger Type` 为 `Rebuild`/`Replay`，并记录来源 Run），所以原 Run 的 artifacts、日志与 steps 永远不被改写；新 Run 页显示「rebuilt from #N」。
+- 重建走的是与新触发**同一条**插入路径：项目禁用（F-028）、队列上限（F-029）、并发上限与编号规则一律同样生效。
+- 参数可改：「Rebuild with parameters…」一个表单，默认填原 Run 的值，校验仍是触发表单那套；今天的定义不再声明这些名字时直接拒绝。
 
 #### 功能要求
 

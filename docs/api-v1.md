@@ -89,14 +89,16 @@ curl -sS -X POST https://zenkins.example.com/api/v1/projects/<project-id>/runs \
 - An optional `Idempotency-Key` (≤200 characters) makes a retried post answer the run the first one
   queued: the retry gets `200` with `Idempotency-Replayed: true` and the same `id`, instead of queueing
   a second run. Keys are scoped to the token.
-- The `201`/`200` body is the run resource (below); `id` is the run's reference. Run **numbers** are
-  not part of this release (card F-036 owns them); do not expect a `number` field.
+- The `201`/`200` body is the run resource (below); `id` is the run's reference. `number` is the
+  project-scoped build number (card F-036), the same `#N` the UI prints - additive, so `id` remains the
+  value every route takes.
 
 ### The run resource
 
 ```json
 {
   "id": "…",
+  "number": 42,
   "projectId": "…",
   "status": "Running",
   "triggerType": "Api",
@@ -123,6 +125,12 @@ curl -sS -X POST https://zenkins.example.com/api/v1/projects/<project-id>/runs \
 Deliberately absent: **build-parameter values** (F-041's password-typed parameters do not exist yet,
 and the API never echoes a parameter value), secrets, credentials, and any artifact URL. The status,
 steps, failure reason and numbers are the record.
+
+`number` is the run's build number inside its project (card F-036): assigned once, at trigger time, and
+never reused - the value the UI shows as `#N` and the permalinks carry. It is not unique across projects,
+so keep using `id` as the reference; `/api/v1/runs/{id}` is the resource's own address. It is `null`, never
+`0`, for a row the product did not number (only a database read before the F-036 migrations ran): `0` is not
+a build number, and the server refuses one.
 
 ### Log tailing
 
@@ -157,7 +165,9 @@ what the run's history will say about who stopped the build.
 
 ## Not in this version
 
-- No run numbers (F-036), no GraphQL, no SDK, no CLI wrapper.
+- No GraphQL, no SDK, no CLI wrapper.
+- No rebuild/replay routes (card F-037 ships them on the run page only); a script re-triggers with the
+  same body and its own `Idempotency-Key`.
 - No token expiry UI (the column exists), no per-project scoping (a token covers its organization).
 - No `?token=` query-string credential, ever.
 - Two concurrent posts carrying the same new `Idempotency-Key` can both queue a run before the unique

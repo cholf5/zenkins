@@ -340,6 +340,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<DateTimeOffset?>("LeaseExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
@@ -355,6 +358,9 @@ namespace Zenkins.Server.Data.Migrations
                         .HasColumnType("text");
 
                     b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RebuiltFromRunId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("RequiredTags")
@@ -390,14 +396,17 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectId");
-
                     b.HasIndex("WorkerId");
 
                     b.HasIndex("OrganizationId", "Status");
 
+                    b.HasIndex("ProjectId", "Number")
+                        .IsUnique();
+
                     b.ToTable("BuildRuns", t =>
                         {
+                            t.HasCheckConstraint("CK_BuildRuns_Number", "\"Number\" > 0");
+
                             t.HasCheckConstraint("CK_BuildRuns_Status", "\"Status\" IN ('Queued', 'Running', 'Success', 'Failed', 'Canceled', 'Lost')");
                         });
                 });

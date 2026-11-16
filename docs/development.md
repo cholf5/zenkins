@@ -23,12 +23,17 @@ loop (`dotnet run` from a clone).
 > on 2026-11-16: 18 tests in the fast suite (7 project enable/disable, 8 queue-control facts, 2
 > webhook gate, 1 project-cap race) and a seventh category, `Postgres`, for the concurrency fact
 > that only a real PostgreSQL can show (§2). F-027 added the organization API on 2026-11-16: 18
-> tests in the fast suite (13 API contract facts, 5 API tenancy probes). **Earlier revisions of this
+> tests in the fast suite (13 API contract facts, 5 API tenancy probes). F-036 and F-037 added build
+> numbers plus rebuild/replay on 2026-11-16: 23 tests in the fast suite (6 build-number facts, 1
+> migration/backfill fact, 8 rebuild/replay facts, 2 worker-layer pin facts, 3 `ZENKINS_BUILD_*`
+> composition facts, 3 Q-006 permalink and re-run probes) plus 1 `Category=Postgres` fact for the
+> numbering retry - no new category and no new exclusion, so the sextuple filter is unchanged.
+> **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines against a real run: **fast 1142, all seven 1166** (Milestone 12, Recovery 4,
-> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 1). Every command in the POSIX
+> and re-baselines against a real run: **fast 1165, all seven 1190** (Milestone 12, Recovery 4,
+> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 2). Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -142,8 +147,8 @@ that prove the product end to end instead of proving its parts:
   used is captured through a recording shim and matched word for word against the hardened
   `GIT_SSH_COMMAND` pins. It needs the OpenSSH tools of §1 and nothing on the host's `~/.ssh`;
   where the tools are absent the facts skip with the reason recorded.
-- **`Category=Postgres`** (F-029) runs the project-concurrency race against a **real PostgreSQL**
-  server, because SQLite cannot show it: every claim begins with a write (the worker-row no-op
+- **`Category=Postgres`** (F-029, extended by F-036) runs facts a **real PostgreSQL** server is needed
+  for, because SQLite cannot show them: every claim begins with a write (the worker-row no-op
   `UPDATE`), so the database's single writer serializes the statements and the project lock's
   necessity becomes unobservable. The suite needs a disposable database whose connection string is
   passed in `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated before each fact);
@@ -153,7 +158,13 @@ that prove the product end to end instead of proving its parts:
   round, five rounds, read from the rows; (b) a **negative control** built from the product's own
   compare-and-set: count the active runs, then lease, twice - the sequence a check-then-act
   implementation would run - admits **two** on the same provider, so fact (a) is evidence about the
-  lock rather than about a race that never happened.
+  lock rather than about a race that never happened. F-036 adds (c) the **build-number retry**: a second
+  connection holds an uncommitted `#2` that the product's READ COMMITTED `MAX(Number)` read cannot see, so
+  the product picks `#2` too and its INSERT blocks on the unique index; the fact commits the rival only
+  after it observes that lock wait in `pg_stat_activity`, then requires the product to answer success with
+  `#3` - which is only reachable through the savepoint rollback and re-read (deleting the retry turns the
+  fact red, the mutation record is on the card). Postgres also has to be in the fast filter's exclusion
+  list for exactly this reason: the retry is unreachable on SQLite, where every write serializes.
 
 None of the harnesses is part of the fast loop, so the fast filter has to exclude **six**
 categories. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix
@@ -185,17 +196,17 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~2½ min on the reference machine (1142 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~2½ min on the reference machine (1165 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
 | GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
-| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the fact skips with the recorded reason | ~10 s warm, plus one migration run on a fresh schema (1 test) |
+| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~10 s warm, plus one migration run on a fresh schema (2 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1166 at the time of writing) but
+filter runs **all seven** (1190 at the time of writing) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

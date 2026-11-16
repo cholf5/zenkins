@@ -153,7 +153,7 @@
                             <li id="@($"dashboard-run-{shortId}")" class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                 <div class="bb:min-w-0">
                                     <p class="bb:font-medium">
-                                        <a href="/runs/@run.RunId" class="bb:underline bb:underline-offset-4">Run @shortId</a>
+                                        <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
                                             <a href="/projects/@run.ProjectId">@run.ProjectName</a> · @run.GitBranch
                                         </span>
@@ -208,7 +208,7 @@
                             <li id="@($"dashboard-failure-{failure.RunId.ToString("N")[..8]}")" class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                 <div class="bb:min-w-0">
                                     <p class="bb:text-sm bb:font-medium">
-                                        <a href="/runs/@failure.RunId" class="bb:underline bb:underline-offset-4">Run @failure.RunId.ToString("N")[..8]</a>
+                                        <a href="/projects/@failure.ProjectId/runs/@failure.Number" class="bb:underline bb:underline-offset-4">Run #@failure.Number</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">@failure.ProjectName · @failure.GitBranch</span>
                                     </p>
                                     <p class="bb:text-xs bb:text-muted-foreground">

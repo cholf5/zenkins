@@ -170,6 +170,13 @@ public sealed class RunTestHost : IDisposable
                 GitBranch = branch,
                 PipelinePath = pipelinePath,
             };
+
+            // F-036: a seeded run gets a number the same way a real one does - one above the project's
+            // highest - because the unique (ProjectId, Number) index is a real constraint, not a display rule.
+            run.Number = (await context.SystemQueryAsync<BuildRun>(candidate => candidate.ProjectId == projectId))
+                .Select(candidate => candidate.Number)
+                .DefaultIfEmpty(0)
+                .Max() + 1;
             context.BuildRuns.Add(run);
             await context.SaveChangesAsync();
             return run.Id;

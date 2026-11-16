@@ -126,6 +126,15 @@ public static class DashboardSeed
     {
         using var scope = fixture.SystemDataScope.BeginScope();
         await using var context = fixture.CreateContext();
+
+        // F-036: the unique (ProjectId, Number) index is a real constraint, so a seeded run is numbered
+        // the way a triggered one is - one above its project's highest.
+        var nextNumber = (await context.BuildRuns
+            .IgnoreQueryFilters()
+            .Where(candidate => candidate.ProjectId == projectId)
+            .Select(candidate => (int?)candidate.Number)
+            .MaxAsync(cancellationToken) ?? 0) + 1;
+
         var run = new BuildRun
         {
             OrganizationId = organizationId,
@@ -141,6 +150,7 @@ public static class DashboardSeed
             WorkerId = workerId,
             ExitCode = exitCode,
             FailureReason = failureReason,
+            Number = nextNumber,
         };
         context.BuildRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken);

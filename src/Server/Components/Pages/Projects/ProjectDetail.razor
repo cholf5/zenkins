@@ -214,7 +214,7 @@
                     <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:text-sm">
                         <div class="bb:min-w-0">
                             <p class="bb:font-medium">
-                                <a href="/runs/@run.Id" class="bb:underline bb:underline-offset-4">Run @run.Id.ToString("N")[..8]</a>
+                                <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
                                 <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
                                     @run.GitBranch · @run.PipelinePath
                                 </span>

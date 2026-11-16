@@ -29,8 +29,8 @@ namespace Zenkins.Server.Api;
 /// <b>No secrets, no parameter values.</b> The run resource carries status, steps, failure reason, numbers
 /// and links - never a secret, never a credential, and deliberately no build-parameter values (F-041's
 /// password-typed parameters do not exist yet, so the safe answer is to never echo a parameter value here;
-/// the value stays on the run page and the worker's environment). There is no run number in this release:
-/// F-036 owns the numbering, and the API does not invent one - the id is the reference.
+/// the value stays on the run page and the worker's environment). The build <c>number</c> arrived with
+/// F-036: it is the project-scoped <c>#N</c>, and <c>id</c> remains the reference every route takes.
 /// </para>
 /// </summary>
 public static class ApiEndpoints
@@ -563,6 +563,15 @@ public static class ApiEndpoints
     /// </summary>
     public sealed record ApiRunResource(
         Guid Id,
+
+        /// <summary>
+        /// Card F-036: the run's per-project build number - the <c>#N</c> the UI prints and the value the
+        /// permalinks carry. Additive: <see cref="Id"/> stays the reference (a link, an idempotency record,
+        /// a log request), so a client that never reads the number keeps working. Nullable on purpose: a row
+        /// the product did not number (impossible once the migrations have run) answers <c>null</c>, never a
+        /// fabricated <c>0</c>.
+        /// </summary>
+        int? Number,
         Guid ProjectId,
         string Status,
         string TriggerType,
@@ -584,6 +593,7 @@ public static class ApiEndpoints
     {
         public static ApiRunResource From(RunView run) => new(
             run.Id,
+            run.Number,
             run.ProjectId,
             run.Status,
             run.TriggerType,

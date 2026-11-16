@@ -223,7 +223,10 @@ public sealed class ProjectEnableDisableTests
 
         var runsPage = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/runs");
         Assert.Contains("Disabled", runsPage, StringComparison.Ordinal);
-        Assert.Contains($"Run {runId:N}"[..12], runsPage, StringComparison.Ordinal);
+
+        // Card F-036: the history reads by build number, and the row links to the run's permalink.
+        Assert.Contains("Run #1", runsPage, StringComparison.Ordinal);
+        Assert.Contains($"href=\"/projects/{projectId}/runs/1\"", runsPage, StringComparison.Ordinal);
 
         var settings = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/settings");
         Assert.Contains("trigger-state-disabled", settings, StringComparison.Ordinal);

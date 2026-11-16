@@ -853,7 +853,17 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // The claim query filters by tenant + status and orders by creation (FIFO); the project
             // runs list filters by project. Both are small explicit indexes.
             entity.HasIndex(run => new { run.OrganizationId, run.Status });
-            entity.HasIndex(run => run.ProjectId);
+
+            // F-036: the build number is unique per project, and the index - not a pre-flight query -
+            // is what makes "two runs never share #N" true under concurrent triggers. It also serves
+            // the project's run list and the permalink lookup (`/projects/{id}/runs/{number}`), which
+            // are exactly (ProjectId, Number) reads, so the old single-column ProjectId index would be
+            // a strict prefix of this one and is replaced by it.
+            entity.HasIndex(run => new { run.ProjectId, run.Number }).IsUnique();
+
+            // F-037: the re-run attribution carries no foreign key on purpose (see
+            // BuildRun.RebuiltFromRunId): a rebuild outlives the run it came from, and deleting a
+            // project cascades its own runs away without touching another row.
 
             entity.HasOne<Organization>().WithMany().HasForeignKey(run => run.OrganizationId)
                 .OnDelete(DeleteBehavior.Cascade);
@@ -866,11 +876,19 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 .OnDelete(DeleteBehavior.SetNull);
 
             // Belt and braces for the string status, same shape as the worker status check above.
-            entity.ToTable(table => table.HasCheckConstraint(
-                "CK_BuildRuns_Status",
-                $"\"Status\" IN ('{BuildRunStatus.Queued}', '{BuildRunStatus.Running}', "
-                + $"'{BuildRunStatus.Success}', '{BuildRunStatus.Failed}', "
-                + $"'{BuildRunStatus.Canceled}', '{BuildRunStatus.Lost}')"));
+            //
+            // F-036: the build number is positive, and the constraint is what keeps the *first* out-of-band
+            // insert (or a future caller that forgot to assign one) from inventing `#0`: the column's
+            // migration default of 0 is gone, and 0 is refused by the database rather than by a comment.
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_BuildRuns_Status",
+                    $"\"Status\" IN ('{BuildRunStatus.Queued}', '{BuildRunStatus.Running}', "
+                    + $"'{BuildRunStatus.Success}', '{BuildRunStatus.Failed}', "
+                    + $"'{BuildRunStatus.Canceled}', '{BuildRunStatus.Lost}')");
+                table.HasCheckConstraint("CK_BuildRuns_Number", "\"Number\" > 0");
+            });
 
             entity.HasQueryFilter(run => run.OrganizationId == CurrentOrganizationId);
         });

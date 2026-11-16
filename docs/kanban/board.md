@@ -24,8 +24,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-032](issues/f-032-step-timeout-retry.md) | Step-level timeout and retry: a hung or flaky step is the pipeline's problem | P2 | M | | F-009 |
 | [F-033](issues/f-033-step-worker-requirements.md) | Per-step worker requirements and label expressions (the runs_on the PRD promises) | P2 | M | | Q-010, Q-005 |
 | [F-034](issues/f-034-organization-environment.md) | Organization environment variables: one shared env layer for every project | P2 | S | | F-021 |
-| [F-036](issues/f-036-build-numbers.md) | Build numbers and permalinks: #N per project, /runs/last, /lastSuccessful | P2 | S | | none |
-| [F-037](issues/f-037-rebuild-replay.md) | Rebuild and replay: re-run a finished run with the same inputs, or the current definition | P2 | S | | F-036, F-017 |
 | [F-038](issues/f-038-build-retention.md) | Build retention: keep N builds and/or D days, delete the rest for real | P2 | M | | F-016, F-036 |
 | [F-039](issues/f-039-completion-notifications.md) | Completion notifications: signed outbound webhooks on failure, success and recovery | P2 | M | | F-026, F-036, F-037 |
 | [F-040](issues/f-040-credential-types.md) | More credential types: username/password pairs and secret files, bindable per step | P2 | M | | F-012, D-006 |
@@ -97,4 +95,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-028](issues/f-028-project-enable-disable.md) | Project enable/disable: stop every trigger without deleting history | P2 | 2026-11-16 |
 | [F-029](issues/f-029-queue-controls.md) | Queue controls: per-project concurrency, quiet period and a bounded queue | P2 | 2026-11-16 |
 | [F-027](issues/f-027-api-v1.md) | API v1: organization API tokens, trigger/cancel/read runs without a browser | P1 | 2026-11-16 |
+| [F-036](issues/f-036-build-numbers.md) | Build numbers and permalinks: #N per project, /runs/last, /lastSuccessful | P2 | 2026-11-16 |
+| [F-037](issues/f-037-rebuild-replay.md) | Rebuild and replay: re-run a finished run with the same inputs, or the current definition | P2 | 2026-11-16 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | 2026-11-16 |

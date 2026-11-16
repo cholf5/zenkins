@@ -46,14 +46,14 @@ namespace Zenkins.Tests.Concurrency;
 /// (development.md §2) it costs the default loop nothing.
 /// </para>
 /// <para>
-/// <b>One collection, because every Category=Postgres fact drops <c>public</c>.</b> A second test class in
-/// this category must join this class's xunit collection (or take the same exclusive lock some other way):
-/// xunit runs different classes in parallel, and two suites that each recreate the schema would delete
-/// each other's tables mid-run. Today there is exactly one class; that stays true only if the next one
-/// reads this paragraph.
+/// <b>One collection, because every Category=Postgres fact drops <c>public</c>.</b> Every class in this
+/// category joins <see cref="PostgresCollection"/>: xunit runs different classes in parallel, and two suites
+/// that each recreate the schema would delete each other's tables mid-run. A new PostgreSQL fact belongs in
+/// this collection - joining it is cheaper than rediscovering this paragraph.
 /// </para>
 /// </summary>
 [Trait("Category", "Postgres")]
+[Collection(PostgresCollection.Name)]
 public sealed class PostgresProjectCapTests
 {
     /// <summary>Environment variable holding the connection string of a disposable PostgreSQL database.</summary>
@@ -294,7 +294,7 @@ public sealed class PostgresProjectCapTests
     /// migration history) with it, so the host's startup migration recreates the model and the bootstrap
     /// registration is a genuine first run. Two statements in one command (Npgsql batches them).
     /// </summary>
-    private static async Task ResetDatabaseAsync(string connectionString, CancellationToken cancellationToken)
+    internal static async Task ResetDatabaseAsync(string connectionString, CancellationToken cancellationToken)
     {
         var options = new DbContextOptionsBuilder<ZenkinsDbContext>()
             .UseZenkinsDatabase(new ZenkinsDataOptions(DatabaseProvider.Postgres, connectionString))

@@ -75,6 +75,14 @@ public static class RunFields
     /// (<see cref="ProjectTriggerRefusals"/>) says which refusal it was.
     /// </summary>
     public const string Queue = "queue";
+
+    /// <summary>
+    /// Card F-037: a refusal of the re-run itself (the original did not finish, recorded no commit, its
+    /// definition is unreadable, its project's kind changed, or a repository pipeline cannot be replayed).
+    /// Form-level for the same reason <see cref="Queue"/> is: the person clicked one button on a finished
+    /// run, and no input of theirs is wrong.
+    /// </summary>
+    public const string Rebuild = "rebuild";
 }
 
 /// <summary>The raw trigger-form values, before trimming and validation. <see cref="Parameters"/>
@@ -114,6 +122,18 @@ public sealed record RunTriggerResult(
             RunOperationStatus.Refused,
             Message: message,
             FieldErrors: [new RunFieldError(RunFields.Queue, code)]);
+
+    /// <summary>
+    /// Card F-037: the re-run refused itself - the original's own state says this button cannot work.
+    /// Nothing was written. The field is <see cref="RunFields.Rebuild"/> (no input of the caller is at
+    /// fault), and the code is one of the <c>rebuild-*</c>/<c>replay-*</c> spellings on
+    /// <see cref="RunErrorCodes"/> so the run page and any future API read the same value.
+    /// </summary>
+    public static RunTriggerResult RebuildRefused(string code, string message) =>
+        new(
+            RunOperationStatus.Refused,
+            Message: message,
+            FieldErrors: [new RunFieldError(RunFields.Rebuild, code)]);
 }
 
 /// <summary>A run as the pages display it. Records keep disposed contexts out of the UI.</summary>
@@ -158,7 +178,24 @@ public sealed record RunView(
     /// of leaving the operator to guess why nothing new is queuing. <see langword="null"/> when the
     /// project could not be read (a foreign or deleted row).
     /// </summary>
-    bool? ProjectDisabled = null)
+    bool? ProjectDisabled = null,
+
+    /// <summary>
+    /// Card F-036: this run's build number inside its project - the <c>#N</c> every human-facing surface
+    /// shows and the value the permalink route carries. <see langword="null"/> only for a row no writer
+    /// ever numbered (a database that predates the migration, read before it ran).
+    /// </summary>
+    int? Number = null,
+
+    /// <summary>Card F-037: the run this one rebuilt or replayed, or <see langword="null"/>.</summary>
+    Guid? RebuiltFromRunId = null,
+
+    /// <summary>
+    /// Card F-037: the original run's <see cref="Number"/>, resolved at read time so the page can print
+    /// "rebuilt from #N". <see langword="null"/> when this is not a re-run, or when the original is gone
+    /// (the page then falls back to <see cref="RebuiltFromRunId"/>'s short id instead of inventing one).
+    /// </summary>
+    int? RebuiltFromNumber = null)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -172,7 +209,149 @@ public sealed record RunView(
     /// reached yet. A run page opened mid-run therefore shows completed, current and pending steps.
     /// </summary>
     public IReadOnlyList<RunStepView> StepList => Steps ?? [];
+
+    /// <summary>Card F-037: whether this run has finished (only a finished run is a re-run input).</summary>
+    public bool IsTerminal => RunReruns.IsTerminal(Status);
+
+    /// <summary>
+    /// Card F-037: whether the run page offers Rebuild for this run. It asks <see cref="RunReruns.Refusal"/> -
+    /// the function the service refuses with - so the button exists exactly when the run's own facts allow the
+    /// request. Two service-side checks are deliberately outside it (they read today's project rows, not the
+    /// run's snapshot): a deleted Git credential or a renamed parameter can still turn the click into a
+    /// refusal, and the page's redirect then explains it.
+    /// </summary>
+    public bool CanRebuild =>
+        RunReruns.CanRebuild(Status, GitBranch, GitCommit, Pipeline, RunReruns.IsFreestyleShape(GitBranch));
+
+    /// <summary>Card F-037: whether the run page offers Replay for this run (a run whose snapshot <em>is</em>
+    /// its definition - today a Freestyle run); a repository pipeline's spec cannot be replayed as source.</summary>
+    public bool CanReplay =>
+        RunReruns.CanReplay(Status, GitBranch, Pipeline, RunReruns.IsFreestyleShape(GitBranch));
 }
+
+/// <summary>
+/// Card F-037: whether a finished run can be rebuilt or replayed, and - when it cannot - which refusal the
+/// caller reads. <b>One function answers both questions</b>: the run page renders its buttons from
+/// <see cref="Refusal"/>(<see langword="null"/>) and <see cref="RunService"/> refuses the request with the very
+/// same value, so a button that is offered is a button that works.
+/// <para>
+/// <b>Rebuild</b> needs the same inputs, and its one indispensable input is the commit a Pipeline run pinned
+/// (a rebuild that took the branch head would rebuild different code under the same name). <b>Replay</b>
+/// needs a definition <em>text</em>: a Freestyle run's snapshot is the definition itself, while a repository
+/// pipeline's run stores the spec its worker produced - re-executing that as a definition would erase the
+/// definition phase, which is why replay is deliberately absent there.
+/// </para>
+/// <para>
+/// <b>What is deliberately NOT here.</b> The service adds two checks this function cannot make, because they
+/// read today's project rows rather than the run's snapshot: the project's assigned Git credential must still
+/// resolve, and today's parameter definitions must still accept the run's values. So the page can show a
+/// button that the service then refuses - with a complete sentence, never a silent failure - when a
+/// credential was deleted or a parameter renamed between the render and the click. That is the honest
+/// direction of the drift: the button cannot exist without the run's own facts agreeing.
+/// </para>
+/// </summary>
+public static class RunReruns
+{
+    /// <summary>Whether the run has finished - the only state a re-run may start from.</summary>
+    public static bool IsTerminal(string status) =>
+        status is not (BuildRunStatus.Queued or BuildRunStatus.Running);
+
+    /// <summary>
+    /// Whether the run executed a Freestyle definition (no repository, no branch, no commit) rather than a
+    /// repository pipeline. The frozen spec is not enough to tell: a Pipeline run stores one too, once its
+    /// worker reported it. The empty branch is the honest discriminator - F-020 writes it for exactly this
+    /// kind - and it is a snapshot, so a later project edit cannot move it.
+    /// </summary>
+    public static bool IsFreestyleShape(string gitBranch) => string.IsNullOrEmpty(gitBranch);
+
+    /// <summary>Whether a rebuild of this run is possible (and would be accepted).</summary>
+    public static bool CanRebuild(
+        string status,
+        string gitBranch,
+        string? gitCommit,
+        PipelineSpec? pipeline,
+        bool projectIsFreestyle) =>
+        Refusal(BuildRunTriggerType.Rebuild, status, gitBranch, gitCommit, pipeline, projectIsFreestyle) is null;
+
+    /// <summary>Whether a replay of this run is possible (and would be accepted).</summary>
+    public static bool CanReplay(
+        string status,
+        string gitBranch,
+        PipelineSpec? pipeline,
+        bool projectIsFreestyle) =>
+        Refusal(BuildRunTriggerType.Replay, status, gitBranch, gitCommit: null, pipeline, projectIsFreestyle) is null;
+
+    /// <summary>
+    /// The reason <paramref name="triggerType"/> cannot re-run this run, or <see langword="null"/> when it can.
+    /// The order is the order a person would ask the questions: has it finished, does the project still run what
+    /// this run ran, is the intent possible at all, and does the run carry what the intent needs.
+    /// </summary>
+    /// <param name="triggerType"><see cref="BuildRunTriggerType.Rebuild"/> or <see cref="BuildRunTriggerType.Replay"/>.</param>
+    /// <param name="projectIsFreestyle">
+    /// The project's <em>current</em> kind. The run page passes the run's own shape (it has no project row), so
+    /// the kind check there only fires for a run whose snapshot is already inconsistent with itself; the service
+    /// passes the project's kind and therefore also catches an out-of-band mismatch.
+    /// </param>
+    public static RunRerunRefusal? Refusal(
+        string triggerType,
+        string status,
+        string gitBranch,
+        string? gitCommit,
+        PipelineSpec? pipeline,
+        bool projectIsFreestyle)
+    {
+        var isReplay = triggerType == BuildRunTriggerType.Replay;
+        var wasFreestyle = IsFreestyleShape(gitBranch);
+
+        if (!IsTerminal(status))
+        {
+            // Only a finished run is a re-run input: re-running a queued or executing one would fork work in
+            // flight, and "the same inputs" would be a guess about a run that has not decided them yet.
+            return new RunRerunRefusal(
+                RunErrorCodes.RebuildNotTerminal,
+                "This run has not finished yet, so there is nothing to rebuild or replay. Wait for its outcome.");
+        }
+
+        if (wasFreestyle != projectIsFreestyle)
+        {
+            // The project's kind is immutable in the product, so a mismatch means the row was written out of
+            // band (or by an older release): refuse rather than execute a shape the project cannot run.
+            return new RunRerunRefusal(
+                RunErrorCodes.RebuildKindChanged,
+                "The project's kind no longer matches the run's: this run cannot be rebuilt as the project is now.");
+        }
+
+        if (isReplay && (!wasFreestyle || pipeline is null))
+        {
+            return new RunRerunRefusal(
+                RunErrorCodes.ReplayUnavailable,
+                "This run stores the pipeline spec its worker produced, not the source that produced it, so it "
+                + "cannot be replayed as a definition. Use Rebuild instead.");
+        }
+
+        if (!isReplay && !wasFreestyle && string.IsNullOrWhiteSpace(gitCommit))
+        {
+            // No commit recorded means the original never got far enough to name what it built; rebuilding
+            // would silently take the branch head instead of "the same inputs", so it is refused.
+            return new RunRerunRefusal(
+                RunErrorCodes.RebuildNoCommit,
+                "This run recorded no commit, so a rebuild could not pin one and would build whatever the branch "
+                + "points at now. Start a fresh run instead.");
+        }
+
+        if (!isReplay && wasFreestyle && pipeline is null)
+        {
+            return new RunRerunRefusal(
+                RunErrorCodes.RebuildSpecUnavailable,
+                "The definition this run executed is not readable any more, so it cannot be rebuilt.");
+        }
+
+        return null;
+    }
+}
+
+/// <summary>One reason a finished run cannot be re-run (code for the URL, sentence for the page).</summary>
+public sealed record RunRerunRefusal(string Code, string Message);
 
 /// <summary>
 /// One step of a run as the page displays it (card F-015). <see cref="Id"/> is the recorded row's id
@@ -267,7 +446,19 @@ public sealed record RunClaimResult(
     string? PipelineSpecJson = null,
 
     // F-021: the run's resolved build-parameter values. Null when the project declares none.
-    IReadOnlyDictionary<string, string>? Parameters = null)
+    IReadOnlyDictionary<string, string>? Parameters = null,
+
+    /// <summary>
+    /// Card F-036: the run's per-project build number (the <c>#N</c> every page prints). The worker turns
+    /// it into <c>ZENKINS_BUILD_NUMBER</c>, so a step can name its own build without parsing the guid.
+    /// <para>
+    /// <b>Null, never 0.</b> A row that carries no positive number (a database read before the F-036
+    /// migrations ran, or an out-of-band row the card's CHECK constraint refuses) answers
+    /// <see langword="null"/>, so the worker leaves the variable unset instead of publishing a <c>0</c> that
+    /// reads like a real build.
+    /// </para>
+    /// </summary>
+    int? Number = null)
 {
     /// <summary>The 204 answer: nothing eligible right now. Same for every other rejection reason -
     /// a worker polls again, it never learns why it got nothing.</summary>
@@ -578,6 +769,26 @@ public sealed class RunService(
         // F-028 + F-029: the project's own gate (disabled / queue cap) is applied inside the staging
         // routine, under the project row lock, in the same transaction as the insert - never as a
         // separate pre-flight check here.
+        return await QueueStagedRunAsync(context, run, triggerType, actingUserId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Stages one built run through the project's gate and commits it - <b>the one insert path</b> for
+    /// every trigger source there has ever been: the manual form, the API (F-027), a webhook delivery
+    /// (F-017, which stages on its own context), and the rebuild/replay re-runs of F-037. The gate, the
+    /// build number (F-036) and the transaction all live in
+    /// <see cref="StageQueuedRunAsync"/>; this method only opens the unit of work and logs the queueing,
+    /// so no caller can invent a second way to insert a run.
+    /// </summary>
+    /// <param name="context">The caller's context. The transaction is this method's own entirely: a
+    /// refusal changes nothing and a failed commit leaves no run behind.</param>
+    private async Task<RunTriggerResult> QueueStagedRunAsync(
+        ZenkinsDbContext context,
+        BuildRun run,
+        string triggerType,
+        string? actingUserId,
+        CancellationToken cancellationToken)
+    {
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var staged = await StageQueuedRunAsync(context, run, cancellationToken);
         if (staged.Status != RunOperationStatus.Success)
@@ -588,13 +799,15 @@ public sealed class RunService(
         await transaction.CommitAsync(cancellationToken);
 
         logger.LogInformation(
-            "Run queued. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} PipelinePath={PipelinePath} TriggerType={TriggerType} ByUserId={UserId}",
-            organizationId,
-            project.Id,
+            "Run queued. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Number={Number} Branch={Branch} PipelinePath={PipelinePath} TriggerType={TriggerType} RebuiltFrom={RebuiltFrom} ByUserId={UserId}",
+            run.OrganizationId,
+            run.ProjectId,
             run.Id,
+            run.Number,
             run.GitBranch,
             run.PipelinePath,
             triggerType,
+            run.RebuiltFromRunId,
             actingUserId);
         return staged;
     }
@@ -609,9 +822,9 @@ public sealed class RunService(
     }
 
     /// <summary>
-    /// Cards F-028 + F-029: the one place a trigger's run is staged, used by <b>every</b> trigger source
-    /// (the manual form and the webhook today; schedules, polls and the reactor of F-024/F-025/F-026 when
-    /// they land). The caller owns the transaction; this method owns the decision.
+    /// Cards F-028 + F-029 + F-036: the one place a trigger's run is staged, used by <b>every</b> trigger
+    /// source (the manual form, the API, the webhook, and F-037's rebuild/replay). The caller owns the
+    /// transaction; this method owns the decision and the run's build number.
     /// <para>
     /// <b>Why a project row lock.</b> The gate's facts are the project's own state, and two writers change
     /// them concurrently with a trigger: the disable mutation and every other trigger of the same
@@ -623,7 +836,10 @@ public sealed class RunService(
     /// <item>a trigger that read <c>Disabled</c> before a disable committed cannot insert afterwards -
     /// it waits for the lock, then reads the flag the disable wrote;</item>
     /// <item>two concurrent triggers cannot both pass the queue-cap count, because only the lock holder
-    /// raises the count (an insert is the only statement that can).</item>
+    /// raises the count (an insert is the only statement that can);</item>
+    /// <item>two concurrent triggers cannot both read the same <c>MAX(Number)</c>, because the number is
+    /// assigned inside the same lock - and, one layer below, the unique <c>(ProjectId, Number)</c> index
+    /// refuses a duplicate even if a future caller ever stages outside it (card F-036).</item>
     /// </list>
     /// <para>
     /// Both refusals answer <see cref="RunOperationStatus.Refused"/>: nothing is written, so a webhook can
@@ -680,8 +896,276 @@ public sealed class RunService(
         }
 
         context.BuildRuns.Add(staged);
-        await context.SaveChangesAsync(cancellationToken);
+        await SaveStagedRunAsync(context, staged, cancellationToken);
         return RunTriggerResult.Success(staged.Id);
+    }
+
+    /// <summary>The name of the savepoint the numbering retry rolls back to.</summary>
+    private const string BuildNumberSavepoint = "build-number";
+
+    /// <summary>
+    /// Card F-036: assigns <paramref name="staged"/> its build number and inserts it, retrying once if the
+    /// unique <c>(ProjectId, Number)</c> index refuses the number.
+    /// <para>
+    /// <b>The lock is the guarantee; the retry is the belt.</b> The caller holds the project row lock, so
+    /// two triggers of one project cannot read the same <c>MAX(Number)</c> - the retry only ever fires when
+    /// a writer outside this routine (an uncommitted insert from another connection, an out-of-band row)
+    /// took the number this statement chose. A savepoint makes the retry possible at all: on PostgreSQL a
+    /// failed statement poisons the whole transaction, so "try again" has to restore the transaction to the
+    /// point before the insert rather than simply issue a second one.
+    /// </para>
+    /// <para>
+    /// A second collision is not retried: it is a real error and surfaces as one. Nothing partial is left
+    /// behind either way - the caller's transaction decides.
+    /// </para>
+    /// </summary>
+    private async Task SaveStagedRunAsync(
+        ZenkinsDbContext context,
+        BuildRun staged,
+        CancellationToken cancellationToken)
+    {
+        staged.Number = await NextBuildNumberAsync(context, staged.ProjectId, cancellationToken);
+
+        var transaction = context.Database.CurrentTransaction;
+        if (transaction is null)
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        await transaction.CreateSavepointAsync(BuildNumberSavepoint, cancellationToken);
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (DatabaseErrors.IsUniqueViolation(exception, "BuildRuns"))
+        {
+            logger.LogWarning(
+                "Build number taken between the read and the insert; retrying once. OrganizationId={OrganizationId} ProjectId={ProjectId} Number={Number}",
+                staged.OrganizationId,
+                staged.ProjectId,
+                staged.Number);
+
+            await transaction.RollbackToSavepointAsync(BuildNumberSavepoint, cancellationToken);
+
+            // Only this run is detached: the caller's other tracked rows (a webhook's delivery record,
+            // for instance) belong to the same unit of work and must survive the retry.
+            context.Entry(staged).State = EntityState.Detached;
+
+            staged.Number = await NextBuildNumberAsync(context, staged.ProjectId, cancellationToken);
+            context.BuildRuns.Add(staged);
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
+        await transaction.ReleaseSavepointAsync(BuildNumberSavepoint, cancellationToken);
+    }
+
+    /// <summary>
+    /// The next build number of one project: <c>MAX(Number) + 1</c>, read inside the caller's project row
+    /// lock. Numbers are never reused or renumbered - the maximum is taken over every run of the project,
+    /// whatever its state - so a cancelled history still leaves the sequence monotonic, and the permalink
+    /// space never recycles an address.
+    /// </summary>
+    private static async Task<int> NextBuildNumberAsync(
+        ZenkinsDbContext context,
+        Guid projectId,
+        CancellationToken cancellationToken) =>
+        (await context.BuildRuns
+            .Where(run => run.ProjectId == projectId)
+            .MaxAsync(run => (int?)run.Number, cancellationToken) ?? 0) + 1;
+
+    // ---------------------------------------------------------------------
+    // Rebuild and replay (card F-037)
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Card F-037's <b>Rebuild</b>: re-runs a finished run with the same inputs - the branch, the commit
+    /// that run pinned, its parameters, required tags and timeout, and the definition it executed - and
+    /// attributes the new run to <see cref="BuildRunTriggerType.Rebuild"/> with
+    /// <see cref="BuildRun.RebuiltFromRunId"/> pointing at the original.
+    /// <para>
+    /// <b>The same queue, not a second one.</b> The new run is built from the original's snapshots and then
+    /// handed to <see cref="QueueStagedRunAsync"/> - the one insert path - so F-028 (a disabled project),
+    /// F-029 (the queue cap) and F-036 (the build number) apply to a rebuild exactly as they apply to a
+    /// fresh trigger, and the project row lock decides both facts once. Nothing writes to the original run:
+    /// a rebuild is a new row, so its artifacts, logs and steps stay exactly as they were.
+    /// </para>
+    /// <para>
+    /// <b>What is re-validated, and why.</b> <see cref="RunReruns.Refusal"/> answers the run's own questions
+    /// (finished, same kind, the intent is possible, the pinned commit or the definition exists) with the
+    /// very codes the run page's buttons were rendered from. On top of that the service checks what only
+    /// today's project rows can answer: the project's assigned Git credential must still resolve
+    /// (<c>rebuild-credential-missing</c>), and today's parameter definitions must still accept the run's
+    /// values (the form's own <c>parameter-unknown</c>/<c>parameter-invalid</c> codes).
+    /// </para>
+    /// </summary>
+    /// <param name="parameterOverrides">
+    /// The "Rebuild with parameters…" form's values, or <see langword="null"/> for "exactly as it ran".
+    /// Overrides are resolved against the original's values and today's definitions by the same
+    /// <see cref="ProjectParameters.ResolveValues"/> the trigger form uses, so their validation cannot drift
+    /// from a fresh trigger's.
+    /// </param>
+    public async Task<RunTriggerResult> RebuildAsync(
+        string actingUserId,
+        Guid runId,
+        IReadOnlyDictionary<string, string>? parameterOverrides = null,
+        CancellationToken cancellationToken = default) =>
+        await RecreateRunAsync(
+            actingUserId,
+            runId,
+            BuildRunTriggerType.Rebuild,
+            parameterOverrides,
+            cancellationToken);
+
+    /// <summary>
+    /// Card F-037's <b>Replay</b>: re-runs a finished run against <b>the definition text the run itself
+    /// carried</b>, ignoring whatever the project or the repository says now.
+    /// <para>
+    /// <b>Only where a definition text exists.</b> A repository pipeline's run stores the frozen spec the
+    /// worker produced, not the source that produced it - re-executing that spec as a definition would
+    /// erase the definition phase and pretend the two are the same thing. So Replay is offered (and
+    /// accepted) only for a run whose snapshot <em>is</em> its definition - today a Freestyle run - and a
+    /// repository pipeline's replay is refused with <c>replay-unavailable</c>, which is what the run page's
+    /// disabled button explains.
+    /// </para>
+    /// </summary>
+    public async Task<RunTriggerResult> ReplayAsync(
+        string actingUserId,
+        Guid runId,
+        CancellationToken cancellationToken = default) =>
+        await RecreateRunAsync(
+            actingUserId,
+            runId,
+            BuildRunTriggerType.Replay,
+            parameterOverrides: null,
+            cancellationToken);
+
+    /// <summary>
+    /// The one re-run implementation behind Rebuild and Replay: the original's snapshot, re-validated
+    /// against today's project, staged through the one insert path. The two intents differ in exactly two
+    /// places - which definition the new run gets (rebuild: the project's current definition for a Pipeline
+    /// run, read from the pinned commit; replay: the run's own stored text, whatever the project says) and
+    /// the attribution they write.
+    /// </summary>
+    private async Task<RunTriggerResult> RecreateRunAsync(
+        string actingUserId,
+        Guid runId,
+        string triggerType,
+        IReadOnlyDictionary<string, string>? parameterOverrides,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        if (tenantContext.OrganizationId is not { } organizationId)
+        {
+            return RunTriggerResult.Forbidden(
+                "You are not a member of an organization, so there is no run to re-execute.");
+        }
+
+        if (!await IsOrganizationMemberAsync(actingUserId, cancellationToken))
+        {
+            return RunTriggerResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        // Foreign or unknown id: the same 404, no existence oracle.
+        var original = await context.BuildRuns
+            .AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == runId, cancellationToken);
+        if (original is null)
+        {
+            return RunTriggerResult.NotFound();
+        }
+
+        var project = await context.Projects
+            .AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == original.ProjectId, cancellationToken);
+        if (project is null)
+        {
+            return RunTriggerResult.NotFound();
+        }
+
+        var originalWasFreestyle = RunReruns.IsFreestyleShape(original.GitBranch);
+        var originalPipeline = ReadPipeline(original.PipelineSpecJson);
+
+        // One predicate, shared with the run page's buttons: `Refusal` answers "can this intent re-run this
+        // run, and if not, why". The project's *current* kind is passed in (the page only has the run's own
+        // shape), so the kind mismatch an out-of-band row can produce is caught here as well.
+        if (RunReruns.Refusal(
+                triggerType,
+                original.Status,
+                original.GitBranch,
+                original.GitCommit,
+                originalPipeline,
+                project.Kind == ProjectKinds.Freestyle) is { } refusal)
+        {
+            return RunTriggerResult.RebuildRefused(refusal.Code, refusal.Message);
+        }
+
+        // The credential is not an input of the run (the worker fetches the project's current one), but an
+        // assignment that no longer resolves would queue a clone that cannot authenticate: say so now.
+        if (project.GitCredentialId is { } credentialId
+            && !await context.GitCredentials.AnyAsync(
+                credential => credential.Id == credentialId,
+                cancellationToken))
+        {
+            return RunTriggerResult.RebuildRefused(
+                RunErrorCodes.RebuildCredentialMissing,
+                "The Git credential assigned to this project no longer exists. Assign one on the project's settings tab, then rebuild.");
+        }
+
+        // F-021: the original's values (or the form's overrides on top of them) are re-resolved against
+        // today's definitions by the trigger's own routine - so a renamed, removed or retyped parameter is
+        // refused with the same code a fresh trigger would give, and a newly declared one takes its default.
+        var supplied = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, value) in ReadParameters(original.ParametersJson) ?? new Dictionary<string, string>())
+        {
+            supplied[name] = value;
+        }
+
+        foreach (var (name, value) in parameterOverrides ?? new Dictionary<string, string>())
+        {
+            supplied[name] = value;
+        }
+
+        var values = ProjectParameters.ResolveValues(
+            ReadParameterDefinitions(project.ParametersJson),
+            supplied.Count == 0 ? null : supplied,
+            out var parameterError);
+        if (values is null)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Parameter, parameterError!));
+        }
+
+        var run = new BuildRun
+        {
+            OrganizationId = organizationId,
+            ProjectId = project.Id,
+            TriggerType = triggerType,
+            TriggerUserId = actingUserId,
+
+            // The original's snapshots, verbatim: tags, branch, pipeline path and timeout are what that run
+            // was queued with, and a later project edit must not move them (the F-014 snapshot rule).
+            RequiredTags = original.RequiredTags,
+            GitBranch = original.GitBranch,
+            PipelinePath = original.PipelinePath,
+            TimeoutSeconds = original.TimeoutSeconds,
+
+            // F-017/F-037: the commit the original pinned is pinned again - never the branch head. A
+            // Freestyle run has no commit and no repository, and the claim skips the clone for it.
+            GitCommit = originalWasFreestyle ? null : original.GitCommit,
+
+            // The definition: a Freestyle run executes the snapshot the original executed (a "definition
+            // change since" is exactly what must not leak in); a Pipeline run re-reads its definition from
+            // the pinned commit, so the claim carries no spec.
+            PipelineSpecJson = originalWasFreestyle ? original.PipelineSpecJson : null,
+
+            ParametersJson = SerializeParameters(values),
+            RebuiltFromRunId = original.Id,
+        };
+
+        return await QueueStagedRunAsync(context, run, triggerType, actingUserId, cancellationToken);
     }
 
     /// <summary>
@@ -799,10 +1283,11 @@ public sealed class RunService(
         }
 
         logger.LogInformation(
-            "Run queued by webhook. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Branch={Branch} Commit={Commit} PipelinePath={PipelinePath}",
+            "Run queued by webhook. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Number={Number} Branch={Branch} Commit={Commit} PipelinePath={PipelinePath}",
             activeOrganizationId,
             project.Id,
             run.Id,
+            run.Number,
             run.GitBranch,
             run.GitCommit,
             run.PipelinePath);
@@ -915,6 +1400,69 @@ public sealed class RunService(
             candidate => candidate.Id == runId,
             cancellationToken);
         return run is null ? null : (await ToViewsAsync(context, [run], cancellationToken))[0];
+    }
+
+    /// <summary>
+    /// Card F-036's permalink read: one project's run by its build number. The project id is part of the
+    /// lookup (not only the number), so the query goes through the tenant filter and a foreign project
+    /// answers <see langword="null"/> - the same 404 a missing one does, with no existence oracle.
+    /// </summary>
+    public async Task<RunView?> GetRunByNumberAsync(
+        Guid projectId,
+        int number,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var run = await context.BuildRuns.SingleOrDefaultAsync(
+            candidate => candidate.ProjectId == projectId && candidate.Number == number,
+            cancellationToken);
+        return run is null ? null : (await ToViewsAsync(context, [run], cancellationToken))[0];
+    }
+
+    /// <summary>
+    /// Card F-036: the project's newest run, by build number - the <c>/runs/last</c> permalink. Ordering by
+    /// <see cref="BuildRun.Number"/> rather than by a timestamp is deliberate: the number is assigned at
+    /// trigger time under the project row lock, so it <em>is</em> the creation order, and it is unique per
+    /// project (a timestamp tie can no longer make "last" ambiguous).
+    /// </summary>
+    public async Task<RunView?> GetLastRunAsync(Guid projectId, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var run = await context.BuildRuns
+            .Where(candidate => candidate.ProjectId == projectId)
+            .OrderByDescending(candidate => candidate.Number)
+            .FirstOrDefaultAsync(cancellationToken);
+        return run is null ? null : (await ToViewsAsync(context, [run], cancellationToken))[0];
+    }
+
+    /// <summary>
+    /// Card F-036: the project's newest <c>Success</c> run - the <c>/lastSuccessful</c> permalink every badge
+    /// definition means. Same ordering as <see cref="GetLastRunAsync"/>; a project with no successful run yet
+    /// answers <see langword="null"/> (a 404), never a failed run standing in for one.
+    /// </summary>
+    public async Task<RunView?> GetLastSuccessfulRunAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var run = await context.BuildRuns
+            .Where(candidate => candidate.ProjectId == projectId && candidate.Status == BuildRunStatus.Success)
+            .OrderByDescending(candidate => candidate.Number)
+            .FirstOrDefaultAsync(cancellationToken);
+        return run is null ? null : (await ToViewsAsync(context, [run], cancellationToken))[0];
+    }
+
+    /// <summary>
+    /// Card F-036: one run's build number, or <see langword="null"/> for a foreign/unknown id. The log
+    /// download names its file after it, which is why this reads the number alone rather than a whole view.
+    /// </summary>
+    public async Task<int?> GetRunNumberAsync(Guid runId, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.BuildRuns
+            .Where(candidate => candidate.Id == runId)
+            .Select(candidate => (int?)candidate.Number)
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     /// <summary>Whether the run exists in the active organization (download endpoint's 404 gate).</summary>
@@ -1188,7 +1736,10 @@ public sealed class RunService(
                     candidate.PipelinePath,
                     leaseExpiresAt,
                     candidate.PipelineSpecJson,
-                    ReadParameters(candidate.ParametersJson));
+                    ReadParameters(candidate.ParametersJson),
+
+                    // F-036 (review M1): a non-positive number is "no number", never `#0`.
+                    candidate.Number is > 0 ? candidate.Number : null);
             }
         }
 
@@ -2507,6 +3058,21 @@ public sealed class RunService(
         // foreign key makes a dangling reference impossible, and this condition keeps the run page's
         // wording honest even against a database that predates the constraint. A project whose reference
         // does not resolve reads as "no credential", which is what its runs actually got.
+        // F-037: the original run's number for every re-run on this page, in one batched read. The
+        // originals may live in any state (a rebuild can be rebuilt); a missing row - the original's
+        // project was deleted - simply stays out of the dictionary and the page shows the short id.
+        var rebuiltFromIds = runs
+            .Where(run => run.RebuiltFromRunId is not null)
+            .Select(run => run.RebuiltFromRunId!.Value)
+            .Distinct()
+            .ToArray();
+        var rebuiltFromNumbers = rebuiltFromIds.Length == 0
+            ? []
+            : await context.BuildRuns
+                .Where(run => rebuiltFromIds.Contains(run.Id))
+                .Select(run => new { run.Id, run.Number })
+                .ToDictionaryAsync(row => row.Id, row => row.Number, cancellationToken);
+
         var projectIds = runs.Select(run => run.ProjectId).Distinct().ToArray();
         var credentialAssigned = await context.Projects
             .Where(project => projectIds.Contains(project.Id))
@@ -2560,7 +3126,16 @@ public sealed class RunService(
                 ReadParameters(run.ParametersJson),
 
                 // F-028: the project's current disabled state (null when it could not be read).
-                projectFacts is null ? (bool?)null : projectFacts.Disabled);
+                projectFacts is null ? (bool?)null : projectFacts.Disabled,
+
+                // F-036: the run's own build number - the #N every surface prints.
+                run.Number,
+
+                // F-037: the run this one re-ran, and that run's number when it still resolves.
+                run.RebuiltFromRunId,
+                run.RebuiltFromRunId is { } origin && rebuiltFromNumbers.TryGetValue(origin, out var originNumber)
+                    ? originNumber
+                    : null);
         }).ToList();
     }
 

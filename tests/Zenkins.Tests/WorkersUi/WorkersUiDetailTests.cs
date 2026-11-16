@@ -65,14 +65,19 @@ public sealed class WorkersUiDetailTests
         Assert.Contains("CPU count", page, StringComparison.Ordinal);
         Assert.Contains("id=\"worker-cpus\"", page, StringComparison.Ordinal);
 
-        // The current-runs section lists the executing run, linked, with its status badge.
+        // The current-runs section lists the executing run, linked, with its status badge. Card F-036:
+        // the link is the run's permalink (its project and build number), because that is the name a
+        // person reads and shares - the guid route still resolves, it is just no longer the address the
+        // pages advertise.
         Assert.Contains("id=\"worker-current-runs\"", page, StringComparison.Ordinal);
-        Assert.Contains($"href=\"/runs/{currentRunId}\"", page, StringComparison.Ordinal);
+        Assert.Contains($"href=\"/projects/{projectId}/runs/2\"", page, StringComparison.Ordinal);
+        Assert.Contains("Run #2", page, StringComparison.Ordinal);
         Assert.Contains("Running", page, StringComparison.Ordinal);
 
         // The recent-runs section lists the finished run, linked, with its Success badge.
         Assert.Contains("id=\"worker-recent-runs\"", page, StringComparison.Ordinal);
-        Assert.Contains($"href=\"/runs/{finishedRunId}\"", page, StringComparison.Ordinal);
+        Assert.Contains($"href=\"/projects/{projectId}/runs/1\"", page, StringComparison.Ordinal);
+        Assert.Contains("Run #1", page, StringComparison.Ordinal);
         Assert.Contains("Success", page, StringComparison.Ordinal);
 
         // Current before recent - the honest reading order of "what is it doing right now, and

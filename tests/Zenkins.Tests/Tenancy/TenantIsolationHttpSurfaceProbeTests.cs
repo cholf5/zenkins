@@ -157,6 +157,91 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
     }
 
     // ---------------------------------------------------------------------
+    // Card F-036's permalinks and card F-037's re-run buttons
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Card F-036's number route answers by (project id, number) through the tenant filter, so another
+    /// organization's project id is the same 404 a number that project never issued is - and the fixture's
+    /// run resolves under its own project, which is what makes the 404 a boundary rather than a bug.
+    /// </summary>
+    [Fact]
+    public async Task A_build_number_permalink_refuses_a_foreign_project_without_an_oracle()
+    {
+        using var host = new TenantProbeHostFixture();
+        using var client = await TenantIsolationAuditProbes.SignInAsync(host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
+
+        using var foreign = await client.GetAsync($"/projects/{TwoOrgsFixture.ProjectBId}/runs/1", CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+
+        var body = await foreign.Content.ReadAsStringAsync(CancellationToken);
+        Assert.DoesNotContain(TwoOrgsFixture.ProjectBName, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(TwoOrgsFixture.ProjectBRepositoryUrl, body, StringComparison.Ordinal);
+
+        // The positive control: org A's own #1 renders through the same route.
+        var own = await AuthTestHost.GetStringAsync(
+            client, $"/projects/{TwoOrgsFixture.ProjectAId}/runs/1");
+        Assert.Contains("Run #1", own, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Cards F-036's two redirect aliases: a foreign project id answers a bare 404 (never a redirect into
+    /// another tenant), while org A's own project redirects to its run's permalink.
+    /// </summary>
+    [Fact]
+    public async Task The_last_permalinks_refuse_a_foreign_project_without_an_oracle()
+    {
+        using var host = new TenantProbeHostFixture();
+        using var client = await TenantIsolationAuditProbes.SignInAsync(host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
+
+        foreach (var path in new[]
+                 {
+                     $"/projects/{TwoOrgsFixture.ProjectBId}/runs/last",
+                     $"/projects/{TwoOrgsFixture.ProjectBId}/lastSuccessful",
+                 })
+        {
+            using var foreign = await client.GetAsync(path, CancellationToken);
+            Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+            Assert.Empty(await foreign.Content.ReadAsByteArrayAsync(CancellationToken));
+        }
+
+        using var own = await client.GetAsync($"/projects/{TwoOrgsFixture.ProjectAId}/runs/last", CancellationToken);
+        Assert.Equal(HttpStatusCode.Redirect, own.StatusCode);
+        Assert.Equal(
+            $"/projects/{TwoOrgsFixture.ProjectAId}/runs/1",
+            own.Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// Card F-037's two re-run forms: a foreign run id is a bare 404 and nothing is queued in either
+    /// tenant - the original's row is untouched and no second run appears.
+    /// </summary>
+    [Fact]
+    public async Task Rebuild_and_replay_refuse_another_tenants_run_with_a_bare_404()
+    {
+        using var host = new TenantProbeHostFixture();
+        using var client = await TenantIsolationAuditProbes.SignInAsync(host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
+
+        foreach (var action in new[] { "rebuild", "replay" })
+        {
+            var response = await OrganizationTestHost.PostFormAsync(
+                client,
+                $"/runs/{TwoOrgsFixture.BuildRunAId}",
+                $"/runs/{TwoOrgsFixture.BuildRunBId}/{action}",
+                new Dictionary<string, string>());
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        // Neither tenant gained a run, and the foreign original is exactly as it was.
+        Assert.Single(await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<BuildRun>(
+            host, run => run.OrganizationId == TwoOrgsFixture.OrgAId));
+        var beta = (await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<BuildRun>(
+            host, run => run.Id == TwoOrgsFixture.BuildRunBId)).Single();
+        Assert.Equal(BuildRunStatus.Queued, beta.Status);
+        Assert.Null(beta.RebuiltFromRunId);
+    }
+
+    // ---------------------------------------------------------------------
     // Mutating form endpoints
     // ---------------------------------------------------------------------
 

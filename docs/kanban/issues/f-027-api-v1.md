@@ -259,7 +259,10 @@ Follow-ups this card leaves, deliberately:
   thousands of runs would pay for the full read on every `page=1`. A later card should push
   `Skip/Take` plus a `COUNT` into the service (and skip the step views for runs it pages past).
 - F-036 (run numbers) is out of scope per Dependencies - the response has no `number` field and gains
-  one when F-036 lands.
+  one when F-036 lands. **CLOSED by F-036 (2026-11-16):** `ApiRunResource.Number` now carries the
+  project-scoped `#N` in the trigger answer and every read route; `id` stayed the reference, so nothing
+  this card promised changed shape (`docs/api-v1.md`'s run resource documents the field; it is nullable,
+  because `0` is not a build number - only a pre-migration read has no number).
 - F-041 (password-typed parameters) does not exist yet; when it lands, `ApiRunResource` stays
   value-free (it exposes no parameter value at all), so nothing here has to change - a future card
   would only decide whether a *non-secret* value is ever worth exposing.

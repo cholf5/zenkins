@@ -14,6 +14,13 @@ namespace Zenkins.Server.Dashboard;
 public sealed record DashboardRunView(
     Guid RunId,
     Guid ProjectId,
+
+    /// <summary>
+    /// Card F-036: the run's per-project build number - the <c>#N</c> the recent-runs row prints instead of
+    /// the old short guid. <see cref="RunId"/> stays the identity (the row's DOM id and its link target use
+    /// it), so the number is a name, never a key.
+    /// </summary>
+    int Number,
     string ProjectName,
     string Status,
     string TriggerType,
@@ -221,6 +228,9 @@ public sealed class DashboardQuery(
                 {
                     run.Id,
                     run.ProjectId,
+
+                    // F-036: the #N the recent-runs row shows.
+                    run.Number,
                     ProjectName = run.Project.Name,
                     run.Project.Disabled,
                     run.Status,
@@ -236,6 +246,7 @@ public sealed class DashboardQuery(
                 .Select(run => new DashboardRunView(
                     run.Id,
                     run.ProjectId,
+                    run.Number,
                     run.ProjectName,
                     run.Status,
                     run.TriggerType,

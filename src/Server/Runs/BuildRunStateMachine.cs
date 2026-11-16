@@ -29,6 +29,33 @@ public static class RunErrorCodes
     /// <summary>F-021: a supplied parameter value does not fit its type (boolean, choice, length).</summary>
     public const string ParameterInvalid = "parameter-invalid";
 
+    // Card F-037: a re-run the original's own state refused (nothing was written).
+
+    /// <summary>The run has not finished, so it is not a re-run input yet.</summary>
+    public const string RebuildNotTerminal = "rebuild-not-terminal";
+
+    /// <summary>
+    /// A Pipeline run recorded no commit, so a rebuild could not pin one - and a rebuild that took the
+    /// branch head would build different code under the same name.
+    /// </summary>
+    public const string RebuildNoCommit = "rebuild-no-commit";
+
+    /// <summary>The project's kind no longer matches the shape the run executed (a row written out of band).</summary>
+    public const string RebuildKindChanged = "rebuild-kind-changed";
+
+    /// <summary>A Freestyle run's frozen definition is gone or unreadable, so there is nothing to re-execute.</summary>
+    public const string RebuildSpecUnavailable = "rebuild-spec-unavailable";
+
+    /// <summary>The Git credential the project has assigned no longer resolves, so a clone could not authenticate.</summary>
+    public const string RebuildCredentialMissing = "rebuild-credential-missing";
+
+    /// <summary>
+    /// Card F-037: Replay is offered only where a definition <em>text</em> exists (today a Freestyle run).
+    /// A repository pipeline's run stores the spec its worker produced, not the source behind it, so
+    /// replaying it would erase the definition phase - refused, and the page's absent button says so.
+    /// </summary>
+    public const string ReplayUnavailable = "replay-unavailable";
+
     // Worker run-API conflicts (409).
     public const string RunNotAssignedToWorker = "run-not-assigned-to-worker";
     public const string LeaseExpired = "lease-expired";

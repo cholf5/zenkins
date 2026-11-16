@@ -444,6 +444,9 @@ internal sealed class StepsRun : IDisposable
                 RequiredTags = string.Empty,
                 GitBranch = Branch,
                 PipelinePath = "pipeline.lua",
+
+                // F-036: the first run of a freshly seeded project is #1.
+                Number = 1,
                 WorkerId = worker.Id,
                 StartedAt = DateTimeOffset.UtcNow,
                 DeadlineAt = DateTimeOffset.UtcNow.AddMinutes(10),

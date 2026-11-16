@@ -8,14 +8,27 @@ using Zenkins.Shared.RunCancellation;
 namespace Zenkins.Server.Runs;
 
 /// <summary>
-/// HTTP endpoints for cards F-006 and F-014: the trigger form on the project page (F-003's form shape)
-/// and the token-authenticated worker run API under <c>/api/workers/*</c>.
+/// HTTP endpoints for cards F-006, F-014, F-036 and F-037: the trigger form on the project page (F-003's
+/// form shape), the build-number permalinks, the run page's two re-run forms, and the token-authenticated
+/// worker run API under <c>/api/workers/*</c>.
 /// <para>
 /// <b>Trigger form.</b> Form-bound (so <c>UseAntiforgery</c> validates the token), authenticated
 /// (anonymous POSTs are redirected to sign-in), Owner <em>or</em> Member in the service. F-014 replaced
 /// the argv textarea with a branch: a run executes the project's pipeline. Success is a PRG redirect to
 /// the new run's detail page; validation failures redirect back to the project page with
 /// <c>?runError=&lt;code&gt;</c>.
+/// </para>
+/// <para>
+/// <b>F-036's permalinks.</b> <c>/projects/{id}/runs/last</c> and <c>/projects/{id}/lastSuccessful</c> are
+/// 302 aliases to a run's own number permalink (<c>/projects/{id}/runs/{number}</c>, rendered by the run
+/// page itself), and a bare 404 when there is no such run. The guid route is untouched, so no existing
+/// bookmark or log ticket breaks.
+/// </para>
+/// <para>
+/// <b>F-037's re-run forms.</b> <c>/runs/{id}/rebuild</c> and <c>/runs/{id}/replay</c> are form-bound
+/// PRGs like every other form on this surface: success redirects to the <em>new</em> run, a refusal back
+/// to the original with its stable code (<c>?rebuildError=</c>/<c>?replayError=</c>), and the hard
+/// authorization answers stay hard.
 /// </para>
 /// <para>
 /// <b>Worker run API.</b> Deliberately NOT <c>RequireAuthorization</c> (same as register and
@@ -40,6 +53,20 @@ public static class RunEndpoints
         // 404 (no existence oracle).
         var runForms = endpoints.MapGroup("/runs").RequireAuthorization();
         runForms.MapPost("/{runId:guid}/cancel", CancelRunAsync);
+
+        // Cards F-036's permalinks: the two redirect aliases. `/projects/{id}/runs/last` and
+        // `/projects/{id}/lastSuccessful` answer 302 to the run's own permalink (the number route the run
+        // page renders), and a bare 404 when there is no such run - an alias that invented a target would
+        // be worse than no alias. Both are cookie-authenticated like every other page route, so the
+        // tenant filter is what keeps another organization's project out of the answer.
+        var permalinks = endpoints.MapGroup("/projects/{projectId:guid}").RequireAuthorization();
+        permalinks.MapGet("/runs/last", LastRunAsync);
+        permalinks.MapGet("/lastSuccessful", LastSuccessfulRunAsync);
+
+        // Card F-037: the run page's two re-run buttons. Cookie + antiforgery (they are forms), and the
+        // service enforces membership and the run's own re-runnability.
+        runForms.MapPost("/{runId:guid}/rebuild", RebuildRunAsync);
+        runForms.MapPost("/{runId:guid}/replay", ReplayRunAsync);
 
         // Worker run API: token-authenticated, exempt from cookie auth by design.
         var api = endpoints.MapGroup("/api/workers");
@@ -68,7 +95,15 @@ public static class RunEndpoints
             return Results.NotFound();
         }
 
-        var fileName = $"zenkins-run-{runId.ToString("D")}-log.txt";
+        // Card F-036: the download is named after the build number - the name a person reads when the
+        // browser offers to save it - and keeps the run's own id, so the file a log was taken from is
+        // always identifiable (and two projects' #7 saves cannot collide). A run with no number (a row
+        // older than the column, read before the migration ran) falls back to the id alone rather than
+        // inventing one.
+        var number = await runs.GetRunNumberAsync(runId, httpContext.RequestAborted);
+        var fileName = number is > 0
+            ? $"zenkins-run-{number}-{runId.ToString("D")}-log.txt"
+            : $"zenkins-run-{runId.ToString("D")}-log.txt";
         return Results.Stream(
             async output =>
             {
@@ -86,6 +121,135 @@ public static class RunEndpoints
             "text/plain; charset=utf-8",
             fileName);
     }
+
+    /// <summary>
+    /// Card F-036: <c>/projects/{id}/runs/last</c> - a 302 to the newest run's own permalink, or a bare
+    /// 404 when the project has no run at all (never a guess, never another project's run).
+    /// </summary>
+    private static async Task<IResult> LastRunAsync(
+        Guid projectId,
+        RunService runs,
+        HttpContext httpContext)
+    {
+        var run = await runs.GetLastRunAsync(projectId, httpContext.RequestAborted);
+        return run is null
+            ? Results.NotFound()
+            : Results.Redirect($"/projects/{run.ProjectId}/runs/{run.Number}");
+    }
+
+    /// <summary>
+    /// Card F-036: <c>/projects/{id}/lastSuccessful</c> - the same alias for the newest <c>Success</c> run.
+    /// A project whose runs all failed answers 404: "the last successful build" does not exist yet, and
+    /// pointing at a failed one would make every badge lie.
+    /// </summary>
+    private static async Task<IResult> LastSuccessfulRunAsync(
+        Guid projectId,
+        RunService runs,
+        HttpContext httpContext)
+    {
+        var run = await runs.GetLastSuccessfulRunAsync(projectId, httpContext.RequestAborted);
+        return run is null
+            ? Results.NotFound()
+            : Results.Redirect($"/projects/{run.ProjectId}/runs/{run.Number}");
+    }
+
+    /// <summary>
+    /// Card F-037's Rebuild button: the optional "with parameters…" form rides the same endpoint (an empty
+    /// body means "exactly as it ran"). Success is a PRG to the <b>new</b> run's page - where the "rebuilt
+    /// from #N" line is - and every refusal is a PRG back to the original with its stable code, except the
+    /// hard authorization answers, which stay hard (the F-003 rule every form on this surface follows).
+    /// </summary>
+    private static async Task<IResult> RebuildRunAsync(
+        Guid runId,
+        [FromForm] RebuildRunForm? form,
+        HttpContext httpContext,
+        RunService runs)
+    {
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // F-019's discovery: a body whose fields all fail to bind arrives as null, and this form's fields are
+        // legitimately optional - the plain Rebuild button posts nothing but the antiforgery token - so null
+        // alone cannot mean "unreadable". A null model together with a non-antiforgery field in the raw form
+        // does: the body named something this endpoint could not read, and rebuilding "exactly as it ran"
+        // would silently drop what the member typed.
+        if (form is null && await HasUnboundFieldAsync(httpContext))
+        {
+            return Results.Redirect($"/runs/{runId}?rebuildError={RunErrorCodes.FieldInvalid}");
+        }
+
+        var result = await runs.RebuildAsync(
+            userId,
+            runId,
+            form?.Parameters,
+            httpContext.RequestAborted);
+        return MapRerun(result, runId, "rebuildError");
+    }
+
+    /// <summary>
+    /// Whether the request carries a form field the model did not bind (anything but the antiforgery
+    /// token). A body the server cannot parse at all answers <see langword="true"/> too - the same
+    /// "nothing readable arrived" refusal, rather than a rebuild that quietly ignores the parameters.
+    /// </summary>
+    private static async Task<bool> HasUnboundFieldAsync(HttpContext httpContext)
+    {
+        if (!httpContext.Request.HasFormContentType)
+        {
+            return false;
+        }
+
+        try
+        {
+            var form = await httpContext.Request.ReadFormAsync(httpContext.RequestAborted);
+            return form.Keys.Any(key => !key.StartsWith("__", StringComparison.Ordinal));
+        }
+        catch (InvalidDataException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>Card F-037's Replay button: the same answers as a rebuild, from the run's own definition.</summary>
+    private static async Task<IResult> ReplayRunAsync(
+        Guid runId,
+        [FromForm] ReplayRunForm? form,
+        HttpContext httpContext,
+        RunService runs)
+    {
+        // The empty form parameter is what makes this POST form-bound and antiforgery-validated, like the
+        // cancel form; there is nothing else to bind.
+        _ = form;
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await runs.ReplayAsync(userId, runId, httpContext.RequestAborted);
+        return MapRerun(result, runId, "replayError");
+    }
+
+    /// <summary>The PRG mapping the two re-run buttons share (one vocabulary, two buttons).</summary>
+    private static IResult MapRerun(RunTriggerResult result, Guid originalRunId, string errorParameter) =>
+        result.Status switch
+        {
+            RunOperationStatus.Success => Results.Redirect($"/runs/{result.RunId}"),
+
+            // Authorization failures are a hard rejection, never a friendly redirect (F-003 rule).
+            RunOperationStatus.Forbidden => Results.Text(
+                result.Message ?? "You are not allowed to re-run builds.",
+                "text/plain",
+                statusCode: StatusCodes.Status403Forbidden),
+            RunOperationStatus.NotFound => Results.NotFound(),
+
+            // The re-run's own refusals and its parameter errors ride the same PRG the trigger form uses:
+            // the code is the whole channel a browser has, and it is the vocabulary the run page prints.
+            _ => Results.Redirect(
+                $"/runs/{originalRunId}?{errorParameter}={result.FieldErrors?[0].Code ?? RunErrorCodes.FieldInvalid}"),
+        };
 
     private static async Task<IResult> StartRunAsync(
         Guid projectId,
@@ -159,7 +323,8 @@ public static class RunEndpoints
                 result.PipelinePath!,
                 result.LeaseExpiresAt!.Value,
                 result.PipelineSpecJson,
-                result.Parameters)),
+                result.Parameters,
+                result.Number)),
         };
     }
 
@@ -324,6 +489,22 @@ public static class RunEndpoints
     }
 
     /// <summary>
+    /// Card F-037's "Rebuild with parameters…" form: the values the member edited, keyed the way the trigger
+    /// form names them (<c>Parameters[NAME]</c>). An absent/empty body is the plain Rebuild button and means
+    /// "exactly as it ran".
+    /// </summary>
+    public sealed class RebuildRunForm
+    {
+        public Dictionary<string, string>? Parameters { get; set; }
+    }
+
+    /// <summary>Empty form binding: the parameter makes the replay POST form-bound (antiforgery).</summary>
+    public sealed class ReplayRunForm
+    {
+    }
+
+
+    /// <summary>
     /// The accepted report body (card F-013). The body is optional: the field is additive, and a
     /// worker that has no repository report keeps sending an empty POST.
     /// </summary>
@@ -402,7 +583,12 @@ public static class RunEndpoints
 
         // F-021: the run's resolved build-parameter values (name → value). Null when the project
         // declares no parameters; the worker injects them into the server-provided env layer.
-        IReadOnlyDictionary<string, string>? Parameters = null);
+        IReadOnlyDictionary<string, string>? Parameters = null,
+
+        // F-036: the run's per-project build number, injected as ZENKINS_BUILD_NUMBER beside the
+        // ZENKINS_RUN_ID/ZENKINS_BUILD_ID guid. Null (never 0) when the row carries no positive number,
+        // so the worker's "no number, no variable" defence is reachable rather than dead.
+        int? Number = null);
 
     /// <param name="DeadlineAt">F-014: the accepted answer carries the run's frozen deadline.</param>
     public sealed record RunReportResponse(string Status, DateTimeOffset? DeadlineAt = null);
