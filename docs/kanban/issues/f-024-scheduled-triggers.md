@@ -246,10 +246,23 @@ concrete dates in a second zone (America/New_York: 2026-03-08 yields exactly one
 and is not moved to another clock time; 2026-11-01 fires the earlier of the two 02:30s).
 
 Not covered, and why: a real *process* restart in the `Recovery` harness for a schedule (the
-no-backfill rule is proven by the watermark facts, not by killing a Server mid-outage), and the
-unique-index *exception* path as such - a writer committing between the tick's ledger read and its
-save cannot be produced deterministically from outside; what is covered is its outcome (the same facts
-above: `Raced`, no run, watermark advanced, next due time queues).
+no-backfill rule is proven by the watermark facts, not by killing a Server mid-outage). The
+unique-index *exception* path is covered, and this paragraph used to say it could not be (corrected
+by card Q-018): a writer committing between the tick's ledger read and its save **is** produced
+deterministically, by a second connection that inserts the same `(ScheduleId, DueAt)` and does not
+commit. The tick's INSERT then blocks on `IX_ScheduleOccurrences_ScheduleId_DueAt`, and the fact
+*observes* that wait in `pg_stat_activity` before it commits the holder, so the resulting 23505 is
+triggered by an event rather than by a timed window. It is
+`PostgresScheduleRaceTests.A_missed_backlog_and_the_due_time_to_queue_survive_a_due_time_another_writer_recorded`,
+a `Category=Postgres` fact in `PostgresCollection` with the other PostgreSQL facts, and its shape is
+the one review M1 widened the guard for: a missed backlog plus a newer due time to queue, with the
+rival holding one of the *missed* due times, so the refusal surfaces from inside `DecideAsync`. Honest
+bounds: SQLite's single writer cannot hold that row for a second transaction, so this needs a real
+PostgreSQL, sits outside the fast filter and skips with the recorded reason without
+`ZENKINS_TEST_POSTGRES`. Its outcome clause is no longer "no run": the refusal rolls the candidate
+back with the rest of the attempt, so the tick re-evaluates once after it (card Q-018), records the
+remaining backlog and queues that due time itself - `Failed = 0`, `Raced = 1`, `Missed = 2`,
+`Queued = 1`, the rival's row left exactly as the rival wrote it and no run for it.
 
 ## Review round 1 (2026-11-16) - the two Mediums and the two Lows
 

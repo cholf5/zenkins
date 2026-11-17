@@ -137,6 +137,13 @@ loop (`dotnet run` from a clone).
 > fact was removed or loosened; the fingerprint now hashes the tags as sent
 > (`RunValidation.ParseTagsAsSent`) instead of the list validation accepted. No new category and no new
 > exclusion - the sextuple filter is unchanged.
+> Q-018 (the schedule's lost-race path) added **1** `Category=Postgres` fact on 2026-11-17, in
+> `Schedules/PostgresScheduleRaceTests.cs`: a second connection holds one of the window's **missed** due
+> times uncommitted, the tick's insert blocks on `IX_ScheduleOccurrences_ScheduleId_DueAt`, the fact
+> *observes* that wait in `pg_stat_activity` before committing the holder, and the tick takes the 23505
+> from inside `DecideAsync` - the shape review M1 widened the guard for. It is in `PostgresCollection`, so
+> it moves no fast count and no new category or exclusion: the fast suite stays 1284, Postgres 3 → 4 and
+> all seven 1310 → 1311 (the same arithmetic below).
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
@@ -289,9 +296,16 @@ that prove the product end to end instead of proving its parts:
   concurrent real trigger posts against `MaxQueuedRuns = 1` admit exactly one run per round, three
   rounds, with a count-then-insert control that leaves two queued runs in the same provider - and
   deleting the staging routine's project row lock turns it red in round 1 while every SQLite `queue-full`
-  fact stays green (the mutation is recorded on F-029). Postgres also has to be in the fast filter's
-  exclusion list for exactly this reason: the retry is unreachable on SQLite, where every write
-  serializes.
+  fact stays green (the mutation is recorded on F-029). Q-018 adds (e) the **schedule's lost race**: a second
+  connection holds one of a schedule's *missed* due times uncommitted, the tick's own insert blocks on
+  `IX_ScheduleOccurrences_ScheduleId_DueAt`, and the fact commits the holder only after it observes that
+  wait in `pg_stat_activity` - so the 23505 needs no timed window. The refusal surfaces from inside
+  `DecideAsync` (the missed backlog is flushed by the run's staging save), which is the path review M1
+  widened the guard for; the fact then requires the due time that ran into it to be **queued** in the
+  same tick (`Failed = 0`, `Raced = 1`, `Queued = 1`, its ledger row naming the run), and the pre-Q-018
+  settle - watermark straight to `now`, no re-read - turns it red at `Queued = 0`. Postgres also has to
+  be in the fast filter's exclusion list for exactly this reason: the retry is unreachable on SQLite,
+  where every write serializes.
 
 None of the harnesses is part of the fast loop, so the fast filter has to exclude **six**
 categories. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix

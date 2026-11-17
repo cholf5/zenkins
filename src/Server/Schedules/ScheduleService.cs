@@ -172,6 +172,14 @@ public sealed record ScheduleTickResult(
 }
 
 /// <summary>
+/// One attempt at one schedule (card Q-018): either the result it committed, or the fact that the unique
+/// <c>(ScheduleId, DueAt)</c> index refused it and the whole attempt was rolled back.
+/// </summary>
+/// <param name="Result">What the attempt did - for a lost attempt, the <c>Raced</c> count it earned.</param>
+/// <param name="LostRace">Whether another writer had already recorded one of this window's due times.</param>
+internal readonly record struct ScheduleAttempt(ScheduleTickResult Result, bool LostRace);
+
+/// <summary>
 /// The schedule feature's server side (card F-024): the settings page's CRUD, the preview, and the one evaluation
 /// routine the sweeper ticks.
 /// <para>
@@ -553,19 +561,63 @@ public sealed class ScheduleService(
     /// <summary>
     /// One schedule, from the watermark to the committed ledger row - transactionally, under the schedule's row
     /// lock, so the run and the record that explains it either both exist or neither does.
+    /// <para>
+    /// <b>A lost race is re-evaluated once (card Q-018).</b> The unique <c>(ScheduleId, DueAt)</c> index refuses the
+    /// whole attempt, and by the time that refusal is reported the writer that caused it has committed - so a second
+    /// attempt reads its rows as already recorded and decides what is left of the window. That is what keeps the
+    /// candidate that ran into the refusal from being dropped: it is either the winner's own row (counted as
+    /// <c>Raced</c>) or still owed a decision, and the second attempt is where it gets one. Settling without
+    /// re-evaluating moved the watermark to <c>now</c> and swallowed the candidate silently.
+    /// </para>
+    /// <para>
+    /// The retry is bounded at one: a second refusal means another writer is committing into this window faster
+    /// than one tick can decide it, so the tick settles instead - and that settle stops at the last recorded due
+    /// time rather than at <c>now</c>, which leaves the window for the next tick instead of skipping it.
+    /// </para>
     /// </summary>
     private async Task<ScheduleTickResult> EvaluateOneAsync(
         Guid scheduleId,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
+        var first = await EvaluateAttemptAsync(scheduleId, now, cancellationToken);
+        if (!first.LostRace)
+        {
+            return first.Result;
+        }
+
+        var second = await EvaluateAttemptAsync(scheduleId, now, cancellationToken);
+        if (!second.LostRace)
+        {
+            return second.Result;
+        }
+
+        // Two refusals in a row: stop retrying (the next tick continues) and report the loss without a `Failed`
+        // count. Neither attempt changed anything - both were rolled back - so the second attempt's result is the
+        // one that describes this tick.
+        await SettleAfterRaceAsync(scheduleId, now, cancellationToken);
+        return second.Result;
+    }
+
+    /// <summary>
+    /// One attempt at one schedule: the whole decision, from the row lock to the commit, in one transaction. It
+    /// either commits and returns its result, or rolls back and reports <see cref="ScheduleAttempt.LostRace"/>
+    /// (the unique index refused a due time another writer had already recorded).
+    /// </summary>
+    private async Task<ScheduleAttempt> EvaluateAttemptAsync(
+        Guid scheduleId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        static ScheduleAttempt Done(ScheduleTickResult result) => new(result, LostRace: false);
+
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
 
         if (await context.LockScheduleForEvaluationAsync(scheduleId, cancellationToken) == 0)
         {
             // The schedule was deleted between discovery and the lock.
-            return new ScheduleTickResult();
+            return Done(new ScheduleTickResult());
         }
 
         // Re-read under the lock: a concurrent tick that committed first has already moved the watermark, and this
@@ -575,7 +627,7 @@ public sealed class ScheduleService(
             cancellationToken);
         if (schedule is null)
         {
-            return new ScheduleTickResult();
+            return Done(new ScheduleTickResult());
         }
 
         var project = await context.Projects
@@ -586,7 +638,7 @@ public sealed class ScheduleService(
         if (project is null)
         {
             // The project's cascade should have removed the schedule; nothing to evaluate if it has not.
-            return new ScheduleTickResult();
+            return Done(new ScheduleTickResult());
         }
 
         if (!ScheduleCron.TryParse(schedule.Cron, out var cron, out _)
@@ -606,14 +658,14 @@ public sealed class ScheduleService(
             schedule.UpdatedAt = now;
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return new ScheduleTickResult(Failed: 1);
+            return Done(new ScheduleTickResult(Failed: 1));
         }
 
         var watermark = schedule.LastEvaluatedAt ?? schedule.CreatedAt;
         if (watermark >= now)
         {
             // Nothing has happened since the last evaluation (and a clock that went backwards never replays).
-            return new ScheduleTickResult();
+            return Done(new ScheduleTickResult());
         }
 
         // The window: no older than the missed-time horizon, so a month of downtime costs one bounded pass.
@@ -768,16 +820,15 @@ public sealed class ScheduleService(
                 schedule.ProjectId,
                 schedule.Id);
 
-            // Review M2: the winner's rows stand for this window, so the losing tick's only remaining job is to
-            // stop retrying it. Without this the next tick recomputes the same due time, conflicts again, and the
-            // schedule never queues anything again - a permanent failure loop behind one Error log per tick.
-            await SettleAfterRaceAsync(schedule.Id, cappedAt ?? now, now, cancellationToken);
-            return new ScheduleTickResult(Raced: Math.Max(1, raced));
+            // Review M2: the winner's rows stand for this window, so the losing attempt's count is one `Raced` per
+            // due time it lost - never a `Failed`. What happens next is the caller's decision (one re-evaluation,
+            // then a settle): Q-018 found that settling here, without re-reading, dropped the candidate.
+            return new ScheduleAttempt(new ScheduleTickResult(Raced: Math.Max(1, raced)), LostRace: true);
         }
 
         await PruneAsync(context, schedule.Id, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return tick;
+        return Done(tick);
     }
 
     /// <summary>
@@ -926,15 +977,27 @@ public sealed class ScheduleService(
     }
 
     /// <summary>
-    /// Review M2: moves one schedule's watermark past a due time another writer already recorded, so a lost due
-    /// time is not recomputed and re-lost on every tick. A fresh context and transaction - the caller's change
-    /// tracker still holds the rows the rollback discarded - and only forward: a watermark that already moved
-    /// (another tick won) is left alone. A failure here is logged and retried by the next tick; it never turns a
-    /// lost due time into a `Failed` count.
+    /// Review M2 and Q-018: stops a schedule from recomputing - and re-losing - a due time another writer already
+    /// recorded, without ever skipping a due time this tick did not decide.
+    /// <para>
+    /// <b>The stop point is the newest due time already in the ledger, not <c>now</c>.</b> A writer can only refuse
+    /// this tick on a due time it has itself committed (that is what the unique index means), so the ledger holds
+    /// at least one row at or before <c>now</c>; moving the watermark there makes the next tick's window start where
+    /// the recorded decision ended. Advancing to <c>now</c> instead moved it past every due time in the window,
+    /// including the candidate that ran into the refusal and was rolled back with it - which is how a due time could
+    /// end up neither queued nor recorded (measured: <c>newestDueWas=12:01:00Z</c>, watermark <c>12:01:30Z</c>, no
+    /// run, one ledger row). With the stop point at the last recorded due time, a candidate newer than that is still
+    /// in the next window and gets its decision; a candidate that <em>is</em> the recorded row is answered by it, and
+    /// the window starts after it, so nothing is recomputed forever.
+    /// </para>
+    /// <para>
+    /// A fresh context and transaction - the caller's change tracker still holds the rows the rollback discarded -
+    /// and only forward: a watermark that already moved (another tick won) is left alone. A failure here is logged
+    /// and retried by the next tick; it never turns a lost due time into a `Failed` count.
+    /// </para>
     /// </summary>
     private async Task SettleAfterRaceAsync(
         Guid scheduleId,
-        DateTimeOffset advancedTo,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
@@ -950,12 +1013,27 @@ public sealed class ScheduleService(
             var schedule = await context.ProjectSchedules.SingleOrDefaultAsync(
                 candidate => candidate.Id == scheduleId,
                 cancellationToken);
-            if (schedule is null || (schedule.LastEvaluatedAt is { } watermark && watermark >= advancedTo))
+            if (schedule is null)
             {
                 return;
             }
 
-            schedule.LastEvaluatedAt = advancedTo;
+            // The last decision the ledger already holds at or before this tick's instant. Read and ordered here:
+            // the handful of rows is bounded by Schedules:RetainedOutcomes, and SQLite cannot order
+            // DateTimeOffset in SQL. No row at all cannot happen after a unique refusal, so `now` is only the
+            // defensive answer to a ledger that was pruned empty.
+            var recorded = await context.ScheduleOccurrences
+                .Where(occurrence => occurrence.ScheduleId == scheduleId && occurrence.DueAt <= now)
+                .Select(occurrence => occurrence.DueAt)
+                .ToListAsync(cancellationToken);
+            var stopAt = recorded.Count == 0 ? now : recorded.Max();
+
+            if (schedule.LastEvaluatedAt is { } watermark && watermark >= stopAt)
+            {
+                return;
+            }
+
+            schedule.LastEvaluatedAt = stopAt;
             schedule.UpdatedAt = now;
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
