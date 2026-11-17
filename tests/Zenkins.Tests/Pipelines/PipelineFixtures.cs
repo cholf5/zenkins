@@ -78,6 +78,45 @@ internal sealed class PipelineRepository : IDisposable
         return commit;
     }
 
+    /// <summary>
+    /// Commits an arbitrary file on <paramref name="branch"/> (creating it from <c>main</c> if needed)
+    /// and pushes it - the branch-without-a-pipeline case F-023's observation has to read.
+    /// </summary>
+    public string CommitFileOnBranch(string branch, string relativePath, string content, string message = "branch file")
+    {
+        var environment = _repository.Environment;
+        var existing = GitCli.Run(_repository.SourcePath, environment, "rev-parse", "--verify", branch);
+        if (existing.ExitCode == 0)
+        {
+            GitCli.MustRun(_repository.SourcePath, environment, "checkout", branch);
+        }
+        else
+        {
+            GitCli.MustRun(_repository.SourcePath, environment, "checkout", "-b", branch);
+        }
+
+        var commit = GitFixtureRepository.CommitFile(_repository.SourcePath, environment, relativePath, content, message);
+        GitCli.MustRun(_repository.SourcePath, environment, "push", "origin", branch);
+        GitCli.MustRun(_repository.SourcePath, environment, "checkout", "main");
+        return commit;
+    }
+
+    /// <summary>
+    /// Creates <paramref name="branch"/> from the current main, removes <paramref name="relativePath"/> and
+    /// pushes - the "this branch has no pipeline file" shape F-023's observation must classify.
+    /// </summary>
+    public string RemoveFileOnBranch(string branch, string relativePath, string message = "remove file")
+    {
+        var environment = _repository.Environment;
+        GitCli.MustRun(_repository.SourcePath, environment, "checkout", "-b", branch);
+        GitCli.MustRun(_repository.SourcePath, environment, "rm", relativePath);
+        GitCli.MustRun(_repository.SourcePath, environment, "commit", "-m", message);
+        var commit = GitCli.MustRun(_repository.SourcePath, environment, "rev-parse", "HEAD").Trim();
+        GitCli.MustRun(_repository.SourcePath, environment, "push", "origin", branch);
+        GitCli.MustRun(_repository.SourcePath, environment, "checkout", "main");
+        return commit;
+    }
+
     /// <summary>Commits an arbitrary file into the repository and pushes it (TC-004's "the branch moved").</summary>
     public string Commit(string relativePath, string content, string message = "commit")
     {

@@ -13,6 +13,9 @@ public static class ProjectFields
     public const string Name = "Name";
     public const string Kind = "Kind";
 
+    /// <summary>F-023: the branch-discovery selector (repository Pipeline projects only).</summary>
+    public const string BranchDiscovery = "BranchDiscovery";
+
     /// <summary>F-022: the create form's definition-source selector (Pipeline kind only).</summary>
     public const string PipelineSource = "PipelineSource";
 
@@ -50,6 +53,12 @@ public static class ProjectErrorCodes
 
     /// <summary>F-022: the definition source is not one of the known sources.</summary>
     public const string PipelineSourceInvalid = "pipeline-source-invalid";
+
+    /// <summary>F-023: the branch-discovery mode is not one of the known modes.</summary>
+    public const string BranchDiscoveryInvalid = "branch-discovery-invalid";
+
+    /// <summary>F-023: the project has no repository (Freestyle or inline), so it cannot discover branches.</summary>
+    public const string BranchDiscoveryUnavailable = "branch-discovery-unavailable";
 
     /// <summary>F-022: an inline Pipeline needs a Lua body - there is no repository file to fall back on.</summary>
     public const string InlineScriptRequired = "inline-script-required";
@@ -122,6 +131,9 @@ public static class ProjectErrorCodes
         NameDuplicate => "A project with this name already exists in this organization.",
         KindInvalid => "The project kind is not one of the known kinds.",
         PipelineSourceInvalid => "The pipeline definition source is not one of the known sources.",
+        BranchDiscoveryInvalid => "The branch discovery mode is not one of the known modes.",
+        BranchDiscoveryUnavailable =>
+            "Only a repository Pipeline can discover branches: a Freestyle or inline Pipeline has no repository to read.",
         InlineScriptRequired => "Enter the pipeline script - an inline Pipeline has no repository file to read.",
         InlineScriptTooLong =>
             $"The pipeline script must be at most {PipelineScriptLimits.MaxScriptBytes / 1024} KiB.",
@@ -353,6 +365,32 @@ public static class ProjectValidation
 
         return ProjectSources.IsValid(source) ? null : ProjectErrorCodes.PipelineSourceInvalid;
     }
+
+    /// <summary>
+    /// Validates the branch-discovery selector (card F-023). Blank means
+    /// <see cref="BranchDiscoveryModes.Single"/> - the historical default, so a client that posts no
+    /// discovery mode keeps today's one-branch behaviour - and anything unknown is refused rather than
+    /// coerced.
+    /// </summary>
+    public static string? ValidateBranchDiscovery(string? value, out string mode)
+    {
+        mode = value?.Trim() ?? string.Empty;
+        if (mode.Length == 0)
+        {
+            mode = BranchDiscoveryModes.Single;
+            return null;
+        }
+
+        return BranchDiscoveryModes.IsKnown(mode) ? null : ProjectErrorCodes.BranchDiscoveryInvalid;
+    }
+
+    /// <summary>
+    /// Whether the project shape can honour <paramref name="mode"/>. Only a repository Pipeline has
+    /// branches: a Freestyle project's steps and an inline Pipeline's script live on the Server, and
+    /// discovery for either would store a setting no code path could act on.
+    /// </summary>
+    public static bool CanDiscoverBranches(string kind, string pipelineSource) =>
+        kind == ProjectKinds.Pipeline && pipelineSource == ProjectSources.Repository;
 
     /// <summary>
     /// Validates an inline Pipeline's Lua body (card F-022). Required and bounded by bytes (the same

@@ -185,16 +185,66 @@ loop (`dotnet run` from a clone).
 > refuses a third word, and `BuildRuns.PipelineScriptText` exists. No new category and no new exclusion -
 > the sextuple filter is unchanged: fast 1287 → 1310, Postgres 4 → 5 and all seven 1314 → 1338 (the same
 > arithmetic below).
+> F-023 (multibranch jobs) added **23** fast facts and **1** `Category=Postgres` fact on 2026-11-17,
+> all in `tests/Zenkins.Tests/Branches`, `ProjectUi/ProjectUiBranchesTests.cs` and the tenancy harness:
+> 6 pure-rule facts (the discovery-mode vocabulary with `single` as the default; the branch-identity
+> bound of 200 - a probe may report 255 but a run's `GitBranch` column holds 200 - and the "never an
+> empty name" rule; the pipeline-state and orphan-evidence vocabularies; and the two branch-filter
+> rules side by side: F-017's three-argument `Matches`, whose empty filter still means the project's
+> *current* default branch, versus F-023's discovery rule, whose empty filter means every branch);
+> 11 host facts driven through the real webhook endpoint, the real worker API and the real services
+> (a single-branch project still queues a branch the registry says has no pipeline, proving the new
+> gate sits behind the mode switch, and writes nothing on the registry; a branch outside a
+> single-branch webhook's filter is still `ignored:branch`; a new branch in `branches` mode is
+> registered (its run is queued only after a definition-only observation reads its tree), with the
+> pipeline state left `unknown`; a branch
+> whose tree was read as no-pipeline is listed and never queued, even at a new head; an over-long
+> branch is recorded `ignored:branch-too-long` instead of failing the insert, while the name exactly
+> at the bound builds; the filter is the discovery rule and a branch it excludes is not registered; a
+> push-delete orphans a branch and keeps its runs, and a later push revives it; two branches never
+> share history and neither the runs filter nor the branch list crosses a project or tenant boundary;
+> a run with no registry row is still listed, with its frozen definition as the has-pipeline proof;
+> a frozen definition records has-pipeline and a `pipeline-missing` completion records no-pipeline at
+> the commit it is evidence about, after which a delivery queues nothing; and a manual trigger picks
+> its branch, defaulting to the project's default);
+> 3 UI facts (the create form stores `branches` and the edit form switches it back, while a Freestyle
+> project is refused `branch-discovery-unavailable`; the Branches tab renders per-branch status,
+> no-pipeline and orphaned rows and answers a foreign id with a real 404; the runs page filters by
+> branch and the filter cannot cross projects); and 3 tenancy facts (branch jobs are invisible across
+> tenants, a cross-tenant write is refused, and `Find` after a tenant switch returns null). The
+> `Category=Postgres` fact seeds a project and a numbered run on the pre-F-023 schema and then
+> migrates: the existing row reads `BranchDiscovery = 'single'` **from the migration's own default**,
+> the branch table is empty, `Main` and `main` coexist under the unique `(ProjectId, Branch)` key, the
+> closed vocabularies and the orphan-evidence pairing are database rules, and deleting the project
+> cascades only its own branch rows. No new category and no new exclusion - the sextuple filter is
+> unchanged.
+> F-023's **second round** added **7** more fast facts on 2026-11-17, once the definition-only
+> observation landed: 6 in `Branches/BranchObservationTests.cs` (an `unreadable` read keeps the
+> previous verdict, stays pending and moves the retry clock, and a later successful read queues the
+> run; two deliveries for one commit share one observation - one claim, then 204; the definition
+> credential route is bound to the task's lease and Worker, 200 for the holder and the same bodyless
+> 404 for another Worker or an unknown id, and the material is `no-store`; the retry sweeper abandons
+> a stale task, moves the clock and does not storm on the next tick; interval discovery registers new
+> heads, asks for their reads, orphans only the branch a successful refs answer omits and queues no
+> run itself; a failed probe registers nothing and orphans nothing) and 1 in
+> `WorkerRuntime/WorkerDefinitionValidationLoopTests.cs` (the real definition loop against a real
+> repository: the branch that deleted `pipeline.lua` is recorded no-pipeline with no run, the branch
+> that has it is recorded has-pipeline and its run is queued pinned to the observed commit). The
+> task family stayed F-022's (one claim/report/lease, extended with a repository-branch kind), so no
+> existing fact moved. No new category and no new exclusion - the sextuple filter is unchanged: fast
+> 1333 -> 1341 (the review's D2 fact added one more: the Branches tab states remote discovery from
+> the project's own probe record), Postgres stays 6 and all seven 1362 -> 1370
+> (12 + 4 + 2 + 2 + 3 + 6).
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines as **fast 1310 (a counted run) and all seven 1338 (that count plus the other six
-> suites' figures)** - Milestone 12, Recovery 4, PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 5,
+> and re-baselines as **fast 1341 (a counted run) and all seven 1370 (that count plus the other six
+> suites' figures)** - Milestone 12, Recovery 4, PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 6,
 > the last one skipping without `ZENKINS_TEST_POSTGRES`. The fast figure is a counted run of the tree
-> that carries Q-018, B-006 and F-022 (1287 plus the twenty-three F-022 facts above); the all-seven total is
-> that same arithmetic on the 1314 of the previous count plus F-022's twenty-three fast facts and its
-> one `Category=Postgres` fact: 12 + 4 + 2 + 2 + 3 + 5 = 1338. Every command in the POSIX
+> that carries Q-018, B-006, F-022 and F-023 (1310 plus F-023's thirty-one fast facts); the all-seven
+> total is that same arithmetic on those thirty-one facts and F-023's one `Category=Postgres` fact:
+> 12 + 4 + 2 + 2 + 3 + 6 = 1370. Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -381,17 +431,17 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1310 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~6 min on the reference machine (1341 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
 | GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
-| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus one migration run on a fresh schema (5 tests) |
+| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus the migration runs on a fresh schema (6 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1338 on the tree that carries Q-018, B-006 and F-022, by the arithmetic in the note
+filter runs **all seven** (1370 on the tree that carries Q-018, B-006, F-022 and F-023, by the arithmetic in the note
 above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined

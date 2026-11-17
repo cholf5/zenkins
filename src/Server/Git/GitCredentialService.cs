@@ -158,20 +158,28 @@ public enum GitCredentialFetchStatus
 public sealed record GitCredentialMaterialView(string Kind, string Value, string? UserName);
 
 /// <summary>
-/// Who is asking for material, for the one log line both worker fetch paths write (card I-005 adds the
-/// probe path). Exactly one of <see cref="RunId"/>/<see cref="ProbeId"/> is set: the two scopes are the
-/// two reasons a worker may decrypt a project's credential, and the log keeps them apart without
+/// Who is asking for material, for the one log line every worker fetch path writes (card I-005 adds the
+/// probe path; card F-023 adds the definition task). Exactly one of
+/// <see cref="RunId"/>/<see cref="ProbeId"/>/<see cref="ValidationId"/> is set: those are the three
+/// leases a worker may decrypt a project's credential under, and the log keeps them apart without
 /// inventing a different line shape.
 /// </summary>
 /// <param name="WorkerId">The authenticated worker.</param>
 /// <param name="RunId">The run whose lease authorized this fetch, when it is a run.</param>
 /// <param name="ProbeId">The probe whose lease authorized this fetch, when it is a probe.</param>
+/// <param name="ValidationId">The definition task whose lease authorized this fetch (F-023's branch
+/// observation), or null.</param>
 /// <remarks>
-/// A record cannot express "exactly one of two", so the shape is enforced where it matters: the one decrypt
-/// entry (<see cref="GitCredentialService.FetchMaterialForProjectAsync"/>) throws for a scope that names both
-/// or neither. A future third caller therefore cannot reach the material with a scope that proved nothing.
+/// A record cannot express "exactly one of three", so the shape is enforced where it matters: the one decrypt
+/// entry (<see cref="GitCredentialService.FetchMaterialForProjectAsync"/>) throws for a scope that names
+/// more than one or none. A future caller therefore cannot reach the material with a scope that proved
+/// nothing.
 /// </remarks>
-public sealed record GitCredentialFetchScope(Guid WorkerId, Guid? RunId = null, Guid? ProbeId = null);
+public sealed record GitCredentialFetchScope(
+    Guid WorkerId,
+    Guid? RunId = null,
+    Guid? ProbeId = null,
+    Guid? ValidationId = null);
 
 /// <summary>The answer of a worker's fetch: material on success, nothing otherwise.</summary>
 public sealed record GitCredentialFetchResult(
@@ -775,13 +783,18 @@ public sealed class GitCredentialService(
     {
         ArgumentNullException.ThrowIfNull(scope);
 
-        // The scope's documented shape is exactly one proven lease - a run or a probe. This method decrypts
-        // without checking either, so it refuses a scope that names both or neither: a future third caller
-        // that forgot to prove a lease fails here, loudly, instead of growing a broader path by accident.
-        if (scope.RunId.HasValue == scope.ProbeId.HasValue)
+        // The scope's documented shape is exactly one proven lease - a run, a probe or a definition task.
+        // This method decrypts without checking any of them, so it refuses a scope that names more than
+        // one or none: a future caller that forgot to prove a lease fails here, loudly, instead of
+        // growing a broader path by accident.
+        var leases = (scope.RunId.HasValue ? 1 : 0)
+            + (scope.ProbeId.HasValue ? 1 : 0)
+            + (scope.ValidationId.HasValue ? 1 : 0);
+        if (leases != 1)
         {
             throw new InvalidOperationException(
-                $"{nameof(GitCredentialFetchScope)} must name exactly one lease (RunId xor ProbeId); "
+                $"{nameof(GitCredentialFetchScope)} must name exactly one lease "
+                + "(RunId, ProbeId or ValidationId); "
                 + "this method decrypts on the caller's authority and cannot infer it.");
         }
 

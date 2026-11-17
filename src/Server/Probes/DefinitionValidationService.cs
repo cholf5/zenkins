@@ -1,8 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using Zenkins.Server.Branches;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Git;
 using Zenkins.Server.Projects;
+using Zenkins.Server.Runs;
 using Zenkins.Server.Workers;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Projects;
@@ -67,7 +70,12 @@ public sealed record DefinitionValidationClaimResult(
         new(DefinitionValidationClaimStatus.Success, new DefinitionValidationClaim(
             entry.Id,
             entry.Script,
-            entry.LeaseExpiresAt!.Value));
+            entry.LeaseExpiresAt!.Value,
+            entry.Kind,
+            entry.RepositoryUrl,
+            entry.Branch,
+            entry.Commit,
+            entry.PipelinePath));
 
     public static DefinitionValidationClaimResult NoWork() => new(DefinitionValidationClaimStatus.NoWork);
 
@@ -134,6 +142,8 @@ public sealed class DefinitionValidationService(
     DefinitionValidationRegistry registry,
     DefinitionValidationOptions options,
     WorkerService workers,
+    GitCredentialService credentials,
+    RunService runs,
     ILogger<DefinitionValidationService> logger)
 {
     /// <summary>
@@ -338,17 +348,51 @@ public sealed class DefinitionValidationService(
             return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.DiagnosticInvalid);
         }
 
-        var valid = input.Outcome == DefinitionValidationOutcomes.Valid;
-        if (valid)
+        // The entry's kind decides which outcomes are legal: an inline task answers valid/invalid, a
+        // repository-branch task answers has-pipeline/no-pipeline. Reading it first is not a trust
+        // boundary (the registry re-checks the lease); it is what keeps one task family from accepting a
+        // word that belongs to the other.
+        var entry = registry.Find(validationId);
+        if (entry is null || entry.OrganizationId != workerToken.OrganizationId)
         {
-            if (!PipelineSpecJson.TryRead(input.SpecJson, out var spec, out _) || spec is null)
+            return DefinitionValidationReportResult.NotFound();
+        }
+
+        var valid = string.Equals(input.Outcome, DefinitionValidationOutcomes.Valid, StringComparison.Ordinal);
+        if (entry.Kind == DefinitionValidationKinds.RepositoryBranch)
+        {
+            if (!DefinitionValidationOutcomes.IsRepositoryReportable(input.Outcome))
             {
-                return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.SpecInvalid);
+                return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.OutcomeInvalid);
+            }
+
+            // "I could not read the tree" is a reportable answer, but it must say why: the retry sweeper
+            // and the operator both need the reason, and an unexplained unreadable would be a gap.
+            if (string.Equals(input.Outcome, DefinitionValidationOutcomes.Unreadable, StringComparison.Ordinal)
+                && input.FailureReason is null
+                && string.IsNullOrWhiteSpace(input.Diagnostic))
+            {
+                return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.DiagnosticInvalid);
             }
         }
-        else if (string.IsNullOrWhiteSpace(input.Diagnostic))
+        else
         {
-            return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.DiagnosticInvalid);
+            if (!DefinitionValidationOutcomes.IsInlineOutcome(input.Outcome))
+            {
+                return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.OutcomeInvalid);
+            }
+
+            if (valid)
+            {
+                if (!PipelineSpecJson.TryRead(input.SpecJson, out var spec, out _) || spec is null)
+                {
+                    return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.SpecInvalid);
+                }
+            }
+            else if (string.IsNullOrWhiteSpace(input.Diagnostic))
+            {
+                return DefinitionValidationReportResult.Invalid(DefinitionValidationErrorCodes.DiagnosticInvalid);
+            }
         }
 
         if (input.FailureReason is { } reason && !PipelineFailureReasons.IsWorkerReportable(reason))
@@ -360,7 +404,7 @@ public sealed class DefinitionValidationService(
             workerToken.OrganizationId,
             validationId,
             workerId,
-            valid,
+            input.Outcome!,
             valid ? input.SpecJson : null,
             input.Diagnostic,
             input.FailureReason,
@@ -371,10 +415,253 @@ public sealed class DefinitionValidationService(
             return DefinitionValidationReportResult.NotFound();
         }
 
-        return reported.ErrorCode is { } errorCode
-            ? DefinitionValidationReportResult.Conflict(errorCode)
-            : DefinitionValidationReportResult.Success();
+        if (reported.ErrorCode is { } errorCode)
+        {
+            return DefinitionValidationReportResult.Conflict(errorCode);
+        }
+
+        // F-023: an observation is the point where a branch verdict becomes durable and, when the answer
+        // is "there is a pipeline here", where the run the push asked for is actually queued. It is
+        // deliberately best effort: the Worker's report has already been accepted, and a registry/queue
+        // failure must not turn it into a retry the Worker cannot act on - the sweeper will ask again.
+        if (reported.Entry.Kind == DefinitionValidationKinds.RepositoryBranch)
+        {
+            await SettleObservationAsync(reported.Entry, cancellationToken);
+        }
+
+        return DefinitionValidationReportResult.Success();
+    }
+
+    /// <summary>
+    /// Queues (or joins) one branch observation for the active project (card F-023): read
+    /// <paramref name="branch"/>'s tree at <paramref name="commit"/> and answer whether the project's
+    /// pipeline file is there. <b>Nothing is queued here</b> - the answer decides that.
+    /// <para>
+    /// The project must be a multibranch repository Pipeline; anything else is refused silently (the
+    /// caller is a webhook/discovery path that already checked, so a refusal is a wiring fact, not a
+    /// user error). The registry memoises per (project, branch, commit), so a retry or a second push for
+    /// the same commit joins the task instead of spawning another clone.
+    /// </para>
+    /// </summary>
+    /// <returns>Whether the project was eligible, and whether this call created a new task (a joined or
+    /// already-answered task is not new work).</returns>
+    public async Task<(bool Enqueued, bool Created)> EnqueueBranchObservationAsync(
+        Guid projectId,
+        string branch,
+        string commit,
+        string? requiredTags,
+        CancellationToken cancellationToken = default)
+    {
+        if (tenantContext.OrganizationId is not { } organizationId
+            || !BranchIdentity.IsStorable(branch)
+            || !GitCommitValidation.IsValid(commit))
+        {
+            return (false, false);
+        }
+
+        ProjectObservationFacts? project;
+        await using (var context = await contextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            project = await context.Projects
+                .AsNoTracking()
+                .Where(candidate => candidate.Id == projectId)
+                .Select(candidate => new ProjectObservationFacts(
+                    candidate.Kind,
+                    candidate.PipelineSource,
+                    candidate.RepositoryUrl,
+                    candidate.PipelinePath,
+                    candidate.BranchDiscovery))
+                .SingleOrDefaultAsync(cancellationToken);
+        }
+
+        if (project is null
+            || !ProjectSources.HasRepository(project.Kind, project.PipelineSource)
+            || string.IsNullOrWhiteSpace(project.RepositoryUrl)
+            || !BranchDiscoveryModes.IsMultibranch(project.BranchDiscovery))
+        {
+            return (false, false);
+        }
+
+        var pipelinePath = string.IsNullOrWhiteSpace(project.PipelinePath)
+            ? ProjectValidation.DefaultPipelinePath
+            : project.PipelinePath;
+        var (entry, created) = registry.EnqueueObservation(
+            organizationId,
+            projectId,
+            project.RepositoryUrl,
+            branch,
+            commit,
+            pipelinePath,
+            requiredTags ?? string.Empty,
+            DateTimeOffset.UtcNow);
+
+        logger.LogInformation(
+            "Branch observation requested. OrganizationId={OrganizationId} ProjectId={ProjectId} Branch={Branch} Commit={Commit} ValidationId={ValidationId} Created={Created}",
+            organizationId,
+            projectId,
+            branch,
+            commit,
+            entry.Id,
+            created);
+        return (true, created);
+    }
+
+    /// <summary>
+    /// The credential material for one branch observation, addressed by the task's id (card F-023). The
+    /// same answers and secrecy as the run and probe fetches: a live lease held by this Worker, one
+    /// bodyless 404 for every miss, <c>no-store</c> on success. The lease behind it is the definition
+    /// task's, never a run's or a probe's.
+    /// </summary>
+    public async Task<GitCredentialFetchResult> FetchMaterialForValidationAsync(
+        string? plaintextToken,
+        Guid validationId,
+        CancellationToken cancellationToken = default)
+    {
+        var workerToken = await workers.AuthenticateWorkerAsync(plaintextToken, cancellationToken);
+        if (workerToken is null || workerToken.WorkerId is not { } workerId)
+        {
+            return GitCredentialFetchResult.InvalidToken();
+        }
+
+        var entry = registry.Find(validationId);
+        var now = DateTimeOffset.UtcNow;
+        if (entry is null
+            || entry.OrganizationId != workerToken.OrganizationId
+            || entry.Kind != DefinitionValidationKinds.RepositoryBranch
+            || entry.WorkerId != workerId
+            || entry.LeaseExpiresAt is not { } expiry
+            || expiry <= now)
+        {
+            logger.LogInformation(
+                "Definition credential request resolved no material. ValidationId={ValidationId} WorkerId={WorkerId}",
+                validationId,
+                workerId);
+            return GitCredentialFetchResult.NotFound();
+        }
+
+        return await credentials.FetchMaterialForProjectAsync(
+            entry.ProjectId,
+            new GitCredentialFetchScope(workerId, ValidationId: entry.Id),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// The one place a branch observation becomes durable (card F-023): record the verdict with the
+    /// commit it is evidence about, clear the pending marker, and - only for <c>has-pipeline</c> - queue
+    /// the run the push asked for, pinned to that commit.
+    /// <para>
+    /// <b>A failed read is not a verdict.</b> When the Worker could not check out the commit (or the
+    /// registry settled the task as no-worker), the branch keeps its previous state and the pending
+    /// marker stays; the retry sweeper asks again after a backoff. Nothing here ever writes
+    /// <c>no-pipeline</c> without an observation, and nothing here deletes anything.
+    /// </para>
+    /// <para>
+    /// The queue write goes through <see cref="RunService.QueueWebhookRunAsync"/>, so the run is the same
+    /// run a push queues: the same F-028/F-029 gate, the same snapshots, the same numbering. A refusal
+    /// (disabled project, full queue) is logged and the delivery is not retried - the project gate owns
+    /// that decision.
+    /// </para>
+    /// </summary>
+    private async Task SettleObservationAsync(
+        DefinitionValidationEntry entry,
+        CancellationToken cancellationToken)
+    {
+        if (entry.Branch is not { Length: > 0 } branch || entry.Commit is not { Length: > 0 } commit)
+        {
+            return;
+        }
+
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+            if (!DefinitionValidationOutcomes.IsRepositoryOutcome(entry.Outcome))
+            {
+                // The task settled without a verdict (a git failure, or no Worker). Keep the pending
+                // marker and move its retry clock; the branch's state is untouched.
+                await BranchService.NoteObservationAttemptAsync(
+                    context, entry.ProjectId, branch, commit, now, cancellationToken);
+                logger.LogInformation(
+                    "Branch observation produced no verdict. OrganizationId={OrganizationId} ProjectId={ProjectId} Branch={Branch} Commit={Commit} FailureReason={FailureReason}",
+                    entry.OrganizationId,
+                    entry.ProjectId,
+                    branch,
+                    commit,
+                    entry.FailureReason);
+                return;
+            }
+
+            var hasPipeline = string.Equals(
+                entry.Outcome, DefinitionValidationOutcomes.HasPipeline, StringComparison.Ordinal);
+            var state = hasPipeline
+                ? BranchPipelineStates.HasPipeline
+                : BranchPipelineStates.NoPipeline;
+
+            await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+            await BranchService.RecordObservationAsync(
+                context,
+                entry.OrganizationId,
+                entry.ProjectId,
+                branch,
+                state,
+                commit,
+                now,
+                cancellationToken);
+
+            if (hasPipeline)
+            {
+                var queued = await runs.QueueWebhookRunAsync(
+                    context,
+                    entry.ProjectId,
+                    branch,
+                    commit,
+                    RunValidation.ParseTags(entry.RequiredTags),
+                    cancellationToken);
+                if (queued.Status != RunOperationStatus.Success)
+                {
+                    logger.LogInformation(
+                        "Branch observation queued no run. OrganizationId={OrganizationId} ProjectId={ProjectId} Branch={Branch} Commit={Commit} Status={Status}",
+                        entry.OrganizationId,
+                        entry.ProjectId,
+                        branch,
+                        commit,
+                        queued.Status);
+                }
+            }
+
+            await BranchService.ClearPendingObservationAsync(
+                context, entry.ProjectId, branch, commit, now, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            logger.LogInformation(
+                "Branch observation recorded. OrganizationId={OrganizationId} ProjectId={ProjectId} Branch={Branch} Commit={Commit} State={State}",
+                entry.OrganizationId,
+                entry.ProjectId,
+                branch,
+                commit,
+                state);
+        }
+        catch (Exception failure)
+        {
+            // The Worker's report has already been accepted; a failure here is ours to retry, not its
+            // to resend. The pending marker survives, so the sweeper asks again.
+            logger.LogWarning(
+                failure,
+                "Branch observation not recorded. OrganizationId={OrganizationId} ProjectId={ProjectId} Branch={Branch} Commit={Commit}",
+                entry.OrganizationId,
+                entry.ProjectId,
+                branch,
+                commit);
+        }
     }
 
     private sealed record ProjectFacts(string Kind, string PipelineSource);
+
+    private sealed record ProjectObservationFacts(
+        string Kind,
+        string PipelineSource,
+        string? RepositoryUrl,
+        string? PipelinePath,
+        string BranchDiscovery);
 }

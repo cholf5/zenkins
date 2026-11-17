@@ -93,22 +93,62 @@ public static class WebhookBranchFilter
 
         foreach (var pattern in patterns)
         {
-            if (pattern.EndsWith(Wildcard))
-            {
-                // Trailing wildcard: a prefix match on the part before it. No other wildcard can reach
-                // here - Validate refuses it - so "release/*" cannot accidentally become a regex.
-                if (branch.StartsWith(pattern[..^1], StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-            else if (string.Equals(pattern, branch, StringComparison.Ordinal))
+            if (MatchesPattern(pattern, branch))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Card F-023's <b>discovery rule</b>: which pushes a multibranch project should turn into (or
+    /// refresh) a branch job. Deliberately a separate method, not a mode flag on
+    /// <see cref="Matches"/>:
+    /// <list type="bullet">
+    /// <item>an empty discovery filter means <b>every branch</b> - discovery has no single default
+    /// branch to fall back on, which is exactly what "the branch filter becomes the discovery rule"
+    /// means;</item>
+    /// <item><see cref="Matches"/> keeps its three-argument meaning bit for bit (empty filter = the
+    /// project's <em>current</em> default branch, resolved at delivery time), because that is F-017's
+    /// contract and every single-branch project still depends on it.</item>
+    /// </list>
+    /// The pattern vocabulary is the same one - exact names and one trailing wildcard - so a filter
+    /// written for a single-branch webhook is not re-interpreted.
+    /// </summary>
+    public static bool MatchesDiscovery(string? filterText, string branch)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(branch);
+
+        var patterns = Parse(filterText);
+        if (patterns.Length == 0)
+        {
+            return true;
+        }
+
+        foreach (var pattern in patterns)
+        {
+            if (MatchesPattern(pattern, branch))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>One pattern against one branch (the shared vocabulary both rules above use).</summary>
+    private static bool MatchesPattern(string pattern, string branch)
+    {
+        if (pattern.EndsWith(Wildcard))
+        {
+            // Trailing wildcard: a prefix match on the part before it. No other wildcard can reach
+            // here - Validate refuses it - so "release/*" cannot accidentally become a regex.
+            return branch.StartsWith(pattern[..^1], StringComparison.Ordinal);
+        }
+
+        return string.Equals(pattern, branch, StringComparison.Ordinal);
     }
 
     /// <summary>

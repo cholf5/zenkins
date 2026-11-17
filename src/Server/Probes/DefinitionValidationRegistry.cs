@@ -11,7 +11,31 @@ public sealed class DefinitionValidationEntry
 
     public required Guid ProjectId { get; init; }
 
-    public required string Script { get; init; }
+    /// <summary>
+    /// Which subject this task describes (<see cref="DefinitionValidationKinds"/>). An inline-script
+    /// task carries <see cref="Script"/>; a repository-branch task carries the repository snapshot
+    /// (<see cref="RepositoryUrl"/>, <see cref="Branch"/>, <see cref="Commit"/>, <see cref="PipelinePath"/>)
+    /// and no script.
+    /// </summary>
+    public string Kind { get; init; } = DefinitionValidationKinds.InlineScript;
+
+    /// <summary>The Lua body to describe (inline tasks only).</summary>
+    public string? Script { get; init; }
+
+    /// <summary>The repository to read (repository-branch tasks only).</summary>
+    public string? RepositoryUrl { get; init; }
+
+    /// <summary>The branch to check out (repository-branch tasks only).</summary>
+    public string? Branch { get; init; }
+
+    /// <summary>The commit to pin - the evidence commit a verdict is about (repository-branch tasks only).</summary>
+    public string? Commit { get; init; }
+
+    /// <summary>The project's pipeline path at request time (repository-branch tasks only).</summary>
+    public string? PipelinePath { get; init; }
+
+    /// <summary>The tags a run queued from this observation carries (a webhook's required tags).</summary>
+    public string RequiredTags { get; init; } = string.Empty;
 
     public required DateTimeOffset CreatedAt { get; init; }
 
@@ -21,6 +45,10 @@ public sealed class DefinitionValidationEntry
 
     public bool Settled { get; set; }
 
+    /// <summary>The outcome word the Worker reported (<see cref="DefinitionValidationOutcomes"/>), or null.</summary>
+    public string? Outcome { get; set; }
+
+    /// <summary>Inline tasks: whether the script's definition phase produced a spec.</summary>
     public bool Valid { get; set; }
 
     public string? SpecJson { get; set; }
@@ -76,8 +104,11 @@ public static class DefinitionValidationFailureReasons
 /// </summary>
 public sealed class DefinitionValidationRegistry
 {
-    /// <summary>The most pending/settled entries kept, oldest pruned first.</summary>
-    public const int MaxEntries = 64;
+    /// <summary>
+    /// The most pending/settled entries kept. A settled entry is pruned before a pending one, so a busy
+    /// discovery pass cannot evict the task a Worker is about to claim.
+    /// </summary>
+    public const int MaxEntries = 256;
 
     private readonly Lock _gate = new();
     private readonly List<DefinitionValidationEntry> _entries = [];
@@ -115,14 +146,93 @@ public sealed class DefinitionValidationRegistry
 
         lock (_gate)
         {
-            _entries.Add(entry);
-            while (_entries.Count > MaxEntries)
-            {
-                _entries.RemoveAt(0);
-            }
+            Add(entry);
         }
 
         return entry;
+    }
+
+    /// <summary>
+    /// Queues (or joins) one branch observation for a Worker: read <paramref name="branch"/>'s tree at
+    /// <paramref name="commit"/> and answer has-pipeline / no-pipeline.
+    /// <para>
+    /// <b>Memoised per (project, branch, commit) while in flight.</b> An unsettled task for the same key
+    /// is shared, so ten pushes to one branch cannot spawn ten clones. A <em>settled</em> task is not
+    /// reused: its verdict is already on the branch row (and a settled task left behind by a failed write
+    /// must not block the retry that would fix it). That is also what keeps a discovery sweep from
+    /// turning into a per-branch probe storm - the sweep asks for the same key a push already asked for.
+    /// </para>
+    /// </summary>
+    /// <returns>The entry and whether this call created it (false: joined or already answered).</returns>
+    public (DefinitionValidationEntry Entry, bool Created) EnqueueObservation(
+        Guid organizationId,
+        Guid projectId,
+        string repositoryUrl,
+        string branch,
+        string commit,
+        string pipelinePath,
+        string requiredTags,
+        DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            var existing = _entries.FirstOrDefault(entry =>
+                entry.Kind == DefinitionValidationKinds.RepositoryBranch
+                && !entry.Settled
+                && entry.ProjectId == projectId
+                && string.Equals(entry.Branch, branch, StringComparison.Ordinal)
+                && string.Equals(entry.Commit, commit, StringComparison.Ordinal));
+            if (existing is not null)
+            {
+                return (existing, false);
+            }
+
+            var created = new DefinitionValidationEntry
+            {
+                Id = Guid.NewGuid(),
+                OrganizationId = organizationId,
+                ProjectId = projectId,
+                Kind = DefinitionValidationKinds.RepositoryBranch,
+                RepositoryUrl = repositoryUrl,
+                Branch = branch,
+                Commit = commit,
+                PipelinePath = pipelinePath,
+                RequiredTags = requiredTags,
+                CreatedAt = now,
+            };
+            Add(created);
+            return (created, true);
+        }
+    }
+
+    /// <summary>
+    /// Unsettled observations older than <paramref name="maxAge"/>. The retry sweeper abandons them (a
+    /// task nobody claimed or answered cannot stay in the queue forever) and moves the branch's retry
+    /// clock, so "no Worker" backs off instead of becoming a request storm.
+    /// </summary>
+    public IReadOnlyList<DefinitionValidationEntry> StaleObservations(DateTimeOffset now, TimeSpan maxAge)
+    {
+        lock (_gate)
+        {
+            return
+            [
+                .. _entries.Where(entry =>
+                    entry.Kind == DefinitionValidationKinds.RepositoryBranch
+                    && !entry.Settled
+                    && now - entry.CreatedAt >= maxAge),
+            ];
+        }
+    }
+
+    /// <summary>Adds an entry and prunes to the cap, settled entries first.</summary>
+    private void Add(DefinitionValidationEntry entry)
+    {
+        _entries.Add(entry);
+        while (_entries.Count > MaxEntries)
+        {
+            var settled = _entries.FindIndex(candidate => candidate.Settled);
+            _entries.RemoveAt(settled < 0 ? 0 : settled);
+        }
     }
 
     /// <summary>One entry by id, or null when it was pruned.</summary>
@@ -184,7 +294,7 @@ public sealed class DefinitionValidationRegistry
         Guid organizationId,
         Guid validationId,
         Guid workerId,
-        bool valid,
+        string outcome,
         string? specJson,
         string? diagnostic,
         string? failureReason,
@@ -211,7 +321,8 @@ public sealed class DefinitionValidationRegistry
             }
 
             entry.Settled = true;
-            entry.Valid = valid;
+            entry.Outcome = outcome;
+            entry.Valid = string.Equals(outcome, DefinitionValidationOutcomes.Valid, StringComparison.Ordinal);
             entry.SpecJson = specJson;
             entry.Diagnostic = diagnostic;
             entry.FailureReason = failureReason;

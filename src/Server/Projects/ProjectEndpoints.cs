@@ -412,6 +412,9 @@ public static class ProjectEndpoints
             // F-022: the source is small enough to echo back (the script is not: it can be 64 KiB and
             // the URL is not the place for it; the editor starts empty after a refused create).
             ["pipelineSource"] = form?.PipelineSource,
+
+            // F-023: the discovery choice is a word, so the refused create/edit keeps it selected.
+            ["branchDiscovery"] = form?.BranchDiscovery,
         });
 
         return Results.Redirect($"{formPath}{query}");
@@ -425,7 +428,7 @@ public static class ProjectEndpoints
     /// values, so the service's validation - not a null reference - answers the request (F-019).
     /// </summary>
     private static ProjectInput EmptyInput() =>
-        new(Name: null, Kind: null, RepositoryUrl: null, DefaultBranch: null, PipelinePath: null);
+        new(Name: null, Kind: null, RepositoryUrl: null, DefaultBranch: null, PipelinePath: null, BranchDiscovery: null);
 
     /// <summary>
     /// Card F-028's disable form: the reason is the only field, and it is required - the person whose
@@ -490,6 +493,10 @@ public static class ProjectEndpoints
         /// <summary>F-022: the create form's inline Lua body, posted only for the inline source.</summary>
         public string? InlineScript { get; set; }
 
+        /// <summary>F-023: the branch-discovery selector (repository Pipeline projects only). Blank
+        /// keeps the historical one-branch behaviour.</summary>
+        public string? BranchDiscovery { get; set; }
+
         public ProjectInput ToInput() => new(
             Name,
             Kind,
@@ -497,7 +504,8 @@ public static class ProjectEndpoints
             DefaultBranch,
             PipelinePath,
             PipelineSource,
-            InlineScript);
+            InlineScript,
+            BranchDiscovery);
     }
 
     /// <summary>

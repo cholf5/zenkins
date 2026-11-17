@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -363,6 +364,137 @@ internal sealed class WebhooksTestHost : IDisposable
                 .SweepOnceAsync(TestContext.Current.CancellationToken));
 
     // ------------------------------------------------------------------
+    // Card F-023: definition tasks (the branch observation) and probes
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Claims one definition task through the real worker API and returns it, or null for the 204
+    /// answer. Used to play a Worker by hand, exactly like the run claim helpers.
+    /// </summary>
+    public async Task<DefinitionClaim?> ClaimDefinitionAsync(HttpClient client, string workerToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/workers/definitions/claim");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", workerToken);
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+        {
+            return null;
+        }
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        using var body = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var root = body.RootElement;
+        return new DefinitionClaim(
+            root.GetProperty("validationId").GetGuid(),
+            root.TryGetProperty("kind", out var kind) ? kind.GetString() : null,
+            root.TryGetProperty("script", out var script) && script.ValueKind == System.Text.Json.JsonValueKind.String
+                ? script.GetString()
+                : null,
+            root.TryGetProperty("repositoryUrl", out var repository) ? repository.GetString() : null,
+            root.TryGetProperty("branch", out var branch) ? branch.GetString() : null,
+            root.TryGetProperty("commit", out var commit) ? commit.GetString() : null,
+            root.TryGetProperty("pipelinePath", out var path) ? path.GetString() : null);
+    }
+
+    /// <summary>Reports one definition task's answer through the real worker API.</summary>
+    public Task<HttpResponseMessage> ReportDefinitionAsync(
+        HttpClient client,
+        string workerToken,
+        Guid validationId,
+        string outcome,
+        string? diagnostic = null,
+        string? failureReason = null) =>
+        WorkerTestHost.SendWorkerJsonAsync(
+            client,
+            workerToken,
+            $"/api/workers/definitions/{validationId}/report",
+            new { outcome, diagnostic, failureReason });
+
+    /// <summary>
+    /// Plays one whole observation by hand: claim the oldest task, report the given answer. Returns the
+    /// claimed task (null when nothing was queued).
+    /// </summary>
+    public async Task<DefinitionClaim?> ObserveOnceAsync(
+        string workerToken,
+        string outcome,
+        string? diagnostic = null,
+        string? failureReason = null)
+    {
+        using var client = CreateDeliveryClient();
+        var claim = await ClaimDefinitionAsync(client, workerToken);
+        if (claim is null)
+        {
+            return null;
+        }
+
+        using var response = await ReportDefinitionAsync(
+            client, workerToken, claim.ValidationId, outcome, diagnostic, failureReason);
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        return claim;
+    }
+
+    /// <summary>Polls the in-memory definition registry until a repository observation exists.</summary>
+    public async Task WaitForObservationAsync(Guid projectId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var found = await Host.InScopeAsync(services =>
+            {
+                var registry = services.GetRequiredService<Zenkins.Server.Probes.DefinitionValidationRegistry>();
+                return Task.FromResult(registry.Snapshots.Any(entry =>
+                    entry.ProjectId == projectId
+                    && entry.Kind == Zenkins.Shared.Pipelines.DefinitionValidationKinds.RepositoryBranch));
+            });
+            if (found)
+            {
+                return;
+            }
+
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException("No branch observation was queued in time.");
+    }
+
+    /// <summary>Waits for the in-flight probe a discovery pass starts (card F-023).</summary>
+    public async Task<Zenkins.Server.Probes.GitProbeSnapshot> WaitForUnsettledProbeAsync(TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var pending = await Host.InScopeAsync(services => Task.FromResult(
+                services.GetRequiredService<Zenkins.Server.Probes.GitProbeRegistry>().Snapshots
+                    .FirstOrDefault(probe => !probe.IsSettled)));
+            if (pending is not null)
+            {
+                return pending;
+            }
+
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException("No probe was in flight within the timeout.");
+    }
+
+    /// <summary>Reads the definition registry (the in-memory task queue).</summary>
+    public Task<IReadOnlyList<Zenkins.Server.Probes.DefinitionValidationEntry>> ObservationsAsync() =>
+        Host.InScopeAsync(services => Task.FromResult(
+            (IReadOnlyList<Zenkins.Server.Probes.DefinitionValidationEntry>)services
+                .GetRequiredService<Zenkins.Server.Probes.DefinitionValidationRegistry>()
+                .Snapshots));
+
+    /// <summary>One definition task as the tests read it.</summary>
+    public sealed record DefinitionClaim(
+        Guid ValidationId,
+        string? Kind,
+        string? Script,
+        string? RepositoryUrl,
+        string? Branch,
+        string? Commit,
+        string? PipelinePath);
+
+    // ------------------------------------------------------------------
     // Deliveries
     // ------------------------------------------------------------------
 
@@ -501,7 +633,10 @@ internal sealed class WebhooksTestHost : IDisposable
     /// Registers a worker with a directly created token (the product's authentication path, no form):
     /// the token row is what the claim endpoint resolves. Returns the plaintext token.
     /// </summary>
-    public Task<string> CreateWorkerAsync(string name = "webhook-agent", string tags = "ci") =>
+    public Task<string> CreateWorkerAsync(
+        string name = "webhook-agent",
+        string tags = "ci",
+        bool canProbe = true) =>
         Host.InScopeAsync(async services =>
         {
             var systemDataScope = services.GetRequiredService<ISystemDataScope>();
@@ -519,6 +654,7 @@ internal sealed class WebhooksTestHost : IDisposable
                 CpuCount = 4,
                 MaxConcurrency = 8,
                 Status = WorkerStatus.Online,
+                CanProbe = canProbe,
             };
             context.Workers.Add(worker);
 
@@ -569,7 +705,8 @@ internal sealed class WebhooksTestHost : IDisposable
         Guid organizationId,
         string name,
         string repositoryUrl,
-        string defaultBranch) =>
+        string defaultBranch,
+        string branchDiscovery = Zenkins.Shared.Projects.BranchDiscoveryModes.Single) =>
         Host.InScopeAsync(async services =>
         {
             var systemDataScope = services.GetRequiredService<ISystemDataScope>();
@@ -582,10 +719,92 @@ internal sealed class WebhooksTestHost : IDisposable
                 Name = name,
                 RepositoryUrl = repositoryUrl,
                 DefaultBranch = defaultBranch,
+                BranchDiscovery = branchDiscovery,
             };
             context.Projects.Add(project);
             await context.SaveChangesAsync();
             return project.Id;
+        });
+
+    // ------------------------------------------------------------------
+    // F-023: branch discovery
+    // ------------------------------------------------------------------
+
+    /// <summary>Switches one project's discovery mode through the row (the form path is a separate fact).</summary>
+    public Task SetBranchDiscoveryAsync(Guid projectId, string mode) =>
+        Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+            var project = (await context.SystemQueryAsync<Project>(row => row.Id == projectId)).Single();
+            project.BranchDiscovery = mode;
+            await context.SaveChangesAsync();
+            return true;
+        });
+
+    /// <summary>
+    /// Runs an action with the active tenant selected, so a scoped service that reads through the
+    /// query filter (BranchService, RunService) sees the seeded organization's rows - the same
+    /// selection a signed-in request makes.
+    /// </summary>
+    public Task<T> WithTenantAsync<T>(Func<IServiceProvider, Task<T>> action) =>
+        Host.InScopeAsync(async services =>
+        {
+            services.GetRequiredService<TenantContext>().OrganizationId = OrganizationId;
+            return await action(services);
+        });
+
+    /// <summary>Every branch job of the seeded project, read across tenants like the other readers.</summary>
+    public Task<List<BranchJob>> ReadBranchesAsync(Guid? projectId = null) =>
+        Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+            var target = projectId ?? ProjectId;
+            return await context.SystemQueryAsync<BranchJob>(row => row.ProjectId == target);
+        });
+
+    /// <summary>
+    /// Seeds one branch job with a known verdict (the discovery-observation seam). The evidence commit is
+    /// carried with the state, exactly as a worker's answer would carry it.
+    /// </summary>
+    public Task<Guid> SeedBranchAsync(
+        string branch,
+        string state = BranchPipelineStates.Unknown,
+        string? commit = null,
+        DateTimeOffset? orphanedAt = null,
+        string? orphanedEvidence = null,
+        Guid? projectId = null,
+        string? pendingCommit = null,
+        DateTimeOffset? pendingSince = null,
+        int observationAttempts = 0,
+        string pendingTags = "") =>
+        Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+
+            var row = new BranchJob
+            {
+                OrganizationId = OrganizationId,
+                ProjectId = projectId ?? ProjectId,
+                Branch = branch,
+                PipelineState = state,
+                LastCommit = commit,
+                ObservedCommit = state == BranchPipelineStates.Unknown ? null : commit,
+                OrphanedAt = orphanedAt,
+                OrphanedEvidence = orphanedEvidence,
+                PendingCommit = pendingCommit,
+                PendingSince = pendingSince,
+                ObservationAttempts = observationAttempts,
+                PendingTags = pendingTags,
+            };
+            context.BranchJobs.Add(row);
+            await context.SaveChangesAsync();
+            return row.Id;
         });
 
     public Task<Guid> AddOrganizationAsync(

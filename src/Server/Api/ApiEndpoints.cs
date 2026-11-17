@@ -176,7 +176,7 @@ public static class ApiEndpoints
             return Results.NotFound();
         }
 
-        var all = await runs.GetProjectRunsAsync(projectId, cancellationToken);
+        var all = await runs.GetProjectRunsAsync(projectId, branch: null, cancellationToken);
         return Results.Json(Page(all.Select(ApiRunResource.From).ToArray(), page, pageSize, all.Count));
     }
 

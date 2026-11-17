@@ -1,9 +1,15 @@
 using System.Net;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Zenkins.Server.Branches;
+using Zenkins.Server.Data.Entities;
+using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Probes;
 using Zenkins.Shared.Pipelines;
+using Zenkins.Shared.Projects;
+using Zenkins.Tests.Pipelines;
 using Zenkins.Tests.Runs;
 using Zenkins.Worker;
 
@@ -119,6 +125,105 @@ public sealed class WorkerDefinitionValidationLoopTests : IDisposable
             await stop.CancelAsync();
             await loopTask.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
         }
+    }
+
+    [Fact(Timeout = 120 * 1000)]
+    public async Task The_real_loop_reads_a_branch_tree_and_records_has_pipeline_or_no_pipeline()
+    {
+        // Card F-023 end to end: a real repository (pipeline.lua on main, none on docs), the real clone
+        // layer, the real loop. The branch without the pipeline file is recorded as no-pipeline and
+        // produces no run; the branch with it is recorded as has-pipeline and the run the push would
+        // have asked for is queued, pinned to the observed commit.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var repository = PipelineRepository.Create("""
+            pipeline {
+              name = "observed",
+              steps = { { name = "Only", run = { "echo", "ok" } } },
+            }
+            """);
+        var docsCommit = repository.RemoveFileOnBranch("docs", "pipeline.lua");
+        var mainCommit = repository.MainTip;
+
+        using var host = await RunTestHost.CreateAsync(configureAppConfiguration: builder =>
+            builder.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DefinitionValidationOptions.WaitSecondsKey] = "10",
+                [DefinitionValidationOptions.PollMillisecondsKey] = "20",
+            }));
+        var projectId = await host.SeedProjectAsync("branch-observation", repository.FileUrl);
+
+        await host.InSystemScopeAsync(async context =>
+        {
+            var project = context.Projects.IgnoreQueryFilters().Single(row => row.Id == projectId);
+            project.BranchDiscovery = BranchDiscoveryModes.Branches;
+            await context.SaveChangesAsync(cancellationToken);
+            return true;
+        });
+
+        var (token, _) = await host.RegisterWorkerAsync(name: "real-observation-loop");
+
+        await host.Host.InScopeAsync(async services =>
+        {
+            services.GetRequiredService<TenantContext>().OrganizationId = await host.OrganizationIdAsync();
+            var observations = services.GetRequiredService<DefinitionValidationService>();
+            await observations.EnqueueBranchObservationAsync(projectId, "docs", docsCommit, null, cancellationToken);
+            await observations.EnqueueBranchObservationAsync(projectId, "main", mainCommit, null, cancellationToken);
+            return true;
+        });
+
+        var (loop, stop) = CreateLoop(host, token);
+        var loopTask = loop.RunAsync(stop.Token);
+        try
+        {
+            var rows = await WaitForVerdictsAsync(host, projectId, expected: 2);
+            var docs = rows.Single(row => row.Branch == "docs");
+            var main = rows.Single(row => row.Branch == "main");
+
+            Assert.Equal(BranchPipelineStates.NoPipeline, docs.PipelineState);
+            Assert.Equal(docsCommit, docs.ObservedCommit);
+            Assert.Equal(BranchPipelineStates.HasPipeline, main.PipelineState);
+            Assert.Equal(mainCommit, main.ObservedCommit);
+            Assert.Null(docs.PendingCommit);
+            Assert.Null(main.PendingCommit);
+
+            // Exactly the has-pipeline branch produced a run, and it is pinned to the observed commit.
+            var runs = await host.InSystemScopeAsync(context => Task.FromResult(
+                context.BuildRuns.IgnoreQueryFilters()
+                    .Where(run => run.ProjectId == projectId)
+                    .ToList()));
+            var run = Assert.Single(runs);
+            Assert.Equal("main", run.GitBranch);
+            Assert.Equal(mainCommit, run.GitCommit);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await loopTask.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
+        }
+    }
+
+    private static async Task<IReadOnlyList<Zenkins.Server.Data.Entities.BranchJob>> WaitForVerdictsAsync(
+        RunTestHost host,
+        Guid projectId,
+        int expected)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        while (DateTime.UtcNow < deadline)
+        {
+            var rows = await host.InSystemScopeAsync(context => Task.FromResult(
+                context.BranchJobs.IgnoreQueryFilters()
+                    .Where(branch => branch.ProjectId == projectId)
+                    .ToList()));
+            if (rows.Count >= expected && rows.All(row => row.PendingCommit is null || row.ObservationAttempts > 0)
+                && rows.Count(row => row.PipelineState != BranchPipelineStates.Unknown) == expected)
+            {
+                return rows;
+            }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException("The observation loop produced no verdicts in time.");
     }
 
     private (WorkerDefinitionValidationLoop Loop, CancellationTokenSource Stop) CreateLoop(

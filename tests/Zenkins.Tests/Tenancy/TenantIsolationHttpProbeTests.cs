@@ -324,6 +324,7 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
         yield return $"/projects/{projectId}/edit";
         yield return $"/projects/{projectId}/delete/confirm";
         yield return $"/projects/{projectId}/parameters";
+        yield return $"/projects/{projectId}/branches";
     }
 
     private async Task<HttpClient> SignInAsync(string email)

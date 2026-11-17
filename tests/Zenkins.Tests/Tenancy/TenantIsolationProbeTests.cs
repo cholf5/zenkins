@@ -367,6 +367,32 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             TwoOrgsFixture.WebhookDeliveryBId,
             CancellationToken);
 
+    // ---- F-023: branch jobs of a multibranch project ---------------------
+
+    [Fact]
+    public Task Branch_jobs_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BranchJob>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_branch_job_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<BranchJob>(
+            _fixture,
+            () => new BranchJob
+            {
+                // Only the tenant field is wrong: the project and the branch are the fixture's own.
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                Branch = "feature/cross-tenant",
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_branch_jobs() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<BranchJob>(
+            _fixture,
+            TwoOrgsFixture.BranchAId,
+            TwoOrgsFixture.BranchBId,
+            CancellationToken);
+
     // ---- F-024: cron schedules and their due-time ledger -----------------
 
     [Fact]

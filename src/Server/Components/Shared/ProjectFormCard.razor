@@ -210,6 +210,35 @@
                 <code>..</code> are rejected.
             </p>
         </div>
+
+        @* F-023: how this project chooses its branches. It sits inside the repository fields on
+           purpose: a Freestyle or inline project (where the JS hides this block) has no repository and
+           therefore cannot discover anything - the server refuses that combination too. *@
+        <div class="bb:space-y-2" data-project-branch-discovery>
+            <label for="project-branch-discovery" class="bb:text-sm bb:font-medium">Branch discovery</label>
+            <select id="project-branch-discovery"
+                    name="BranchDiscovery"
+                    aria-invalid="@(BranchDiscoveryError is null ? null : "true")"
+                    aria-describedby="@(BranchDiscoveryError is null ? null : "project-branch-discovery-error")"
+                    class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                <option value="@BranchDiscoveryModes.Single" selected="@(SelectedBranchDiscovery == BranchDiscoveryModes.Single)">
+                    Single branch - the project's default branch (today's behaviour)
+                </option>
+                <option value="@BranchDiscoveryModes.Branches" selected="@(SelectedBranchDiscovery == BranchDiscoveryModes.Branches)">
+                    Every branch - one branch job per branch that has the pipeline file
+                </option>
+            </select>
+            @if (BranchDiscoveryError is { } branchDiscoveryError)
+            {
+                <p id="project-branch-discovery-error" role="alert" class="bb:text-xs bb:text-destructive">@branchDiscoveryError</p>
+            }
+            <p class="bb:text-xs bb:text-muted-foreground">
+                With discovery on, a push to any branch the webhook selects becomes that branch's own
+                job: its own runs, its own last status. Settings, credentials and parameters stay defined
+                once on the project. A branch without the pipeline file is listed as
+                <strong>no pipeline</strong> and is not built.
+            </p>
+        </div>
     </div>
     }
 
@@ -266,6 +295,19 @@
     /// <summary>F-022: the inline Lua body on the create form.</summary>
     [Parameter]
     public string? InlineScript { get; set; }
+
+    /// <summary>
+    /// F-023: the branch-discovery mode the form selects (<see cref="BranchDiscoveryModes"/>). Blank
+    /// means <see cref="BranchDiscoveryModes.Single"/> - the historical default - so a form that omits
+    /// the selector keeps today's behaviour.
+    /// </summary>
+    [Parameter]
+    public string? BranchDiscovery { get; set; }
+
+    private string SelectedBranchDiscovery =>
+        BranchDiscoveryModes.IsMultibranch(BranchDiscovery) ? BranchDiscoveryModes.Branches : BranchDiscoveryModes.Single;
+
+    private string? BranchDiscoveryError => ErrorFor(ProjectFields.BranchDiscovery);
 
     private string SelectedKind => Kind == ProjectKinds.Freestyle ? ProjectKinds.Freestyle : ProjectKinds.Pipeline;
 

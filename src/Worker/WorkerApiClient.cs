@@ -200,14 +200,20 @@ public sealed record WorkerProbeReportRequest(
 public sealed record WorkerProbeReportResponse(string Status);
 
 /// <summary>
-/// A definition-only validation leased to this worker (card F-022): the id to report against, the
-/// exact script to describe, and until when the lease holds. No repository and no run: the worker
-/// writes the script to its scratch tree and runs the definition phase alone.
+/// A definition-only task leased to this worker (cards F-022 and F-023): the id to report against, the
+/// lease, and the subject. An <c>inline-script</c> task carries <see cref="Script"/>; a
+/// <c>repository-branch</c> task carries the repository snapshot and no script. A null/absent
+/// <see cref="Kind"/> is an inline task - the F-022 shape a pre-F-023 server sends.
 /// </summary>
 public sealed record WorkerDefinitionValidationClaimResponse(
     Guid ValidationId,
-    string Script,
-    DateTimeOffset LeaseExpiresAt);
+    string? Script,
+    DateTimeOffset LeaseExpiresAt,
+    string? Kind = null,
+    string? RepositoryUrl = null,
+    string? Branch = null,
+    string? Commit = null,
+    string? PipelinePath = null);
 
 /// <summary>
 /// One validation's answer (card F-022): <c>valid</c> carries the frozen spec, <c>invalid</c> the
@@ -515,6 +521,16 @@ public sealed class WorkerApiClient(HttpClient httpClient)
         Guid probeId,
         CancellationToken cancellationToken) =>
         new GitCredentialClient(httpClient).FetchForProbeAsync(workerToken, probeId, cancellationToken);
+
+    /// <summary>
+    /// The material for one definition task this worker holds (card F-023's branch observation).
+    /// <c>null</c> means "no credential assigned" and the observation clones anonymously.
+    /// </summary>
+    public Task<GitCredentialMaterial?> FetchDefinitionGitCredentialAsync(
+        string workerToken,
+        Guid validationId,
+        CancellationToken cancellationToken) =>
+        new GitCredentialClient(httpClient).FetchForDefinitionAsync(workerToken, validationId, cancellationToken);
 
     /// <summary>
     /// Reports a finished run with its exit code (0 → Success, non-zero → Failed on the server) and,

@@ -139,6 +139,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>F-024: B's only due-time row.</summary>
     public static readonly Guid ScheduleOccurrenceBId = new("b0000000-0000-4000-8000-0000000000b4");
 
+    /// <summary>F-023: A's only branch job, the positive control for the branch probes.</summary>
+    public static readonly Guid BranchAId = new("a0000000-0000-4000-8000-0000000000c1");
+
+    /// <summary>F-023: B's only branch job (the id a cross-tenant probe substitutes).</summary>
+    public static readonly Guid BranchBId = new("b0000000-0000-4000-8000-0000000000c2");
+
     /// <summary>F-027: A's only API token, the positive control for the API probes.</summary>
     public static readonly Guid ApiTokenAId = new("a0000000-0000-4000-8000-0000000000a1");
 
@@ -711,6 +717,29 @@ public sealed class TwoOrgsFixture : IDisposable
                 DueAt = dueAt,
                 Outcome = "queued",
                 RecordedAt = dueAt,
+            });
+
+        // F-023: one branch job per organization. Their branch names are the same on purpose - the
+        // key is (ProjectId, Branch) inside one tenant, and two organizations legitimately track the
+        // same branch name.
+        context.Set<BranchJob>().AddRange(
+            new BranchJob
+            {
+                Id = BranchAId,
+                OrganizationId = OrgAId,
+                ProjectId = ProjectAId,
+                Branch = "main",
+                PipelineState = BranchPipelineStates.HasPipeline,
+                ObservedCommit = new string('a', 40),
+            },
+            new BranchJob
+            {
+                Id = BranchBId,
+                OrganizationId = OrgBId,
+                ProjectId = ProjectBId,
+                Branch = "main",
+                PipelineState = BranchPipelineStates.NoPipeline,
+                ObservedCommit = new string('b', 40),
             });
 
         context.SaveChanges();

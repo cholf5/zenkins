@@ -45,6 +45,10 @@ public static class TenantIsolationProbes
             // TenantIsolationProbeTests (each tenant sees only its own; a cross-tenant write is refused;
             // a Find after a tenant switch finds nothing).
             typeof(ProjectSchedule), typeof(ScheduleOccurrence),
+
+            // F-023: the branch jobs of a multibranch project - the same three probes, plus the branch
+            // list's own project+tenant scope (the same branch name in another project never appears).
+            typeof(BranchJob),
         ];
 
     /// <summary>

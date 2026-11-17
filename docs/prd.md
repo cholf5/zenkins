@@ -214,6 +214,7 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 | Inline Script | `inline` Pipeline 的 Lua 正文（仅 `inline`；上限 64 KiB） |
 | Repository URL | Git 仓库地址（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 为空） |
 | Default Branch | 默认分支（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 为空） |
+| Branch Discovery | 分支发现模式：`single`（默认，沿用原有单分支行为）或 `branches`（每个含 Pipeline 文件的分支成为一个 Branch Job，v1.2 新增）。只有 `repository` 来源的 Pipeline 可设为 `branches` |
 | Credentials | Git 认证信息（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 拒绝赋值） |
 | Pipeline Path | Pipeline 文件路径，默认 `pipeline.lua`（仅 `repository` 来源的 Pipeline；`inline` 的项目行留空，Run 快照记录 `pipeline.lua`） |
 | Disabled | 是否已禁用（见下）。禁用只停触发，不删历史 |
@@ -231,6 +232,7 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 - 支持 Private Repository。
 - 支持配置 Git Credentials（仅 `repository` 来源的 Pipeline）。
 - 支持指定默认分支（仅 `repository` 来源）。
+- 支持分支发现（v1.2 新增，见 §3.3.7）：`single` 为默认，行为与 v1.1 完全一致；`branches` 把一个项目的每个分支作为独立 Branch Job，各有自己的 Run 历史与最后状态。
 - 支持指定 Pipeline 文件路径（仅 `repository` 来源）。
 - 支持手动触发构建。
 - 支持 Git Webhook 触发构建（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 无仓库可推送）。
@@ -409,6 +411,21 @@ Shell 只是逃生口，不是主要 Pipeline 编排方式。
 - 对脚本执行时间和资源使用设置限制。
 
 特别说明：Lua Runtime 的 API 限制不等于操作系统级安全沙箱。真正执行外部构建命令的 Worker 仍然具有其操作系统账户的权限，必须通过专用账户、工作目录隔离和权限控制保护宿主环境。
+
+#### 3.3.7 多分支（Multibranch）
+
+`Branch Discovery = branches` 的 `repository` Pipeline 项目把自己的分支当作独立作业，而不是为每个分支复制一个项目：
+
+- **容器仍是项目行**：设置、凭据、Secrets、参数只在项目上定义一次；分支不复制设置。项目 Kind 不变，分支发现是一个设置有，不是第三种 Kind。
+- **Branch Job 的键是 `(ProjectId, Branch)`**：分支名按 git ref 的大小写精确比较（`Main` 与 `main` 是两个分支），并与 Run 快照的 `GitBranch` 同一口径。Run 的快照仍是权威：没有分支行、但已有 Run 的分支（包括本功能之前的历史行）仍然出现在分支列表中。
+- **发现来源**：Webhook 投递（推送里已经带有分支与 commit）在 `branches` 模式下把分支过滤器当作发现规则——过滤器的空值表示「所有分支」；非空时仍是原来的精确名/尾部通配符语法。
+- **无推送的发现**：`branches` 项目按间隔通过 I-005 的 Git remote probe 读取仓库 heads（每个 repository 每 tick 一次 probe，绝不每分支一次）。新的 head 注册为分支并请求一次树读取；**成功的** refs 应答中缺失的分支被标记为 orphaned（`refs-absent`），probe 失败不注册、不改状态、也不标记 orphan。
+- **Pipeline 文件的有无必须是观察到的证据**：一个分支只有在真正读取过它的树之后才被记为 `has-pipeline` 或 `no-pipeline`；状态与所读的 commit 一起保存。读取由 F-022 的 definition-only 任务族承担（不建 Run、不占构建槽位），按 `(branch, commit)` 记忆，未变化的 head 不重复读取。「没有 Run」、probe 失败或无人应答都**不能**推断为 `no-pipeline`。
+- **未知不排队**：没有针对该 commit 的判定时不排 Run，而是记录 `awaiting-observation` 并请求读取；只有 `has-pipeline` 才在该 commit 上排 Run，`no-pipeline` 记录后不排。读取失败（clone/checkout 失败、无 Worker）保持 prior 判定并退避重试（指数增长、有上限）；分支行上的 pending commit 使该请求跨 Server 重启存活。
+- **`no-pipeline` 不是失败**：没有 Pipeline 文件的分支只出现在分支列表里（标记为 no pipeline），不产生 Run，也不占用构建槽位。已有 `no-pipeline` 证据的分支在拿到新证据之前不会被再次入队。
+- **上游删除分支不删历史**：分支行被标记为 orphaned（证据只有两种：push 的 delete 事件，或一次**成功**的 refs 应答不再列出该分支），其 Run 与日志全部保留；不存在隐式删除。
+- **编号仍按项目**：F-036 的 `#N` 仍在一个项目内唯一（不改唯一索引）；分支列表只展示每个分支最近一次 Run 的编号。Retention（F-038，规划中）应以 Branch Job 为作用域。
+- **手动触发**：`branches` 项目的手动触发可选择分支（默认项目的默认分支），校验与原有分支覆盖一致。
 
 ### 3.4 Worker 管理
 

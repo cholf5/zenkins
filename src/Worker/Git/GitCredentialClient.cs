@@ -33,6 +33,13 @@ public sealed class GitCredentialClient
     /// </summary>
     public const string ProbeRouteFormat = "api/workers/probes/{0}/git-credential";
 
+    /// <summary>
+    /// Card F-023's definition-task route (mirrors <c>GitCredentialEndpoints.DefinitionFetchPath</c>):
+    /// the material for a branch observation, addressed by the task id. A third lease, a third route -
+    /// a definition id cannot fetch a run's or a probe's material.
+    /// </summary>
+    public const string DefinitionRouteFormat = "api/workers/definitions/{0}/git-credential";
+
     /// <summary>The per-request ceiling: a hung server must not hold the clone forever.</summary>
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
 
@@ -65,6 +72,16 @@ public sealed class GitCredentialClient
         Guid probeId,
         CancellationToken cancellationToken = default) =>
         FetchAsync(workerToken, ProbeRouteFormat, probeId, "probe", cancellationToken);
+
+    /// <summary>
+    /// Fetches the material for one definition task this worker holds (card F-023). Same shapes, timeouts
+    /// and secrecy rules; only the route differs, because the Server authorizes a definition lease.
+    /// </summary>
+    public Task<GitCredentialMaterial?> FetchForDefinitionAsync(
+        string workerToken,
+        Guid validationId,
+        CancellationToken cancellationToken = default) =>
+        FetchAsync(workerToken, DefinitionRouteFormat, validationId, "definition", cancellationToken);
 
     private async Task<GitCredentialMaterial?> FetchAsync(
         string workerToken,

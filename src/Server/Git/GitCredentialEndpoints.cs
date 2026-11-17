@@ -72,6 +72,12 @@ public static class GitCredentialEndpoints
     /// </summary>
     public const string ProbeFetchPath = "/api/workers/probes/{probeId:guid}/git-credential";
 
+    /// <summary>
+    /// Card F-023's definition-task fetch: the same material, addressed by the observation's id. A third
+    /// route behind a third lease, so no id can be replayed on another route.
+    /// </summary>
+    public const string DefinitionFetchPath = "/api/workers/definitions/{validationId:guid}/git-credential";
+
     /// <summary>Maps the management endpoints, the settings list and the worker fetch.</summary>
     public static IEndpointRouteBuilder MapGitCredentialEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -99,6 +105,10 @@ public static class GitCredentialEndpoints
         // credential surface - and because the two answer shapes must stay identical by being written
         // once. The authorization behind it is the probe lease (GitProbeService), never the run's.
         endpoints.MapGet(ProbeFetchPath, FetchProbeMaterialAsync);
+
+        // F-023: the definition task's fetch. It lives here for the same reason the probe's does: this
+        // is the credential surface, and all three answer with the same shape written once.
+        endpoints.MapGet(DefinitionFetchPath, FetchDefinitionMaterialAsync);
         return endpoints;
     }
 
@@ -320,6 +330,28 @@ public static class GitCredentialEndpoints
         var result = await probes.FetchMaterialForProbeAsync(
             WorkerEndpoints.BearerToken(httpContext),
             probeId,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            GitCredentialFetchStatus.Success => WithNoStore(httpContext, Results.Json(result.Material)),
+            GitCredentialFetchStatus.InvalidToken => Results.Unauthorized(),
+            _ => Results.NotFound(),
+        };
+    }
+
+    /// <summary>
+    /// Card F-023: the definition-task material fetch. Exactly the probe path's answers (401, one
+    /// bodyless 404, material with <c>no-store</c>); only the lease that authorizes it differs.
+    /// </summary>
+    private static async Task<IResult> FetchDefinitionMaterialAsync(
+        Guid validationId,
+        HttpContext httpContext,
+        Zenkins.Server.Probes.DefinitionValidationService validations)
+    {
+        var result = await validations.FetchMaterialForValidationAsync(
+            WorkerEndpoints.BearerToken(httpContext),
+            validationId,
             httpContext.RequestAborted);
 
         return result.Status switch

@@ -19,7 +19,18 @@
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
                 <BbCardTitle As="h1" tabindex="-1">Runs · @_project.Name</BbCardTitle>
-                <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+                @if (BranchFilter is { Length: > 0 } filtered)
+                {
+                    @* F-023: the branch filter is a real query parameter on this route, so a branch
+                       link is a deep link that reloads, shares and goes back/forward. *@
+                    <BbBadge Variant="BadgeVariant.Secondary">Branch: @filtered</BbBadge>
+                    <a href="@($"/projects/{_project.Id}/runs")"
+                       class="bb:text-sm bb:font-medium bb:underline bb:underline-offset-4">Show all branches</a>
+                }
+                else
+                {
+                    <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+                }
                 @* F-028: the history stays readable while the project is disabled - and the badge says
                    why no new run appeared. *@
                 @if (_project.Disabled)
@@ -67,8 +78,19 @@
                                     <p class="bb:font-medium">
                                         <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
-                                            @* F-014: a run is a pipeline execution on a branch, not a command line. *@
-                                            @run.GitBranch · @run.PipelinePath
+                                            @* F-014: a run is a pipeline execution on a branch, not a command line.
+                                               F-023: the branch itself filters this page, so a branch job's
+                                               history is one click away (and only that branch's runs). *@
+                                            @if (run.GitBranch.Length > 0)
+                                            {
+                                                <a href="@($"/projects/{_project.Id}/runs?branch={Uri.EscapeDataString(run.GitBranch)}")"
+                                                   class="bb:underline bb:underline-offset-4">@run.GitBranch</a>
+                                            }
+                                            else
+                                            {
+                                                <span>@run.GitBranch</span>
+                                            }
+                                            · @run.PipelinePath
                                             @if (run.PipelineName is { } pipelineName)
                                             {
                                                 <span> · @pipelineName</span>
@@ -103,6 +125,13 @@
     [Parameter]
     public Guid ProjectId { get; set; }
 
+    /// <summary>
+    /// F-023: show only one branch's runs. Blank means the whole project. The value is a query
+    /// parameter, never a route segment, so the unfiltered page's route is unchanged.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "branch")]
+    private string? BranchFilter { get; set; }
+
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
@@ -127,7 +156,9 @@
             return;
         }
 
-        _runs = await RunsService.GetProjectRunsAsync(ProjectId);
+        // F-023: project + branch + tenant. The service scopes all three, so a same-named branch in
+        // another project of the same organization can never appear here.
+        _runs = await RunsService.GetProjectRunsAsync(ProjectId, BranchFilter);
     }
 
     private void SetNotFound()

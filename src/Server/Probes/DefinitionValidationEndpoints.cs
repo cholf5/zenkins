@@ -45,7 +45,12 @@ public static class DefinitionValidationEndpoints
             _ => Results.Json(new DefinitionValidationClaimResponse(
                 result.Claim!.ValidationId,
                 result.Claim.Script,
-                result.Claim.LeaseExpiresAt)),
+                result.Claim.LeaseExpiresAt,
+                result.Claim.Kind,
+                result.Claim.RepositoryUrl,
+                result.Claim.Branch,
+                result.Claim.Commit,
+                result.Claim.PipelinePath)),
         };
     }
 
@@ -78,11 +83,20 @@ public static class DefinitionValidationEndpoints
         };
     }
 
-    /// <summary>What a claim hands over: the id to report against, the script to describe, and the lease.</summary>
+    /// <summary>
+    /// What a claim hands over: the id to report against, the lease, and the subject. An inline task
+    /// carries <paramref name="Script"/>; a repository-branch task (F-023) carries the repository
+    /// snapshot and a null script. No credential rides here - the Worker fetches it under this lease.
+    /// </summary>
     public sealed record DefinitionValidationClaimResponse(
         Guid ValidationId,
-        string Script,
-        DateTimeOffset LeaseExpiresAt);
+        string? Script,
+        DateTimeOffset LeaseExpiresAt,
+        string Kind,
+        string? RepositoryUrl,
+        string? Branch,
+        string? Commit,
+        string? PipelinePath);
 
     /// <summary>The report's answer: recorded (the worker needs nothing else).</summary>
     public sealed record DefinitionValidationReportResponse(string Status);

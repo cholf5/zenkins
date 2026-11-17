@@ -2,10 +2,13 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Auth;
+using Zenkins.Server.Branches;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Probes;
 using Zenkins.Server.Runs;
+using Zenkins.Shared.Projects;
 
 namespace Zenkins.Server.Webhooks;
 
@@ -86,6 +89,8 @@ public sealed class WebhookDeliveryService(
     WebhookSecretProtector protector,
     WebhookOptions options,
     RunService runs,
+    BranchService branches,
+    DefinitionValidationService validations,
     TimeProvider timeProvider,
     ILogger<WebhookDeliveryService> logger)
 {
@@ -169,7 +174,14 @@ public sealed class WebhookDeliveryService(
         //    copy taken when the webhook was created).
         var project = await context.Projects
             .Where(candidate => candidate.Id == webhook.ProjectId)
-            .Select(candidate => new { candidate.Id, candidate.Kind, candidate.PipelineSource, candidate.DefaultBranch })
+            .Select(candidate => new
+            {
+                candidate.Id,
+                candidate.Kind,
+                candidate.PipelineSource,
+                candidate.DefaultBranch,
+                candidate.BranchDiscovery,
+            })
             .SingleOrDefaultAsync(cancellationToken);
         if (project is null)
         {
@@ -185,25 +197,113 @@ public sealed class WebhookDeliveryService(
             outcome = WebhookOutcomes.IgnoredNoRepository;
         }
 
-        if (outcome == WebhookOutcomes.Queued
+        // F-023: the mode decides which rule below runs - and, because the two rules are separate code
+        // paths rather than a flag inside WebhookBranchFilter.Matches, `single` keeps F-017's semantics
+        // bit for bit (empty filter = the project's current default branch).
+        var isMultibranch = BranchDiscoveryModes.IsMultibranch(project.BranchDiscovery);
+
+        if (outcome == WebhookOutcomes.Queued && isMultibranch)
+        {
+            // The identity bound first: a probe may report a 255-character ref while a run's branch
+            // column holds 200, so an over-long branch is a recorded refusal here instead of a failed
+            // insert (and it is never truncated - that would be a different branch).
+            if (!BranchIdentity.IsStorable(branch))
+            {
+                outcome = WebhookOutcomes.BranchTooLong;
+            }
+            else if (!WebhookBranchFilter.MatchesDiscovery(webhook.BranchFilter, branch))
+            {
+                // The branch filter as the discovery rule: an empty filter means every branch.
+                outcome = WebhookOutcomes.IgnoredBranch;
+            }
+            else
+            {
+                // The verdict decides. It is always evidence about a commit: a branch's earlier
+                // no-pipeline answer says nothing about a newer head, so that case asks for a fresh
+                // observation instead of reusing the old verdict.
+                var (state, observedCommit) = await branches.GetVerdictAsync(
+                    project.Id, branch, cancellationToken);
+                if (state == BranchPipelineStates.HasPipeline)
+                {
+                    outcome = WebhookOutcomes.Queued;
+                }
+                else if (state == BranchPipelineStates.NoPipeline
+                    && string.Equals(observedCommit, payload.After, StringComparison.Ordinal))
+                {
+                    // AC-3's gate, and it only fires on evidence about this commit.
+                    outcome = WebhookOutcomes.NoPipeline;
+                }
+                else
+                {
+                    // No verdict about this commit yet (a new branch, or a head that moved). The
+                    // delivery queues nothing and asks for a tree read; unknown is never guessed.
+                    outcome = WebhookOutcomes.AwaitingObservation;
+                }
+            }
+        }
+        else if (outcome == WebhookOutcomes.Queued
             && !WebhookBranchFilter.Matches(webhook.BranchFilter, branch, project.DefaultBranch ?? string.Empty))
         {
             outcome = WebhookOutcomes.IgnoredBranch;
         }
 
+        // F-023: what this delivery records on the branch registry. A push-delete is the one piece of
+        // evidence that may orphan a branch job; a queued/no-pipeline/ignored-branch delivery records a
+        // sighting (which never changes the pipeline state). Everything is committed with the delivery
+        // record, and nothing here deletes a row or a run.
+        var branchRecord = isMultibranch && BranchIdentity.IsStorable(branch)
+            ? outcome switch
+            {
+                // The filter is the discovery rule: a branch it excludes is not discovered (it has no
+                // row and no state), so only a push this project accepted registers a sighting.
+                WebhookOutcomes.Queued or WebhookOutcomes.NoPipeline or WebhookOutcomes.AwaitingObservation =>
+                    BranchRecord.Seen,
+                WebhookOutcomes.IgnoredDelete => BranchRecord.Delete,
+                _ => BranchRecord.None,
+            }
+            : BranchRecord.None;
+
         // 7. Claim the dedupe key and queue the run as ONE unit of work (review m6). The delivery record and
         //    the run it describes either both exist or neither does: a crash in between used to leave a
         //    record that made every retry answer "duplicate" with no run behind it, i.e. that push was lost
         //    for good.
-        return await ClaimAndQueueAsync(
+        var result = await ClaimAndQueueAsync(
             context,
             webhook,
             DedupeKey(body, deliveryId),
             outcome,
             branch,
             payload.After,
+            branchRecord,
+            // A branch with no verdict about this commit remembers the commit itself: an in-memory task
+            // queue is lost on a restart, the row is not.
+            pendingCommit: outcome == WebhookOutcomes.AwaitingObservation ? payload.After : null,
+            pendingTags: webhook.RequiredTags,
             allowStaleReclaim: true,
             cancellationToken);
+
+        // F-023: ask for the tree read *after* the branch row committed, so a fast Worker answer can
+        // never be overwritten by a pending marker that commits later. Best effort: the row's pending
+        // marker is what the sweeper retries from, so a failed enqueue loses nothing.
+        if (outcome == WebhookOutcomes.AwaitingObservation && result.Status == WebhookDeliveryStatus.Accepted)
+        {
+            try
+            {
+                await validations.EnqueueBranchObservationAsync(
+                    project.Id, branch, payload.After, webhook.RequiredTags, cancellationToken);
+            }
+            catch (Exception failure)
+            {
+                logger.LogWarning(
+                    failure,
+                    "Branch observation not requested at delivery. OrganizationId={OrganizationId} ProjectId={ProjectId} Branch={Branch}",
+                    webhook.OrganizationId,
+                    project.Id,
+                    branch);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -304,6 +404,9 @@ public sealed class WebhookDeliveryService(
         string outcome,
         string branch,
         string commit,
+        BranchRecord branchRecord,
+        string? pendingCommit,
+        string pendingTags,
         bool allowStaleReclaim,
         CancellationToken cancellationToken)
     {
@@ -335,8 +438,39 @@ public sealed class WebhookDeliveryService(
                 outcome,
                 branch,
                 commit,
+                branchRecord,
+                pendingCommit,
+                pendingTags,
                 allowStaleReclaim,
                 cancellationToken);
+        }
+
+        // F-023: the branch registry, in the same transaction as the delivery and the run. Only the
+        // winning delivery reaches this line, so a replay cannot refresh a branch's sighting. A
+        // push-delete is the one write that may mark a branch orphaned; a sighting never changes the
+        // pipeline state (only a worker's observation does).
+        if (branchRecord == BranchRecord.Delete)
+        {
+            await BranchService.MarkOrphanedAsync(
+                context,
+                webhook.ProjectId,
+                branch,
+                BranchOrphanEvidence.PushDelete,
+                now,
+                cancellationToken);
+        }
+        else if (branchRecord == BranchRecord.Seen)
+        {
+            await BranchService.RecordSeenAsync(
+                context,
+                webhook.OrganizationId,
+                webhook.ProjectId,
+                branch,
+                commit,
+                now,
+                cancellationToken,
+                pendingCommit,
+                pendingTags);
         }
 
         Guid? runId = null;
@@ -427,6 +561,9 @@ public sealed class WebhookDeliveryService(
         string outcome,
         string branch,
         string commit,
+        BranchRecord branchRecord,
+        string? pendingCommit,
+        string pendingTags,
         bool allowStaleReclaim,
         CancellationToken cancellationToken)
     {
@@ -443,8 +580,8 @@ public sealed class WebhookDeliveryService(
         {
             return allowStaleReclaim
                 ? await ClaimAndQueueAsync(
-                    context, webhook, dedupeKey, outcome, branch, commit, allowStaleReclaim: false,
-                    cancellationToken)
+                    context, webhook, dedupeKey, outcome, branch, commit, branchRecord,
+                    pendingCommit, pendingTags, allowStaleReclaim: false, cancellationToken)
                 : new WebhookDeliveryResult(WebhookDeliveryStatus.Duplicate, outcome);
         }
 
@@ -475,7 +612,8 @@ public sealed class WebhookDeliveryService(
 
         context.ChangeTracker.Clear();
         return await ClaimAndQueueAsync(
-            context, webhook, dedupeKey, outcome, branch, commit, allowStaleReclaim: false, cancellationToken);
+            context, webhook, dedupeKey, outcome, branch, commit, branchRecord,
+            pendingCommit, pendingTags, allowStaleReclaim: false, cancellationToken);
     }
 
     /// <summary>
@@ -530,4 +668,15 @@ public sealed class WebhookDeliveryService(
         string BranchFilter,
         string RequiredTags,
         bool Enabled);
+
+    /// <summary>
+    /// What a multibranch delivery writes on the branch registry (card F-023): nothing for a
+    /// single-branch project, a sighting for a branch push it recorded, or a push-delete orphan marker.
+    /// </summary>
+    private enum BranchRecord
+    {
+        None = 0,
+        Seen = 1,
+        Delete = 2,
+    }
 }

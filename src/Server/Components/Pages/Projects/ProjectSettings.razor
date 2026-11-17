@@ -46,7 +46,8 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="settings" Kind="@_project.Kind" />
+        <ProjectTabs ProjectId="@_project.Id" Active="settings" Kind="@_project.Kind"
+                     BranchDiscovery="@_project.BranchDiscovery" />
 
         @if (Notice is { } notice)
         {
@@ -110,6 +111,15 @@
                         <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Name</dt>
                         <dd>@_project.Name</dd>
                     </div>
+                    @if (ProjectSources.HasRepository(_project.Kind, _project.PipelineSource))
+                    {
+                        @* F-023: the discovery mode is stated here and changed on the edit page, like
+                           the rest of the project's fields - it is a setting, not a second job kind. *@
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branch discovery</dt>
+                            <dd>@(BranchDiscoveryModes.IsMultibranch(_project.BranchDiscovery) ? "Every branch" : "Single branch")</dd>
+                        </div>
+                    }
                     @if (_project.Kind == ProjectKinds.Freestyle)
                     {
                         @* F-020: the three repository fields do not exist for this kind, so the card

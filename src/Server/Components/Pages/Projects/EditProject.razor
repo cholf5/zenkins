@@ -51,6 +51,7 @@
                                  RepositoryUrl="@EffectiveRepositoryUrl"
                                  DefaultBranch="@EffectiveDefaultBranch"
                                  PipelinePath="@EffectivePipelinePath"
+                                 BranchDiscovery="@EffectiveBranchDiscovery"
                                  ErrorCode="@ErrorCode" />
             </BbCardContent>
         </BbCard>
@@ -86,6 +87,10 @@
     [SupplyParameterFromQuery(Name = "pipelinePath")]
     private string? SubmittedPipelinePath { get; set; }
 
+    /// <summary>F-023: the discovery mode echoed back after a refused edit.</summary>
+    [SupplyParameterFromQuery(Name = "branchDiscovery")]
+    private string? SubmittedBranchDiscovery { get; set; }
+
     // On a validation redirect the submitted values (not the stored ones) are echoed back, so the
     // user fixes the field instead of retyping the form.
     private string? EffectiveName => SubmittedName ?? _project?.Name;
@@ -95,6 +100,8 @@
     private string? EffectiveDefaultBranch => SubmittedDefaultBranch ?? _project?.DefaultBranch;
 
     private string? EffectivePipelinePath => SubmittedPipelinePath ?? _project?.PipelinePath;
+
+    private string? EffectiveBranchDiscovery => SubmittedBranchDiscovery ?? _project?.BranchDiscovery;
 
     private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
 

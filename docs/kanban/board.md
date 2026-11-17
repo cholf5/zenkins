@@ -12,7 +12,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
-| [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | L | | I-005, F-017, F-036 |
 | [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | M | | I-005, F-017 |
 | [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | M | | F-036 |
 | [F-030](issues/f-030-stage-grouping.md) | Stage grouping: named stages in the frozen spec, with status and duration | P2 | L | | F-014, F-015, F-020 |
@@ -104,3 +103,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | 2026-11-17 |
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Two small inconsistencies the F-020/F-021 review found — duplicate choice entries and a Freestyle row's inherited pipeline path | P3 | 2026-11-17 |
 | [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | 2026-11-17 |
+| [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | 2026-11-17 |

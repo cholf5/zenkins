@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System.Runtime.CompilerServices;
 using Zenkins.Server.Auth;
+using Zenkins.Server.Branches;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
@@ -1771,11 +1772,18 @@ public sealed class RunService(
     /// <summary>Runs of one project in the active organization, newest first.</summary>
     public async Task<IReadOnlyList<RunView>> GetProjectRunsAsync(
         Guid projectId,
+        string? branch = null,
         CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        // F-023's branch filter. The project id and the branch are both part of the query, and the
+        // context's tenant filter adds the organization: a same-named branch in another project of the
+        // same organization can never appear here, and a foreign project id answers an empty list.
+        // The branch is matched ordinally, exactly as BuildRun.GitBranch stores it.
         var runs = await context.BuildRuns
             .Where(run => run.ProjectId == projectId)
+            .Where(run => branch == null || run.GitBranch == branch)
             .ToListAsync(cancellationToken);
         return (await ToViewsAsync(context, runs, cancellationToken))
             .OrderByDescending(run => run.CreatedAt)
@@ -2556,6 +2564,16 @@ public sealed class RunService(
 
             await transaction.CommitAsync(cancellationToken);
 
+            // F-023: a frozen spec is evidence that the branch's tree contains the pipeline file. The
+            // write is evidence-only and best effort: a registry hiccup must never turn a definition
+            // report the worker can no longer retry into a failure.
+            await RecordBranchEvidenceAsync(
+                run.ProjectId,
+                run.GitBranch,
+                BranchPipelineStates.HasPipeline,
+                gitCommit ?? run.GitCommit,
+                cancellationToken);
+
             logger.LogInformation(
                 "Run definition frozen. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} GitCommit={GitCommit} SpecBytes={SpecBytes}",
                 workerToken.OrganizationId,
@@ -2849,6 +2867,20 @@ public sealed class RunService(
             run.EndedAt = now;
             await context.SaveChangesAsync(cancellationToken);
 
+            // F-023: `pipeline-missing` is the worker's proof that this branch's checkout has no
+            // pipeline file. It is the only run-side path that may record `no-pipeline`, and it records
+            // the commit it is evidence about - so the state can never be inferred from a missing run or
+            // a failed probe. Best effort: the run is already terminal.
+            if (string.Equals(failureReason, PipelineFailureReasons.PipelineMissing, StringComparison.Ordinal))
+            {
+                await RecordBranchEvidenceAsync(
+                    run.ProjectId,
+                    run.GitBranch,
+                    BranchPipelineStates.NoPipeline,
+                    run.GitCommit,
+                    cancellationToken);
+            }
+
             // The run is terminal: flush the ingest tail and evict its buffer, so a run recorded
             // as finished never leaves lines behind nor keeps server memory (F-008's completed
             // path mirrors F-007's cleanup-before-report discipline on the server side).
@@ -2867,6 +2899,61 @@ public sealed class RunService(
         finally
         {
             await context.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Records evidence a run produced about its branch (card F-023): a frozen definition proves the
+    /// pipeline file exists, and <c>pipeline-missing</c> proves it does not. <b>Only a multibranch
+    /// project is recorded</b> (a single-branch project's behaviour, including its branch rows, is
+    /// unchanged), and only a storable branch identity. The write is its own short unit of work and
+    /// never throws: the run or the definition report it follows is already durable, and a registry
+    /// failure is logged instead of rewriting that outcome.
+    /// </summary>
+    private async Task RecordBranchEvidenceAsync(
+        Guid projectId,
+        string branch,
+        string state,
+        string? commit,
+        CancellationToken cancellationToken)
+    {
+        if (!BranchIdentity.IsStorable(branch) || tenantContext.OrganizationId is not { } organizationId)
+        {
+            return;
+        }
+
+        try
+        {
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var discovery = await context.Projects
+                .AsNoTracking()
+                .Where(project => project.Id == projectId)
+                .Select(project => project.BranchDiscovery)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (!BranchDiscoveryModes.IsMultibranch(discovery))
+            {
+                return;
+            }
+
+            await BranchService.RecordObservationAsync(
+                context,
+                organizationId,
+                projectId,
+                branch,
+                state,
+                commit,
+                DateTimeOffset.UtcNow,
+                cancellationToken);
+        }
+        catch (Exception failure)
+        {
+            logger.LogWarning(
+                failure,
+                "Branch evidence not recorded. OrganizationId={OrganizationId} ProjectId={ProjectId} Branch={Branch} State={State}",
+                organizationId,
+                projectId,
+                branch,
+                state);
         }
     }
 

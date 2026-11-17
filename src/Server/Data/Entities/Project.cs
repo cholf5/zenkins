@@ -54,6 +54,23 @@ public sealed class Project : ITenantOwned
     public string? DefaultBranch { get; set; }
 
     /// <summary>
+    /// Card F-023: how this project decides which branches it builds - one job on the default branch
+    /// (<see cref="Zenkins.Shared.Projects.BranchDiscoveryModes.Single"/>, the default and today's
+    /// behaviour) or one branch job per discovered branch
+    /// (<see cref="Zenkins.Shared.Projects.BranchDiscoveryModes.Branches"/>).
+    /// <para>
+    /// <b>A setting, not a kind.</b> Only a repository Pipeline can discover branches: Freestyle and
+    /// inline projects have no repository, and the validator refuses <c>branches</c> for them rather
+    /// than storing a setting nothing can honour. The column is mutable because switching is the point
+    /// of the card - and switching never rewrites history: the branch list unions the stored branch jobs
+    /// with the branches existing runs already snapshot. The migration adds the column with a
+    /// <c>'single'</c> default, so every row written before this card answers <c>single</c> from the
+    /// database itself, not only from this initializer.
+    /// </para>
+    /// </summary>
+    public string BranchDiscovery { get; set; } = Zenkins.Shared.Projects.BranchDiscoveryModes.Single;
+
+    /// <summary>
     /// Path of the pipeline file inside the repository; PRD §3.2 default is <c>pipeline.lua</c>.
     /// <see langword="null"/> for Freestyle (no file, no path).
     /// </summary>

@@ -41,6 +41,13 @@
                 else
                 {
                     <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
+                    @* F-023: discovery is a project setting, so the overview says which one is on -
+                       "Multibranch" is the badge the card asks for; a single-branch project keeps the
+                       one branch badge it always had. *@
+                    @if (BranchDiscoveryModes.IsMultibranch(_project.BranchDiscovery))
+                    {
+                        <BbBadge Variant="BadgeVariant.Secondary">Multibranch</BbBadge>
+                    }
                 }
                 @* F-028: the state is stated next to the name, on every tab's shared header, so a
                    "nothing builds" question answers itself without opening the settings tab. *@
@@ -58,7 +65,8 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="overview" Kind="@_project.Kind" />
+        <ProjectTabs ProjectId="@_project.Id" Active="overview" Kind="@_project.Kind"
+                     BranchDiscovery="@_project.BranchDiscovery" />
 
         @if (Notice is { } notice)
         {
@@ -185,6 +193,20 @@
                         <div>
                             <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
                             <dd>@_project.PipelinePath</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branch discovery</dt>
+                            <dd>
+                                @if (BranchDiscoveryModes.IsMultibranch(_project.BranchDiscovery))
+                                {
+                                    <a href="@($"/projects/{_project.Id}/branches")"
+                                       class="bb:font-medium bb:underline bb:underline-offset-4">Every branch</a>
+                                }
+                                else
+                                {
+                                    <span>Single branch</span>
+                                }
+                            </dd>
                         </div>
                         <div>
                             <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credential</dt>

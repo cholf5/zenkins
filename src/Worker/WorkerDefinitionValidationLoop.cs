@@ -118,51 +118,25 @@ public sealed class WorkerDefinitionValidationLoop(
         return null;
     }
 
-    /// <summary>One claimed validation: describe the script, report, delete the scratch tree.</summary>
+    /// <summary>
+    /// One claimed definition task: describe the subject, report, delete the scratch tree. The kind decides
+    /// the subject - an inline script (F-022) or one repository branch at one commit (F-023's observation,
+    /// which clones and answers whether the project's pipeline file is there).
+    /// </summary>
     private async Task ExecuteAsync(WorkerDefinitionValidationClaimResponse validation, CancellationToken shutdown)
     {
         var work = workDirectories.PrepareValidation(validation.ValidationId);
         try
         {
-            await log.WriteLineAsync(
-                $"Zenkins Worker: validating an inline pipeline script for validation "
-                + $"{validation.ValidationId} (no run, no build slot).");
+            var report = DefinitionValidationKinds.Normalize(validation.Kind)
+                == DefinitionValidationKinds.RepositoryBranch
+                    ? await ObserveRepositoryAsync(validation, work, shutdown)
+                    : await DescribeInlineScriptAsync(validation, work, shutdown);
 
-            var scriptPath = Path.Combine(work.TempPath, PipelineScriptLimits.InlineFileName);
-            await File.WriteAllTextAsync(
-                scriptPath,
-                validation.Script,
-                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                shutdown);
-
-            var runner = new Pipelines.PipelineDefinitionRunner(
-                Pipelines.PipelineDefinitionRunner.CreateRuntime(
-                    Pipelines.PipelineRunner.CreateLogSink(line => log.WriteLine("Zenkins Worker: " + line))));
-
-            WorkerDefinitionValidationReportRequest report;
-            try
+            if (report is null || shutdown.IsCancellationRequested)
             {
-                var result = runner.RunSource(
-                    await File.ReadAllTextAsync(scriptPath, shutdown),
-                    PipelineScriptLimits.InlineFileName,
-                    DateTimeOffset.UtcNow + ValidationBudget,
-                    shutdown);
-                report = new WorkerDefinitionValidationReportRequest(
-                    DefinitionValidationOutcomes.Valid,
-                    result.SpecJson);
-            }
-            catch (Pipelines.PipelineDefinitionException failure)
-            {
-                report = new WorkerDefinitionValidationReportRequest(
-                    DefinitionValidationOutcomes.Invalid,
-                    Diagnostic: failure.Message,
-                    FailureReason: failure.FailureReason);
-            }
-
-            if (shutdown.IsCancellationRequested)
-            {
-                // Shutting down mid-validation: report nothing. The lease lapses and the Server offers
-                // it again - a lost validation is re-requested, never replayed.
+                // Shutting down mid-task: report nothing. The lease lapses and the Server offers it
+                // again - a lost task is re-requested, never replayed.
                 return;
             }
 
@@ -180,6 +154,155 @@ public sealed class WorkerDefinitionValidationLoop(
                     $"Zenkins Worker: validation {validation.ValidationId} scratch cleanup failed "
                     + $"({failure.Message}); leaving it in place.");
             }
+        }
+    }
+
+    /// <summary>F-022's inline script: write it to the scratch tree and run the definition phase alone.</summary>
+    private async Task<WorkerDefinitionValidationReportRequest> DescribeInlineScriptAsync(
+        WorkerDefinitionValidationClaimResponse validation,
+        ValidationWorkDirectory work,
+        CancellationToken shutdown)
+    {
+        await log.WriteLineAsync(
+            $"Zenkins Worker: validating an inline pipeline script for validation "
+            + $"{validation.ValidationId} (no run, no build slot).");
+
+        if (validation.Script is null)
+        {
+            // A claim that says inline-script but carries no text is a contract mismatch; answer it as an
+            // unreadable definition rather than compiling an empty pipeline.
+            return new WorkerDefinitionValidationReportRequest(
+                DefinitionValidationOutcomes.Invalid,
+                Diagnostic: "the claim named an inline script but carried no text.");
+        }
+
+        var scriptPath = Path.Combine(work.TempPath, PipelineScriptLimits.InlineFileName);
+        await File.WriteAllTextAsync(
+            scriptPath,
+            validation.Script,
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            shutdown);
+
+        var runner = new Pipelines.PipelineDefinitionRunner(
+            Pipelines.PipelineDefinitionRunner.CreateRuntime(
+                Pipelines.PipelineRunner.CreateLogSink(line => log.WriteLine("Zenkins Worker: " + line))));
+
+        try
+        {
+            var result = runner.RunSource(
+                await File.ReadAllTextAsync(scriptPath, shutdown),
+                PipelineScriptLimits.InlineFileName,
+                DateTimeOffset.UtcNow + ValidationBudget,
+                shutdown);
+            return new WorkerDefinitionValidationReportRequest(
+                DefinitionValidationOutcomes.Valid,
+                result.SpecJson);
+        }
+        catch (Pipelines.PipelineDefinitionException failure)
+        {
+            return new WorkerDefinitionValidationReportRequest(
+                DefinitionValidationOutcomes.Invalid,
+                Diagnostic: failure.Message,
+                FailureReason: failure.FailureReason);
+        }
+    }
+
+    /// <summary>
+    /// Card F-023's branch observation: clone the repository, pin the requested commit, and answer whether
+    /// the project's pipeline file is in that tree. <b>No run, no build slot, no step</b> - the Worker's
+    /// definition loop does this beside (never inside) the build loops, exactly as it does for F-022.
+    /// <para>
+    /// <b>A failed read is not a verdict.</b> A clone/checkout failure reports <c>unreadable</c> with the
+    /// classified git reason; the Server keeps the branch's previous state and retries later. Only a tree
+    /// this method really checked out can produce <c>has-pipeline</c>/<c>no-pipeline</c>, and the commit
+    /// those words are about is the claim's - the Server stores it as the evidence commit.
+    /// </para>
+    /// <para>
+    /// The pipeline file is checked for <b>existence</b>, not for validity: a present-but-broken
+    /// <c>pipeline.lua</c> is still a branch that builds (and then fails honestly in the run), which is
+    /// the distinction AC-3 draws between "no pipeline file" and a failed build.
+    /// </para>
+    /// </summary>
+    private async Task<WorkerDefinitionValidationReportRequest?> ObserveRepositoryAsync(
+        WorkerDefinitionValidationClaimResponse validation,
+        ValidationWorkDirectory work,
+        CancellationToken shutdown)
+    {
+        await log.WriteLineAsync(
+            $"Zenkins Worker: observing branch '{validation.Branch}' at {validation.Commit} for validation "
+            + $"{validation.ValidationId} (no run, no build slot).");
+
+        if (validation.RepositoryUrl is not { Length: > 0 } repositoryUrl
+            || validation.Branch is not { Length: > 0 } branch
+            || validation.Commit is not { Length: > 0 } commit)
+        {
+            return new WorkerDefinitionValidationReportRequest(
+                DefinitionValidationOutcomes.Unreadable,
+                Diagnostic: "the claim carried no repository, branch or commit to observe.",
+                FailureReason: PipelineFailureReasons.GitFailed);
+        }
+
+        var pipelinePath = validation.PipelinePath is { Length: > 0 } declared
+            ? declared
+            : PipelineScriptLimits.InlineFileName;
+
+        // The observation borrows a run-shaped scratch tree for the shared clone primitive (repository/,
+        // temp/, hardening/); it is not a run and nothing it writes is reported as one.
+        var repositoryPath = Path.Combine(work.RootPath, "repository");
+        Directory.CreateDirectory(repositoryPath);
+        var scratch = new RunWorkDirectory(
+            validation.ValidationId,
+            work.RootPath,
+            repositoryPath,
+            Path.Combine(work.RootPath, "artifacts"),
+            work.TempPath);
+
+        var credentialDelivered = false;
+        try
+        {
+            var credential = await api.FetchDefinitionGitCredentialAsync(
+                workerToken, validation.ValidationId, shutdown);
+            credentialDelivered = credential is not null;
+
+            var workspace = new Git.GitWorkspace(configuration.BuildGitWorkspaceOptions(
+                scratch,
+                log: line => log.WriteLine("Zenkins Worker: " + line)));
+            await workspace.CloneAsync(repositoryUrl, branch, credential, shutdown);
+            await workspace.CheckoutAsync(commit, shutdown);
+
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath))
+                + Path.DirectorySeparatorChar;
+            var candidate = Path.GetFullPath(Path.Combine(repositoryPath, pipelinePath));
+            if (!candidate.StartsWith(root, StringComparison.Ordinal))
+            {
+                return new WorkerDefinitionValidationReportRequest(
+                    DefinitionValidationOutcomes.Unreadable,
+                    Diagnostic: $"the pipeline path '{pipelinePath}' leaves the checkout.",
+                    FailureReason: PipelineFailureReasons.GitPathEscape);
+            }
+
+            var found = File.Exists(candidate);
+            await log.WriteLineAsync(
+                $"Zenkins Worker: branch '{branch}' at {commit} "
+                + (found
+                    ? $"contains '{pipelinePath}'."
+                    : $"has no '{pipelinePath}' - the branch has no pipeline."));
+            return new WorkerDefinitionValidationReportRequest(
+                found
+                    ? DefinitionValidationOutcomes.HasPipeline
+                    : DefinitionValidationOutcomes.NoPipeline);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Git.GitException failure)
+        {
+            await log.WriteLineAsync($"Zenkins Worker: the branch could not be read: {failure.Message}");
+            return new WorkerDefinitionValidationReportRequest(
+                DefinitionValidationOutcomes.Unreadable,
+                Diagnostic: failure.Message,
+                FailureReason: Pipelines.PipelineRunner.Classify(failure.Kind, credentialDelivered));
         }
     }
 

@@ -46,6 +46,7 @@
                                  RepositoryUrl="@RepositoryUrl"
                                  DefaultBranch="@(DefaultBranch ?? "main")"
                                  PipelinePath="@(PipelinePath ?? ProjectValidation.DefaultPipelinePath)"
+                                 BranchDiscovery="@BranchDiscovery"
                                  ErrorCode="@ErrorCode" />
             </BbCardContent>
         </BbCard>
@@ -77,6 +78,11 @@
 
     [SupplyParameterFromQuery(Name = "pipelinePath")]
     private string? PipelinePath { get; set; } = ProjectValidation.DefaultPipelinePath;
+
+    /// <summary>F-023: the discovery mode echoed back after a refused create (blank = the historical
+    /// single-branch default).</summary>
+    [SupplyParameterFromQuery(Name = "branchDiscovery")]
+    private string? BranchDiscovery { get; set; }
 
     private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
 

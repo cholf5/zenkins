@@ -31,7 +31,8 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" Kind="@_project.Kind" />
+        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" Kind="@_project.Kind"
+                     BranchDiscovery="@_project.BranchDiscovery" />
 
         @if (Notice is { } notice)
         {
@@ -66,7 +67,8 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" Kind="@_project.Kind" />
+        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" Kind="@_project.Kind"
+                     BranchDiscovery="@_project.BranchDiscovery" />
 
         @if (Notice is { } notice)
         {
@@ -176,7 +178,8 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" />
+        <ProjectTabs ProjectId="@_project.Id" Active="pipelines"
+                     BranchDiscovery="@_project.BranchDiscovery" />
 
         <BbCard>
             <BbCardHeader>

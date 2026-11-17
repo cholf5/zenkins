@@ -130,6 +130,30 @@ public static class WebhookOutcomes
     /// </summary>
     public const string QueueFull = ProjectTriggerRefusals.QueueFull;
 
+    /// <summary>
+    /// Card F-023: the pushed branch's tree has not been read for this commit yet, so the delivery queued
+    /// nothing <b>yet</b>. A Worker observation decides: has-pipeline queues the run at the pushed commit,
+    /// no-pipeline records the branch and queues nothing. The push is not lost - the branch row remembers
+    /// the commit and the retry sweeper re-asks - and "unknown" is never guessed in either direction.
+    /// </summary>
+    public const string AwaitingObservation = "awaiting-observation";
+
+    /// <summary>
+    /// Card F-023: the pushed branch has no pipeline file, so this delivery queued nothing. Recorded
+    /// and answered 2xx like every other "the push was seen but nothing is built" outcome - a
+    /// permanent 4xx would make most git hosts disable the webhook.
+    /// </summary>
+    public const string NoPipeline = "no-pipeline";
+
+    /// <summary>
+    /// Card F-023: the pushed branch name is longer than a run can store
+    /// (<see cref="Zenkins.Server.Branches.BranchIdentity.MaxLength"/>), so the branch cannot become a
+    /// branch job. Recorded instead of letting the run insert fail (probes may report 255-character
+    /// refs; a run's branch column holds 200) and instead of truncating - a truncated name would be a
+    /// different branch.
+    /// </summary>
+    public const string BranchTooLong = "ignored:branch-too-long";
+
     /// <summary>Longest stored outcome.</summary>
     public const int MaxLength = 32;
 }

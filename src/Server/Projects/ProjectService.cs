@@ -92,7 +92,14 @@ public sealed record ProjectView(
     string PipelineSource = ProjectSources.Repository,
 
     /// <summary>F-022: the inline Pipeline's Lua body; null for a repository project and for Freestyle.</summary>
-    string? InlineScript = null);
+    string? InlineScript = null,
+
+    /// <summary>
+    /// F-023: the branch-discovery mode (<see cref="BranchDiscoveryModes"/>).
+    /// <see cref="BranchDiscoveryModes.Single"/> is the default and describes every project created
+    /// before the card, so a read path that sees this value never has to guess.
+    /// </summary>
+    string BranchDiscovery = BranchDiscoveryModes.Single);
 
 /// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
 /// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
@@ -111,7 +118,14 @@ public sealed record ProjectInput(
     string? PipelineSource = null,
 
     /// <summary>F-022: the inline Pipeline's Lua body, if the source is inline.</summary>
-    string? InlineScript = null);
+    string? InlineScript = null,
+
+    /// <summary>
+    /// F-023: the branch-discovery mode. Blank means <see cref="BranchDiscoveryModes.Single"/> - the
+    /// historical default - and an edit honours it (the setting is mutable; switching to discovery never
+    /// rewrites history). A Freestyle or inline project can only be <c>single</c>.
+    /// </summary>
+    string? BranchDiscovery = null);
 
 /// <summary>
 /// The queue-controls form's raw values (card F-029), before trimming and validation. Blank means "the
@@ -264,6 +278,21 @@ public sealed class ProjectService(
 
         source = kind == ProjectKinds.Pipeline ? source : ProjectSources.Repository;
 
+        // F-023: the discovery mode. Blank is today's one-branch behaviour; a mode the project's shape
+        // cannot honour (Freestyle or inline have no repository) is refused rather than stored.
+        var discoveryError = ProjectValidation.ValidateBranchDiscovery(input.BranchDiscovery, out var branchDiscovery);
+        if (discoveryError is not null)
+        {
+            errors.Add(new ProjectFieldError(ProjectFields.BranchDiscovery, discoveryError));
+        }
+        else if (branchDiscovery != BranchDiscoveryModes.Single
+                 && !ProjectValidation.CanDiscoverBranches(kind, source))
+        {
+            errors.Add(new ProjectFieldError(
+                ProjectFields.BranchDiscovery,
+                ProjectErrorCodes.BranchDiscoveryUnavailable));
+        }
+
         errors.AddRange(Validate(
             input,
             kind,
@@ -289,6 +318,7 @@ public sealed class ProjectService(
             RepositoryUrl = repositoryUrl,
             DefaultBranch = branch,
             PipelinePath = pipelinePath,
+            BranchDiscovery = branchDiscovery,
         };
         context.Projects.Add(project);
 
@@ -354,6 +384,25 @@ public sealed class ProjectService(
         var effectiveInput = project.PipelineSource == ProjectSources.Inline && input.InlineScript is null
             ? input with { InlineScript = project.InlineScript }
             : input;
+
+        // F-023: the discovery mode is mutable (switching is the card's point), so an edit validates and
+        // stores it. The project's kind and source are immutable, so the shape check uses the stored ones.
+        var discoveryError = ProjectValidation.ValidateBranchDiscovery(
+            effectiveInput.BranchDiscovery,
+            out var branchDiscovery);
+        if (discoveryError is not null)
+        {
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectFields.BranchDiscovery, discoveryError));
+        }
+
+        if (branchDiscovery != BranchDiscoveryModes.Single
+            && !ProjectValidation.CanDiscoverBranches(project.Kind, project.PipelineSource))
+        {
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectFields.BranchDiscovery, ProjectErrorCodes.BranchDiscoveryUnavailable));
+        }
+
         var errors = Validate(
             effectiveInput,
             project.Kind,
@@ -369,6 +418,7 @@ public sealed class ProjectService(
         }
 
         project.Name = name;
+        project.BranchDiscovery = branchDiscovery;
         if (project.Kind == ProjectKinds.Pipeline)
         {
             // A definition source decides which half of the form is the project's own state: an inline
@@ -915,5 +965,6 @@ public sealed class ProjectService(
         project.LastProbeAt,
         project.LastProbeMessage,
         project.PipelineSource,
-        project.InlineScript);
+        project.InlineScript,
+        BranchDiscoveryModes.Normalize(project.BranchDiscovery));
 }

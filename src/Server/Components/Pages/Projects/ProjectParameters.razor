@@ -24,7 +24,8 @@
             </div>
         </div>
 
-        <ProjectTabs ProjectId="@_project.Id" Active="parameters" Kind="@_project.Kind" />
+        <ProjectTabs ProjectId="@_project.Id" Active="parameters" Kind="@_project.Kind"
+                     BranchDiscovery="@_project.BranchDiscovery" />
 
         @if (Notice is { } notice)
         {

@@ -9,6 +9,7 @@ using Zenkins.Server.Api;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Artifacts;
+using Zenkins.Server.Branches;
 using Zenkins.Server.Schedules;
 using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
@@ -130,6 +131,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>The due-time ledger of every schedule (F-024): one row per (schedule, due time), the
     /// record of what happened and the guard against queueing twice.</summary>
     public DbSet<ScheduleOccurrence> ScheduleOccurrences => Set<ScheduleOccurrence>();
+
+    /// <summary>One row per branch a multibranch project tracks (F-023), including the branch seen and
+    /// not built. Unique on (ProjectId, Branch).</summary>
+    public DbSet<BranchJob> BranchJobs => Set<BranchJob>();
 
     // Every query starts by resolving a DbSet, so this is the one place that catches a tenant switch
     // before Find/Include can short-circuit on rows tracked under the previous tenant.
@@ -808,6 +813,12 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // performs, so a row written out of band (raw SQL, a future caller) cannot declare a limit
             // no claim could satisfy: a concurrency cap below 1 or a queue cap below 1 is a configured
             // starvation, and a negative quiet period is meaningless.
+
+            // F-023: the branch-discovery mode. Bounded and closed: a value outside the two modes is not
+            // a mode a read path could honour. The migration's default keeps every historical row on
+            // `single`, which is why existing projects behave exactly as before the card.
+            entity.Property(project => project.BranchDiscovery).IsRequired().HasMaxLength(16)
+                .HasDefaultValue(BranchDiscoveryModes.Single);
             entity.HasOne<Organization>().WithMany().HasForeignKey(project => project.OrganizationId)
                 .OnDelete(DeleteBehavior.Cascade);
 
@@ -833,6 +844,14 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 table.HasCheckConstraint(
                     "CK_Projects_MaxQueuedRuns",
                     "\"MaxQueuedRuns\" IS NULL OR \"MaxQueuedRuns\" >= 1");
+
+                // F-023: the discovery mode is a closed vocabulary, like the kind and the source beside
+                // it. An out-of-band writer cannot invent a third mode no read path understands.
+                table.HasCheckConstraint(
+                    "CK_Projects_BranchDiscovery",
+                    "\"BranchDiscovery\" IN ("
+                    + string.Join(", ", BranchDiscoveryModes.All.Select(mode => $"'" + mode + "'"))
+                    + ")");
 
                 // I-005: the last probe outcome is one of the shared vocabulary's words (or NULL for a
                 // project that was never probed). The constraint keeps an out-of-band writer from
@@ -1092,6 +1111,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // (ProjectId, Cron, TimeZone) and (ScheduleId, DueAt)). The rules live next to the feature
         // (src/Server/Schedules).
         modelBuilder.ConfigureSchedules(this);
+
+        // F-023: the branch jobs of a multibranch project (tenant-owned; unique (ProjectId, Branch)).
+        // The rules live next to the feature (src/Server/Branches).
+        modelBuilder.ConfigureBranches(this);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

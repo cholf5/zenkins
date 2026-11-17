@@ -39,16 +39,35 @@
     [Parameter]
     public string Kind { get; set; } = ProjectKinds.Pipeline;
 
+    /// <summary>
+    /// Card F-023: the project's branch-discovery mode. The Branches tab exists only for a project that
+    /// discovers branches - a single-branch project has one branch and one history, and the tab would
+    /// only restate the runs list. Defaulted to <see cref="BranchDiscoveryModes.Single"/> so a caller
+    /// that does not know the mode renders today's strip.
+    /// </summary>
+    [Parameter]
+    public string BranchDiscovery { get; set; } = BranchDiscoveryModes.Single;
+
     private sealed record ProjectTab(string Name, string Label, string PathFormat);
 
-    private IReadOnlyList<ProjectTab> Tabs { get; } =
-    [
-        new("overview", "Overview", "/projects/{0}"),
-        new("pipelines", "Pipelines", "/projects/{0}/pipelines"),
-        new("parameters", "Parameters", "/projects/{0}/parameters"),
-        new("runs", "Runs", "/projects/{0}/runs"),
-        new("settings", "Settings", "/projects/{0}/settings"),
-    ];
+    private IReadOnlyList<ProjectTab> Tabs => BranchDiscoveryModes.IsMultibranch(BranchDiscovery)
+        ?
+        [
+            new("overview", "Overview", "/projects/{0}"),
+            new("pipelines", "Pipelines", "/projects/{0}/pipelines"),
+            new("parameters", "Parameters", "/projects/{0}/parameters"),
+            new("branches", "Branches", "/projects/{0}/branches"),
+            new("runs", "Runs", "/projects/{0}/runs"),
+            new("settings", "Settings", "/projects/{0}/settings"),
+        ]
+        :
+        [
+            new("overview", "Overview", "/projects/{0}"),
+            new("pipelines", "Pipelines", "/projects/{0}/pipelines"),
+            new("parameters", "Parameters", "/projects/{0}/parameters"),
+            new("runs", "Runs", "/projects/{0}/runs"),
+            new("settings", "Settings", "/projects/{0}/settings"),
+        ];
 
     private string LabelFor(ProjectTab tab) =>
         tab.Name == "pipelines" && Kind == ProjectKinds.Freestyle ? "Steps" : tab.Label;

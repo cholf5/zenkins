@@ -186,7 +186,8 @@ public sealed class GitProbeService(
     /// </summary>
     public async Task<GitProbeRequestResult> RequestAsync(
         Guid projectId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeSpan? wait = null)
     {
         if (tenantContext.OrganizationId is not { } organizationId)
         {
@@ -247,7 +248,7 @@ public sealed class GitProbeService(
         // Beyond that the probe is settled as no-worker even if a silent worker holds a lease, so a
         // request always ends with a typed answer.
         var startedAt = DateTimeOffset.UtcNow;
-        var claimDeadline = startedAt + options.Wait;
+        var claimDeadline = startedAt + (wait ?? options.Wait);
         var hardDeadline = claimDeadline + options.Lease;
         while (!cancellationToken.IsCancellationRequested)
         {

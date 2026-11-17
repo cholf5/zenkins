@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Api;
 using Zenkins.Server.Artifacts;
+using Zenkins.Server.Branches;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
 using Zenkins.Server.Dashboard;
@@ -55,6 +56,10 @@ builder.Services.AddZenkinsData(builder.Configuration);
 builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
+
+// F-023: the branch registry of a multibranch project - the branch jobs, their evidence-backed
+// pipeline state and the read the Branches tab and the runs filter use.
+builder.Services.AddZenkinsBranches();
 builder.Services.AddZenkinsWorkers();
 builder.Services.AddZenkinsRuns();
 

@@ -952,7 +952,7 @@ public sealed class PipelineRunner
     /// <see cref="PipelineFailureReasons.GitCredentialNotAssigned"/>, so the run page can say "nothing is
     /// assigned" instead of implying a credential the project does not have was refused.
     /// </summary>
-    private static string Classify(GitFailureKind kind, bool credentialDelivered) => kind switch
+    internal static string Classify(GitFailureKind kind, bool credentialDelivered) => kind switch
     {
         GitFailureKind.GitUnavailable => PipelineFailureReasons.GitUnavailable,
         GitFailureKind.NonEmptyTarget => PipelineFailureReasons.GitNonEmptyTarget,

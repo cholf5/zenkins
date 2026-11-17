@@ -276,6 +276,85 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("BootstrapMarkers");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BranchJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("DiscoveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastCommit")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ObservationAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ObservedCommit")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("OrphanedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("OrphanedEvidence")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("PendingCommit")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("PendingSince")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PendingTags")
+                        .IsRequired()
+                        .HasMaxLength(400)
+                        .HasColumnType("character varying(400)");
+
+                    b.Property<string>("PipelineState")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "ProjectId");
+
+                    b.HasIndex("ProjectId", "Branch")
+                        .IsUnique();
+
+                    b.ToTable("BranchJobs", t =>
+                        {
+                            t.HasCheckConstraint("CK_BranchJobs_OrphanedEvidence", "(\"OrphanedAt\" IS NULL AND \"OrphanedEvidence\" IS NULL) OR (\"OrphanedAt\" IS NOT NULL AND \"OrphanedEvidence\" IS NOT NULL AND \"OrphanedEvidence\" IN ('push-delete', 'refs-absent'))");
+
+                            t.HasCheckConstraint("CK_BranchJobs_PipelineState", "\"PipelineState\" IN ('unknown', 'has-pipeline', 'no-pipeline')");
+                        });
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildLog", b =>
                 {
                     b.Property<Guid>("RunId")
@@ -599,6 +678,13 @@ namespace Zenkins.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("BranchDiscovery")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("single");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -699,6 +785,8 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.ToTable("Projects", t =>
                         {
+                            t.HasCheckConstraint("CK_Projects_BranchDiscovery", "\"BranchDiscovery\" IN ('single', 'branches')");
+
                             t.HasCheckConstraint("CK_Projects_Kind", "\"Kind\" IN ('pipeline', 'freestyle')");
 
                             t.HasCheckConstraint("CK_Projects_LastProbeOutcome", "\"LastProbeOutcome\" IS NULL OR \"LastProbeOutcome\" IN ('refs', 'git-auth-rejected', 'git-unreachable', 'git-timeout', 'git-failed', 'no-worker')");
@@ -1242,6 +1330,23 @@ namespace Zenkins.Server.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Run");
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BranchJob", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.BuildLog", b =>
