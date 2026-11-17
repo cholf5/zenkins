@@ -63,6 +63,21 @@ loop (`dotnet run` from a clone).
 > loopback gate must keep its run and lose none of twelve, with the silence measured from the
 > server's own heartbeat row). It moved a harness constant (the concurrency ring's offline window,
 > 5 s → 15 s) rather than a product one, and added no category and no exclusion.
+> Q-019 (a short organization name colliding with a machine-generated base64 payload in the tenant page
+> scan) added **20** facts on 2026-11-17: the two-sided fact for the reader the scan now uses, over both
+> encodings the pages carry - an escaped standard-base64 run, a bare base64 run and a base64url
+> antiforgery token that each spell the other organization's name verbatim are ignored, with the marker
+> asserted to have fired so no case can pass vacuously, and the underscore-first base64url token that the
+> reproducer caught; a rendered value still trips the scan as a table cell, an `h1`, an href/title/text, a
+> script's JSON literal, a real `<meta>` shell and a real `<!--Blazor:…-->` shell; all twelve scanned
+> values are proven visible in rendered markup, including the 29-symbol ciphertext and the 36-symbol GUID,
+> and a foreign id stays visible inside a link and inside a generated `rotate-{guid}` DOM id; both
+> run-length minimums are pinned (39-vs-40 symbols for base64url, 31-vs-32 for base64); and the two known
+> limitations (a value touching a payload, a 40-symbol hyphenated rendered value) are pinned as behaviour.
+> They sit in `Category=TenantIsolation`, which the fast suite already contains, so there is no new
+> category and no new exclusion - the sextuple filter is unchanged. Q-014 (the artifact-zip temp snapshot)
+> moved no count: it retargeted the zip fact and two harness self-tests at the download's own scoped temp
+> root, 2 rewrites and 0 deletions.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the

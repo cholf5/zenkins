@@ -30,6 +30,14 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
     // Read pages
     // ---------------------------------------------------------------------
 
+    /// <summary>
+    /// Ten pages, org A's session: none of them may carry an org B value. The scan reads each page
+    /// through <see cref="TenantPageScan.IgnoringMachineGeneratedPayloads"/>, which replaces
+    /// machine-generated opaque payloads (data-protection blobs, hashes, the antiforgery token) with a
+    /// marker and leaves rendered markup untouched - card Q-019: the fixture's short <c>Beta</c> used to
+    /// collide with a base64 run by accident about once every four thousand page reads. Every assertion
+    /// below is still the same literal containment test; only what counts as page text changed.
+    /// </summary>
     [Fact]
     public async Task Tenant_pages_render_only_the_active_organizations_rows()
     {
@@ -51,19 +59,26 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
                  })
         {
             var body = await AuthTestHost.GetStringAsync(client, path);
+            var scanned = TenantPageScan.IgnoringMachineGeneratedPayloads(body);
 
-            Assert.DoesNotContain(TwoOrgsFixture.ProjectBName, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.ProjectBRepositoryUrl, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.WorkerBName, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.SecretBName, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.SecretBCiphertext, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.GitCredentialBName, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.WebhookBName, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.OrgBName, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.OrgBOwnerUserId, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(TwoOrgsFixture.ProjectBId.ToString(), body, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(TwoOrgsFixture.BuildRunBId.ToString(), body, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("beta-line", body, StringComparison.Ordinal);
+            // Card Q-019's positive control: the scan must not go blind. The signed-in organization's own
+            // name and owner are rendered on every one of these ten pages, so if they no longer read as
+            // page text, "no foreign value was found" would be worth nothing.
+            Assert.Contains(TwoOrgsFixture.OrgAName, scanned, StringComparison.Ordinal);
+            Assert.Contains(TwoOrgsFixture.OrgAOwnerUserId, scanned, StringComparison.Ordinal);
+
+            Assert.DoesNotContain(TwoOrgsFixture.ProjectBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.ProjectBRepositoryUrl, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.WorkerBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.SecretBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.SecretBCiphertext, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.GitCredentialBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.WebhookBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.OrgBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.OrgBOwnerUserId, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.ProjectBId.ToString(), scanned, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(TwoOrgsFixture.BuildRunBId.ToString(), scanned, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("beta-line", scanned, StringComparison.Ordinal);
         }
     }
 
