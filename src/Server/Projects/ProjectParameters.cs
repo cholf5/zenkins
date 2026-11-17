@@ -310,6 +310,24 @@ public static class ProjectParameters
             return [];
         }
 
+        // Card B-006: a repeated entry is refused, the same discipline the artifact list follows
+        // (`PipelineSpec.TryReadArtifactPaths`) - a duplicate is an authoring mistake, not something to
+        // store and discover from the rendered form. Collapsing it silently would also be wrong: the
+        // declared order is the order the trigger form renders, and the first entry is the value a
+        // trigger without a supplied one resolves to, so dropping an entry can change what a run gets.
+        // The comparison is ordinal, because a choice value is compared ordinally when the trigger's
+        // value is matched (`TryNormalizeForTrigger`): 'fast' and 'Fast' are two distinct legal values,
+        // and refusing them would be a rule the resolver disagrees with.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < choices.Length; i++)
+        {
+            if (!seen.Add(choices[i]))
+            {
+                error = $"{path}.choices[{i + 1}] '{choices[i]}' is declared twice.";
+                return [];
+            }
+        }
+
         return choices;
     }
 }

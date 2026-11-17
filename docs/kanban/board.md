@@ -27,7 +27,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | M | | F-021 |
 | [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
-| [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Duplicate choice entries accepted; a Freestyle row's inherited pipeline path | P3 | S | | none |
 
 ## Done
 
@@ -104,3 +103,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | 2026-11-17 |
 | [Q-017](issues/q-017-idempotency-fingerprint-and-cap-replay.md) | The idempotency fingerprint drops invalid tags before hashing, and replay-vs-queue-cap has no fact | P3 | 2026-11-17 |
 | [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | 2026-11-17 |
+| [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Two small inconsistencies the F-020/F-021 review found — duplicate choice entries and a Freestyle row's inherited pipeline path | P3 | 2026-11-17 |

@@ -83,6 +83,34 @@ public sealed class ProjectParametersTests
     }
 
     [Fact]
+    public void A_repeated_choice_entry_is_refused_and_the_comparison_is_ordinal()
+    {
+        // Card B-006: `fast,fast` would render two identical <option>s. It is refused, the discipline
+        // the artifact list follows (`PipelineSpec.TryReadArtifactPaths`), not de-duplicated: the
+        // declared order is the order the form renders, and the first entry is what a trigger that
+        // supplies no value resolves to, so dropping an entry would silently change what a run gets.
+        Assert.Null(Build(Draft("MODE", ProjectParameterTypes.Choice, choices: "fast,fast")));
+        Assert.Contains("declared twice", Error, StringComparison.Ordinal);
+
+        // The entries are trimmed before they are compared, so padding does not hide the repeat.
+        Assert.Null(Build(Draft("MODE", ProjectParameterTypes.Choice, choices: " fast , fast ")));
+        Assert.Contains("declared twice", Error, StringComparison.Ordinal);
+
+        // Only an exact repeat is refused: a supplied value is matched ordinally
+        // (`TryNormalizeForTrigger`), so `fast` and `Fast` are two legal, distinct choices.
+        var definitions = Validate(Draft("MODE", ProjectParameterTypes.Choice, choices: "fast,Fast"));
+        Assert.Equal(["fast", "Fast"], definitions[0].Choices!);
+
+        // The catalogue's bounds are decided before the repeat, so a list that breaks both reports the
+        // bound - the rule order a reader relies on when the two errors are both true of one list.
+        Assert.Null(Build(Draft(
+            "MODE",
+            ProjectParameterTypes.Choice,
+            choices: string.Join(',', Enumerable.Repeat("fast", ProjectParameterLimits.MaxChoices + 1)))));
+        Assert.Contains($"at most {ProjectParameterLimits.MaxChoices} values", Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_boolean_default_must_be_true_or_false()
     {
         Assert.Null(Build(Draft("DRY_RUN", ProjectParameterTypes.Boolean, defaultValue: "yes")));

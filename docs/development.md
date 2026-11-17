@@ -144,13 +144,30 @@ loop (`dotnet run` from a clone).
 > from inside `DecideAsync` - the shape review M1 widened the guard for. It is in `PostgresCollection`, so
 > it moves no fast count and no new category or exclusion: the fast suite stays 1284, Postgres 3 → 4 and
 > all seven 1310 → 1311 (the same arithmetic below).
+> B-006 (two inconsistencies the F-020/F-021 review left behind) added **3** facts on 2026-11-17, all in
+> the fast suite: 2 for a `choice` parameter's repeated entry (`fast,fast` is refused at save with the
+> stable `parameters-invalid` the parameters tab renders, the stored JSON stays byte for byte what it
+> was, and the trigger form renders one `<option>` per declared value; the catalog fact also pins that
+> only an exact repeat is refused - `fast,Fast` stays legal, because the value resolver matches values
+> ordinally - and that a list breaking both the 32-entry bound and the repeat reports the bound, which
+> fixes the order the two rules are asked in) and 1 for a Freestyle project's pipeline path (two rows
+> written straight through the context with no `ProjectService.Validate` - one stating `pipeline.lua`,
+> one leaving the field to the entity's own initializer - both produce a run whose pipeline path is empty
+> and a run page that shows the empty marker, because the run snapshot now decides by kind). No existing
+> fact was removed or loosened, and the entity initializer stayed: removing it would have left eight
+> `new Project { }` harness sites without a path and turned five F-014 assertions red. No new category
+> and no new exclusion - the sextuple filter is unchanged: fast 1284 → 1287 and all seven 1311 → 1314.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines against a real run: **fast 1242, all seven 1268** (Milestone 12, Recovery 4,
-> PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 3 - the last one skipping without
-> `ZENKINS_TEST_POSTGRES`). Every command in the POSIX
+> and re-baselines as **fast 1287 (a counted run) and all seven 1314 (that count plus the other six
+> suites' figures)** - Milestone 12, Recovery 4, PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 4,
+> the last one skipping without `ZENKINS_TEST_POSTGRES`. The fast figure is a counted run of the tree
+> that carries Q-018 and B-006 (1279 plus the five Q-017 facts above plus B-006's three; Q-018's own
+> fact lives in the Postgres suite, so the fast count did not move for it and was re-measured anyway);
+> the all-seven total is that same arithmetic on the 1311 of the previous count, not a second
+> seven-suite run. Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -337,17 +354,18 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1242 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1287 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
 | GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
-| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus one migration run on a fresh schema (3 tests) |
+| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus one migration run on a fresh schema (4 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1268 at the time of writing) but
+filter runs **all seven** (1314 on the tree that carries Q-018 and B-006, by the arithmetic in the note
+above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Xunit;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Runs;
@@ -57,6 +58,46 @@ public sealed class FreestyleRunTests
         Assert.Equal(string.Empty, claim.PipelinePath);
         Assert.NotNull(claim.PipelineSpecJson);
         Assert.Contains("\"script\"", claim.PipelineSpecJson!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_freestyle_project_written_without_the_service_reports_no_pipeline_path()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var organizationId = await host.OrganizationIdAsync();
+
+        // TC-002's shape: the rows are written straight through the context, with no
+        // `ProjectService.Validate` to null the repository fields out - the seed/import shape. Both
+        // ways a row can reach the table that way are here, because the card requires the answer to
+        // hold "regardless of how the project row was created": one states the path (an import copying
+        // a Pipeline project's fields verbatim), the other leaves it out (the entity's own initializer
+        // supplies `pipeline.lua`).
+        var importedId = await SeedFreestyleAsync(host, organizationId, "freestyle-imported", "pipeline.lua");
+        var seededId = await SeedFreestyleAsync(host, organizationId, "freestyle-seeded", pipelinePath: null);
+
+        // The imported row really does carry a pipeline path (so the fact cannot pass because the row
+        // was empty): the run's emptiness below is the snapshot's own decision, not the row's.
+        Assert.Equal("pipeline.lua", (await host.ReadProjectAsync(importedId)).PipelinePath);
+
+        // The seed row that omits the field carries one too, because the entity's initializer supplies
+        // it - the row half of this shape, so the fact names what it borrows from that initializer
+        // instead of only saying so in a comment (deleting it would leave this half with no subject).
+        Assert.Equal("pipeline.lua", (await host.ReadProjectAsync(seededId)).PipelinePath);
+
+        foreach (var projectId in new[] { importedId, seededId })
+        {
+            var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
+
+            // The run reports no pipeline file: the kind decides, not the row.
+            Assert.Equal(string.Empty, (await host.ReadRunAsync(runId)).PipelinePath);
+
+            // ... and the page a person reads shows the empty marker, never a path for a project with
+            // no repository.
+            var page = await AuthTestHost.GetStringAsync(owner, $"/runs/{runId}");
+            Assert.Equal("-", TextOf(page, "dd", "run-pipeline-path"));
+            Assert.DoesNotContain("pipeline.lua", page, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -183,6 +224,46 @@ public sealed class FreestyleRunTests
         var location = response.Headers.Location!.OriginalString;
         Assert.StartsWith("/projects/", location, StringComparison.Ordinal);
         return Guid.Parse(location["/projects/".Length..].Split('?')[0]);
+    }
+
+    /// <summary>
+    /// Writes a Freestyle project row the way a seed or an import does - no service, no validation -
+    /// with its steps already frozen. <paramref name="pipelinePath"/> is assigned only when it is
+    /// given, so the <see langword="null"/> case exercises whatever the entity itself supplies.
+    /// </summary>
+    private static Task<Guid> SeedFreestyleAsync(
+        RunTestHost host,
+        Guid organizationId,
+        string name,
+        string? pipelinePath) =>
+        host.InSystemScopeAsync(async context =>
+        {
+            var project = new Project
+            {
+                OrganizationId = organizationId,
+                Name = name,
+                Kind = ProjectKinds.Freestyle,
+                FreestyleSpecJson = TwoSteps(),
+            };
+            if (pipelinePath is not null)
+            {
+                project.PipelinePath = pipelinePath;
+            }
+
+            context.Projects.Add(project);
+            await context.SaveChangesAsync();
+            return project.Id;
+        });
+
+    /// <summary>The text inside the element whose <c>id</c> is <paramref name="id"/>, decoded and trimmed.</summary>
+    private static string TextOf(string page, string tag, string id)
+    {
+        var match = Regex.Match(
+            page,
+            $"<{tag}\\b[^>]*id=\"{Regex.Escape(id)}\"[^>]*>(.*?)</{tag}>",
+            RegexOptions.CultureInvariant | RegexOptions.Singleline);
+        Assert.True(match.Success, $"the page does not render a <{tag}> with id=\"{id}\"");
+        return WebUtility.HtmlDecode(match.Groups[1].Value).Trim();
     }
 
     private static string TwoSteps() => JsonSerializer.Serialize(

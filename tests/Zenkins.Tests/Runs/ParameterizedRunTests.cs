@@ -116,6 +116,63 @@ public sealed class ParameterizedRunTests
     }
 
     [Fact]
+    public async Task A_repeated_choice_entry_is_refused_at_save_and_no_duplicate_option_renders()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync("duplicate-choices");
+        var savedDefinitionsJson = Definitions();
+        Assert.True(await SaveParametersAsync(owner, projectId, savedDefinitionsJson));
+        var storedBeforeRefusal = (await host.ReadProjectAsync(projectId)).ParametersJson;
+        Assert.NotNull(storedBeforeRefusal);
+
+        // TC-001's payload: the editor's own draft list for `fast,fast`, posted to the real endpoint.
+        var duplicateChoices = JsonSerializer.Serialize(new object[]
+        {
+            new { name = "MODE", type = "choice", defaultValue = "fast", choicesText = "fast,fast", description = "" },
+        });
+        var refused = await OrganizationTestHost.PostFormAsync(
+            owner,
+            $"/projects/{projectId}",
+            $"/projects/{projectId}/parameters",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["ParametersJson"] = duplicateChoices });
+
+        // Refused with a stable code, on the tab that owns the editor (F-021's PRG target).
+        Assert.Equal((HttpStatusCode)302, refused.StatusCode);
+        Assert.Contains(
+            $"/projects/{projectId}/parameters?error=parameters-invalid",
+            refused.Headers.Location!.OriginalString,
+            StringComparison.Ordinal);
+        var refusalPage = await AuthTestHost.GetStringAsync(
+            owner,
+            $"/projects/{projectId}/parameters?error=parameters-invalid");
+        Assert.Contains("The parameter list was refused", refusalPage, StringComparison.Ordinal);
+
+        // Nothing was replaced: the stored definitions are byte for byte the ones saved above (the
+        // refusal happens before the write, so not even a re-serialization moved them).
+        var after = (await host.ReadProjectAsync(projectId)).ParametersJson;
+        Assert.Equal(storedBeforeRefusal, after);
+        Assert.Equal(
+            ["GREETING", "NOTES", "DRY_RUN", "MODE"],
+            JsonSerializer.Deserialize(after!, ProjectParameterJsonContext.Default.ProjectParameterArray)!
+                .Select(parameter => parameter.Name));
+
+        // And the form a person reads renders one option per declared value - the duplicate can never
+        // reach the markup, which is the half of TC-001 a stored list alone would not prove.
+        var trigger = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}");
+        var mode = Between(trigger, "select", "run-param-MODE", "</select>");
+        Assert.Equal(2, Regex.Matches(mode, "<option", RegexOptions.CultureInvariant).Count);
+        Assert.Single(Regex.Matches(mode, "value=\"fast\"", RegexOptions.CultureInvariant));
+
+        // The refusal cost nothing: a trigger still resolves `fast`, so the fact pins a refused edit
+        // rather than a broken definition list.
+        var runId = await RunTestHost.TriggerRunAsync(
+            owner,
+            projectId,
+            parameters: new Dictionary<string, string>(StringComparer.Ordinal) { ["MODE"] = "fast" });
+        Assert.Equal("fast", ReadParameters((await host.ReadRunAsync(runId)).ParametersJson)["MODE"]);
+    }
+
+    [Fact]
     public async Task A_project_without_parameters_carries_none()
     {
         using var host = await RunTestHost.CreateAsync();

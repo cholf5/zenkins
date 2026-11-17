@@ -1642,9 +1642,14 @@ public sealed class RunService(
             // F-014 snapshots: the branch the trigger chose and the project's pipeline path. Both are
             // copies, so editing the project later never moves this run. A Freestyle run (F-020) has
             // neither a branch nor a pipeline file - the empty branch is the honest record, and the
-            // frozen spec below is what executes.
+            // frozen spec below is what executes. B-006: the pipeline path follows the same rule the
+            // branch does, decided by the kind rather than by whatever the row holds - a Freestyle row
+            // written without `ProjectService.Validate` (a seed, an import, a hand-run migration) can
+            // carry a path, and a run must not report a pipeline file for a project with no repository.
             GitBranch = branch ?? string.Empty,
-            PipelinePath = project.PipelinePath ?? string.Empty,
+            PipelinePath = project.Kind == ProjectKinds.Freestyle
+                ? string.Empty
+                : project.PipelinePath ?? string.Empty,
             TimeoutSeconds = timeoutSeconds,
 
             // F-020: the Freestyle run's frozen spec, snapshotted by the trigger source. A Pipeline
