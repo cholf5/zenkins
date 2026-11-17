@@ -101,6 +101,22 @@ loop (`dotnet run` from a clone).
 > now answers unknown for the 74 tokens it cannot place - 73 `--tw-*` declarations inside Tailwind's
 > `@supports` fallback blocks plus `--bb-menu-accent` - none of which any fact ever asserted. No new
 > category and no new exclusion - the sextuple filter is unchanged.
+> Q-012 (the behaviours the F-020/F-021 review had proved with throwaway probes) added **9** facts on
+> 2026-11-17, all in the fast suite: 2 for a Freestyle project's webhook gate (the settings form refuses
+> the kind with `webhookError=project-not-pipeline`, and a delivery to a webhook row seeded on that kind is
+> recorded `ignored:no-repository` with no run queued - the delivery half is defence in depth, unreachable
+> through the product, so the fact seeds the row); 1 for the trigger's snapshot (a run still keeps the spec
+> it froze through two later step edits, one while it is queued, one after it was claimed and accepted); 1
+> for `Project.Kind` (an edit that posts a different kind leaves the stored kind - and the other kind's
+> repository fields - untouched, in both directions); 2 for F-021's trigger surface (every parameter input
+> pre-filled with its definition's default - the string's value, the multi-line text's own content, the
+> boolean's checked radio and the choice's selected option - and an over-bound value refused at the trigger
+> endpoint with no run queued, while the value exactly at the bound is accepted and snapshotted); and 3 for
+> the script step's on-disk shape (`temp/step-N.sh|cmd` by 1-based position, UTF-8 **without a BOM** byte for
+> byte, `sh -e` pinned by the behaviour only it produces - a failing line ends the script and the second one
+> never runs - plus a source-level pin of the Windows `cmd /d /s /c` invocation, because no Windows host was
+> in the loop when the fact was written; the card records that reason). No new category and no new
+> exclusion - the sextuple filter is unchanged.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Xunit;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Runs;
@@ -245,6 +246,76 @@ public sealed class ParameterizedRunTests
         Assert.DoesNotContain(">later<", page, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_trigger_form_prefills_every_parameter_input_with_its_definitions_default()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync("parameter-prefill");
+        Assert.True(await SaveParametersAsync(owner, projectId, PrefillDefinitions()));
+
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}");
+
+        // A single-line string: the input's value is the definition's default, not an empty box with a
+        // legal field name (the shape this fact exists to be distinguishable from).
+        var greeting = NormalizeWhitespace(Element(page, "input", "run-param-GREETING"));
+        Assert.Contains("name=\"Parameters[GREETING]\"", greeting, StringComparison.Ordinal);
+        Assert.Contains("value=\"prefilled-hello\"", greeting, StringComparison.Ordinal);
+
+        // A multi-line text: the textarea's own content is the default - a two-line one, so "prefilled"
+        // and "empty" cannot be confused, and the newline survives the render (the markup carries it
+        // escaped, as HTML requires, so the content is decoded the way a browser decodes it).
+        Assert.Equal(
+            "prefilled notes\nline two",
+            WebUtility.HtmlDecode(Between(page, "textarea", "run-param-NOTES", "</textarea>")));
+
+        // A boolean is a radio pair (an unchecked checkbox posts nothing at all): the default's radio is
+        // the checked one, so an untouched submit posts the default instead of omitting the field.
+        var dryRun = NormalizeWhitespace(Between(page, "div", "run-param-DRY_RUN", "</div>"));
+        Assert.Contains("value=\"true\" checked", dryRun, StringComparison.Ordinal);
+        Assert.DoesNotContain("value=\"false\" checked", dryRun, StringComparison.Ordinal);
+
+        // A choice: the default's option is the selected one (not merely that some option is selected).
+        var mode = NormalizeWhitespace(Between(page, "select", "run-param-MODE", "</select>"));
+        Assert.Contains("value=\"slow\" selected", mode, StringComparison.Ordinal);
+        Assert.DoesNotContain("value=\"fast\" selected", mode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_out_of_bounds_value_is_refused_at_the_trigger_endpoint()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync("parameter-bounds");
+        Assert.True(await SaveParametersAsync(owner, projectId, Definitions()));
+
+        // One character over the string bound: the trigger, not only the unit-level resolver, is where
+        // this has to be refused - a hand-built POST never goes through the form's own inputs.
+        var overBound = new string('x', ProjectParameterLimits.MaxStringValueLength + 1);
+        var response = await RunTestHost.StartRunAsync(
+            owner,
+            projectId,
+            parameters: new Dictionary<string, string>(StringComparer.Ordinal) { ["GREETING"] = overBound });
+
+        Assert.Equal((HttpStatusCode)302, response.StatusCode);
+        var location = response.Headers.Location!.OriginalString;
+        Assert.Contains($"runError={RunErrorCodes.ParameterInvalid}", location, StringComparison.Ordinal);
+
+        // No run exists: the refusal happens before the row, so nothing is queued for a worker to claim.
+        Assert.Empty(await host.ReadRunsAsync(await host.OrganizationIdAsync()));
+
+        // And the trigger page renders the refusal instead of dropping it on the redirect.
+        var page = await AuthTestHost.GetStringAsync(owner, location);
+        Assert.Contains("id=\"run-form-error\"", page, StringComparison.Ordinal);
+
+        // The bound is two-sided: a value exactly at it is accepted and snapshotted, so the fact pins
+        // the edge rather than "long values are always refused".
+        var atBound = new string('y', ProjectParameterLimits.MaxStringValueLength);
+        var runId = await RunTestHost.TriggerRunAsync(
+            owner,
+            projectId,
+            parameters: new Dictionary<string, string>(StringComparer.Ordinal) { ["GREETING"] = atBound });
+        Assert.Equal(atBound, ReadParameters((await host.ReadRunAsync(runId)).ParametersJson)["GREETING"]);
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
@@ -310,6 +381,43 @@ public sealed class ParameterizedRunTests
         Assert.NotNull(json);
         return JsonSerializer.Deserialize(json!, ProjectParameterJsonContext.Default.DictionaryStringString)!;
     }
+
+    /// <summary>
+    /// The definitions the prefill fact renders (Q-012): every default is a value an empty input could
+    /// not produce, and the text default has two lines so a whitespace-only render cannot pass.
+    /// </summary>
+    private static string PrefillDefinitions() => JsonSerializer.Serialize(
+        new object[]
+        {
+            new { name = "GREETING", type = "string", defaultValue = "prefilled-hello", choicesText = "", description = "" },
+            new { name = "NOTES", type = "text", defaultValue = "prefilled notes\nline two", choicesText = "", description = "" },
+            new { name = "DRY_RUN", type = "boolean", defaultValue = "true", choicesText = "", description = "" },
+            new { name = "MODE", type = "choice", defaultValue = "slow", choicesText = "fast,slow", description = "" },
+        });
+
+    /// <summary>The opening tag of the element whose <c>id</c> is <paramref name="id"/>.</summary>
+    private static string Element(string page, string tag, string id)
+    {
+        var match = Regex.Match(
+            page,
+            $"<{tag}\\b[^>]*id=\"{Regex.Escape(id)}\"[^>]*>",
+            RegexOptions.CultureInvariant);
+        Assert.True(match.Success, $"the page does not render a <{tag}> with id=\"{id}\"");
+        return match.Value;
+    }
+
+    /// <summary>The content between an element's opening tag and <paramref name="closing"/>.</summary>
+    private static string Between(string page, string tag, string id, string closing)
+    {
+        var open = Element(page, tag, id);
+        var start = page.IndexOf(open, StringComparison.Ordinal) + open.Length;
+        var end = page.IndexOf(closing, start, StringComparison.Ordinal);
+        Assert.True(end > start, $"<{tag} id=\"{id}\"> is not closed by '{closing}'");
+        return page[start..end];
+    }
+
+    /// <summary>Collapses the renderer's indentation so attribute order is what is asserted, not layout.</summary>
+    private static string NormalizeWhitespace(string markup) => Regex.Replace(markup, "\\s+", " ");
 
     private sealed record ClaimPayload(Guid RunId, string? PipelineSpecJson, IReadOnlyDictionary<string, string>? Parameters);
 

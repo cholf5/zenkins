@@ -2,6 +2,7 @@ using System.Net;
 using Xunit;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Projects;
+using Zenkins.Shared.Projects;
 using Zenkins.Tests.Auth;
 using Zenkins.Tests.Organizations;
 
@@ -240,6 +241,74 @@ public sealed class ProjectCrudTests
     }
 
     [Fact]
+    public async Task An_edit_that_posts_a_different_kind_does_not_change_it()
+    {
+        using var host = await OrganizationTestHost.CreateAsync();
+        using var client = await host.SignInAsync(OrganizationTestHost.OwnerEmail);
+
+        // A Freestyle project's kind is what makes its runs execute a frozen step list instead of a
+        // repository definition (F-020), and a queued run already snapshotted that choice - so an edit
+        // that posts a different kind is ignored, not honoured.
+        var freestyleId = await CreateFreestyleProjectAsync(client, "stays-freestyle");
+
+        // The premise first (an assertion about "unchanged" is vacuous if the row was never what it
+        // claims): the project really is a repository-free Freestyle project before the edit.
+        var freestyleBefore = await host.ReadProjectAsync(freestyleId);
+        Assert.Equal(ProjectKinds.Freestyle, freestyleBefore.Kind);
+        Assert.Null(freestyleBefore.RepositoryUrl);
+        Assert.Null(freestyleBefore.PipelinePath);
+
+        var toPipeline = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{freestyleId}/edit",
+            $"/projects/{freestyleId}/edit",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = "stays-freestyle-renamed",
+                ["Kind"] = ProjectKinds.Pipeline,
+                ["RepositoryUrl"] = "https://github.com/acme/turned-into-pipeline.git",
+                ["DefaultBranch"] = "main",
+                ["PipelinePath"] = ProjectValidation.DefaultPipelinePath,
+            });
+
+        // The edit itself succeeds - only the kind is immune, so the rest of the form still applies.
+        MembershipAuthorizationProbes.AssertRedirect(toPipeline, $"/projects/{freestyleId}?notice=updated");
+        var freestyle = await host.ReadProjectAsync(freestyleId);
+        Assert.Equal(ProjectKinds.Freestyle, freestyle.Kind);
+        Assert.Equal("stays-freestyle-renamed", freestyle.Name);
+        Assert.Null(freestyle.RepositoryUrl);
+        Assert.Null(freestyle.DefaultBranch);
+        Assert.Null(freestyle.PipelinePath);
+
+        // And the other direction: a Pipeline project's repository fields cannot be dropped by posting
+        // the Freestyle kind over them (a Pipeline edit still has to carry them, so they are posted
+        // unchanged - and only the kind is under test).
+        var pipelineId = await CreateProjectAsync(client, "stays-pipeline");
+        var pipelineBefore = await host.ReadProjectAsync(pipelineId);
+        Assert.Equal(ProjectKinds.Pipeline, pipelineBefore.Kind);
+        Assert.Equal(RepositoryUrl, pipelineBefore.RepositoryUrl);
+        Assert.Equal(ProjectValidation.DefaultPipelinePath, pipelineBefore.PipelinePath);
+
+        var toFreestyle = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{pipelineId}/edit",
+            $"/projects/{pipelineId}/edit",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = "stays-pipeline",
+                ["Kind"] = ProjectKinds.Freestyle,
+                ["RepositoryUrl"] = RepositoryUrl,
+                ["DefaultBranch"] = "main",
+                ["PipelinePath"] = ProjectValidation.DefaultPipelinePath,
+            });
+        MembershipAuthorizationProbes.AssertRedirect(toFreestyle, $"/projects/{pipelineId}?notice=updated");
+        var pipeline = await host.ReadProjectAsync(pipelineId);
+        Assert.Equal(ProjectKinds.Pipeline, pipeline.Kind);
+        Assert.Equal(RepositoryUrl, pipeline.RepositoryUrl);
+        Assert.Equal("main", pipeline.DefaultBranch);
+    }
+
+    [Fact]
     public async Task Member_can_create_and_edit_but_only_an_owner_can_delete()
     {
         using var host = await OrganizationTestHost.CreateAsync();
@@ -396,6 +465,26 @@ public sealed class ProjectCrudTests
         string pipelinePath = ProjectValidation.DefaultPipelinePath)
     {
         return CreateProjectCoreAsync(client, name, repositoryUrl, defaultBranch, pipelinePath);
+    }
+
+    /// <summary>Creates a Freestyle project through the real create form (card F-020's kind selector).</summary>
+    private static async Task<Guid> CreateFreestyleProjectAsync(HttpClient client, string name)
+    {
+        var response = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/projects/new",
+            "/projects/create",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = name,
+                ["Kind"] = ProjectKinds.Freestyle,
+            });
+        Assert.True(
+            (int)response.StatusCode is 302 or 303,
+            $"Creating the freestyle project '{name}' failed with {(int)response.StatusCode}.");
+        var location = response.Headers.Location!.OriginalString;
+        Assert.StartsWith("/projects/", location, StringComparison.Ordinal);
+        return Guid.Parse(location["/projects/".Length..].Split('?')[0]);
     }
 
     private static async Task<Guid> CreateProjectCoreAsync(

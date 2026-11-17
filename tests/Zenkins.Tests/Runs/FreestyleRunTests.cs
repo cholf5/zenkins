@@ -104,6 +104,50 @@ public sealed class FreestyleRunTests
     }
 
     [Fact]
+    public async Task Editing_the_steps_after_a_trigger_does_not_move_the_queued_or_running_runs_snapshot()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner, "freestyle-snapshot");
+        Assert.True(await SaveStepsAsync(owner, projectId, TwoSteps()));
+
+        // A run is queued ...
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
+        var frozen = (await host.ReadRunAsync(runId)).PipelineSpecJson;
+        Assert.NotNull(frozen);
+
+        // ... the project's steps are edited while it waits, and the queued run keeps the spec it
+        // froze at trigger time.
+        Assert.True(await SaveStepsAsync(owner, projectId, RewrittenSteps("Publish")));
+        Assert.Equal(frozen, (await host.ReadRunAsync(runId)).PipelineSpecJson);
+
+        // The same run is then claimed and accepted, i.e. it is running ...
+        var (workerToken, _) = await host.RegisterWorkerAsync();
+        using var workerClient = host.Host.CreateClient();
+        using var claimed = await RunTestHost.ClaimAsync(workerClient, workerToken);
+        Assert.Equal(HttpStatusCode.OK, claimed.StatusCode);
+        Assert.Equal(runId, (await ReadClaimAsync(claimed)).RunId);
+        using var accepted = await RunTestHost.AcceptAsync(workerClient, workerToken, runId);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal(BuildRunStatus.Running, (await host.ReadRunAsync(runId)).Status);
+
+        // ... and a second edit does not move it either.
+        Assert.True(await SaveStepsAsync(owner, projectId, RewrittenSteps("Release")));
+
+        // The edit really landed on the project (so the assertion above is not vacuous) ...
+        Assert.Contains(
+            "Release",
+            (await host.ReadProjectAsync(projectId)).FreestyleSpecJson!,
+            StringComparison.Ordinal);
+
+        // ... while the running run still holds exactly the spec it froze at trigger time: the snapshot
+        // is the run's, not a view over the project's current steps.
+        Assert.Equal(frozen, (await host.ReadRunAsync(runId)).PipelineSpecJson);
+        Assert.True(PipelineSpecJson.TryRead(frozen, out var executed, out var error), error);
+        Assert.Equal(["Greet", "Index"], executed!.Steps.Select(step => step.Name));
+    }
+
+    [Fact]
     public async Task An_unknown_kind_is_refused_at_create()
     {
         using var host = await RunTestHost.CreateAsync();
@@ -146,6 +190,16 @@ public sealed class FreestyleRunTests
         {
             new { name = "Greet", script = "echo hello", envLines = "", continueOnError = false, artifactsText = "" },
             new { name = "Index", script = "python3 index.py", envLines = "INDEX_ROOT=/srv/index", continueOnError = false, artifactsText = " out/index " },
+        });
+
+    /// <summary>
+    /// The steps an edit posts after the run was triggered (Q-012): one differently-named step, so the
+    /// project's stored spec and the run's snapshot cannot agree by accident.
+    /// </summary>
+    private static string RewrittenSteps(string stepName) => JsonSerializer.Serialize(
+        new object[]
+        {
+            new { name = stepName, script = "echo rewritten", envLines = "", continueOnError = false, artifactsText = "" },
         });
 
     private static async Task<bool> SaveStepsAsync(HttpClient owner, Guid projectId, string stepsJson) =>

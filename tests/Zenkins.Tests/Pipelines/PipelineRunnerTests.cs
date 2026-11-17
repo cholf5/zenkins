@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Text;
 using Xunit;
+using Xunit.Sdk;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Worker;
 using Zenkins.Worker.Git;
@@ -354,6 +356,116 @@ public sealed class PipelineRunnerTests
         Assert.False(File.Exists(Path.Combine(run.Work.RepositoryPath, "marker.txt")));
     }
 
+    // ------------------------------------------------------------------
+    // The Freestyle script step (card F-020; the facts are card Q-012's)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_script_step_lands_in_temp_as_step_N_as_utf8_without_a_bom()
+    {
+        // Two script steps, so the name is pinned by position and not by "there is one file".
+        var spec = ScriptSpec("echo café", "echo second");
+        using var run = new PipelineRunHarness(PipelineSpecJson.Serialize(spec));
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+
+        // temp/step-N.{cmd|sh}: the run's own scratch directory, the step's 1-based position, and the
+        // platform's extension - never the other platform's.
+        var extension = OperatingSystem.IsWindows() ? "cmd" : "sh";
+        var otherPlatform = OperatingSystem.IsWindows() ? "sh" : "cmd";
+        var first = Path.Combine(run.Work.TempPath, $"step-1.{extension}");
+        var second = Path.Combine(run.Work.TempPath, $"step-2.{extension}");
+        Assert.True(File.Exists(first), $"the first script step's file is missing: {first}");
+        Assert.True(File.Exists(second), $"the second script step's file is missing: {second}");
+        Assert.Empty(Directory.GetFiles(run.Work.TempPath, $"step-*.{otherPlatform}"));
+
+        // UTF-8 without a BOM, byte for byte: a BOM's characters would become the first command on
+        // Windows and a stray token on Unix, which is why the encoding is written explicitly.
+        var written = File.ReadAllBytes(first);
+        Assert.Equal(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes("echo café"), written);
+        Assert.False(
+            written.Length >= 3 && written[0] == 0xEF && written[1] == 0xBB && written[2] == 0xBF,
+            "the script file starts with a UTF-8 BOM");
+
+        // And the file is what actually ran: the non-ASCII text came back through the child's stdout.
+        Assert.Equal(new UTF8Encoding(false).GetBytes("echo second"), File.ReadAllBytes(second));
+        Assert.Contains("café", run.OutputLines);
+        Assert.Contains("second", run.OutputLines);
+    }
+
+    [Fact]
+    public async Task A_script_step_runs_under_sh_minus_e_so_a_failing_line_ends_the_script()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw SkipException.ForSkip(
+                "cmd /c has no -e: a failing line does not end a command file, so the Unix `sh -e` "
+                + "pin has no Windows counterpart to execute. The Windows half of the invocation is "
+                + "pinned at the source level by the next fact (recorded reason: no Windows host was "
+                + "in the reviewing loop).");
+        }
+
+        // Two lines: the first fails and the second would print. Without `-e` the shell would run the
+        // second line and the step would exit 0 - so the outcome is what pins the flag, not a comment.
+        var script = "false\necho SURVIVED";
+        using var run = new PipelineRunHarness(PipelineSpecJson.Serialize(ScriptSpec(script)));
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(1, outcome.ExitCode);
+        Assert.Equal(PipelineFailureReasons.StepFailed, outcome.FailureReason);
+        Assert.DoesNotContain("SURVIVED", run.OutputLines);
+        Assert.Contains(run.LogLines, line => line.Contains("exited with code 1", StringComparison.Ordinal));
+
+        // The file really holds both lines: the script stopped at the failure, it was not truncated.
+        var extension = OperatingSystem.IsWindows() ? "cmd" : "sh";
+        Assert.Equal(
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(script),
+            File.ReadAllBytes(Path.Combine(run.Work.TempPath, $"step-1.{extension}")));
+    }
+
+    [Fact]
+    public void The_windows_half_of_the_script_invocation_is_pinned_at_the_source_level()
+    {
+        // Recorded reason (card Q-012): the facts above were executed on macOS, with no Windows host in
+        // the loop, so the `cmd` branch cannot be run here. This is the code-level pin the card allows:
+        // the two literals that make a script step work on Windows at all - the extension the file is
+        // written with and the `/d /s /c` invocation (`/s` makes a path with spaces safe).
+        var source = File.ReadAllText(
+            Path.Combine(RepoRoot(), "src", "Worker", "Pipelines", "PipelineRunner.cs"));
+
+        Assert.Contains("OperatingSystem.IsWindows() ? \"cmd\" : \"sh\"", source, StringComparison.Ordinal);
+        Assert.Contains("[\"cmd.exe\", \"/d\", \"/s\", \"/c\", scriptFile]", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A Freestyle spec over one script per entry (card F-020): built and serialized by the product's
+    /// own contract, so the shape the runner reads is the shape the Server freezes.
+    /// </summary>
+    private static PipelineSpec ScriptSpec(params string[] scripts) => new(
+        PipelineSpecSchema.Version,
+        "script-shape",
+        [.. scripts.Select((script, index) => new PipelineStep($"Step {index + 1}", Script: script))]);
+
+    private static string RepoRoot()
+    {
+        var directory = AppContext.BaseDirectory;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (File.Exists(Path.Combine(directory, "Zenkins.slnx")))
+            {
+                return directory;
+            }
+
+            directory = Path.GetDirectoryName(directory)!;
+        }
+
+        Assert.Fail("the repository root (Zenkins.slnx) was not found above the test output.");
+        return string.Empty;
+    }
+
     /// <summary>
     /// One pipeline run with the real Git layer, the real definition phase and the real process runner,
     /// in a throwaway work root. The only stand-ins are the server hop (the definition report) and the
@@ -364,7 +476,7 @@ public sealed class PipelineRunnerTests
         private readonly string _workRoot = Path.Combine(
             Path.GetTempPath(), $"zenkins-f014-run-{Guid.NewGuid():N}");
 
-        private readonly PipelineRepository _repository;
+        private readonly PipelineRepository? _repository;
         private readonly List<string> _logLines = [];
         private readonly List<string> _outputLines = [];
 
@@ -379,6 +491,23 @@ public sealed class PipelineRunnerTests
             Directory.CreateDirectory(_workRoot);
             Work = new WorkDirectoryService(_workRoot).Prepare(Guid.NewGuid());
         }
+
+        /// <summary>
+        /// A Freestyle run (card F-020): no repository, no clone, no definition phase - the frozen spec
+        /// below is what executes, exactly as the claim hands it to the worker.
+        /// </summary>
+        public PipelineRunHarness(string frozenSpecJson)
+        {
+            _repository = null;
+            FrozenSpecJson = frozenSpecJson;
+            Branch = string.Empty;
+            PipelinePath = string.Empty;
+            Directory.CreateDirectory(_workRoot);
+            Work = new WorkDirectoryService(_workRoot).Prepare(Guid.NewGuid());
+        }
+
+        /// <summary>The Freestyle run's frozen spec; null for a Pipeline run.</summary>
+        public string? FrozenSpecJson { get; }
 
         public RunWorkDirectory Work { get; }
 
@@ -436,7 +565,8 @@ public sealed class PipelineRunnerTests
                 new PipelineRunOptions
                 {
                     Work = Work,
-                    RepositoryUrl = _repository.FileUrl,
+                    RepositoryUrl = _repository?.FileUrl,
+                    PipelineSpecJson = FrozenSpecJson,
                     Branch = Branch,
                     PipelinePath = PipelinePath,
                     Deadline = Deadline,
