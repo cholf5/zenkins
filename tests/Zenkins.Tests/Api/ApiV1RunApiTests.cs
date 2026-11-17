@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 using Zenkins.Server.Data.Entities;
+using Zenkins.Server.Runs;
 using Zenkins.Tests.Organizations;
 using Zenkins.Tests.Runs;
 
@@ -17,6 +18,17 @@ namespace Zenkins.Tests.Api;
 public sealed class ApiV1RunApiTests
 {
     private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
+
+    /// <summary>
+    /// A named status assertion (card Q-017): the tag dimension, the tag-set dimension and the parameter
+    /// dimension are separate facts, and a red one must say which payload difference moved so a mutation
+    /// of the fingerprint cannot be mistaken for another dimension's failure.
+    /// </summary>
+    private static void AssertStatus(HttpStatusCode expected, HttpStatusCode actual, string dimension) =>
+        Assert.True(
+            actual == expected,
+            $"{dimension}: expected {(int)expected}, got {(int)actual} - "
+                + (expected == HttpStatusCode.OK ? "a legal resend must still replay." : "a refused payload must be refused."));
 
     [Fact]
     public async Task A_token_triggers_a_run_and_the_reply_carries_the_run_id()
@@ -215,6 +227,267 @@ public sealed class ApiV1RunApiTests
     }
 
     [Fact]
+    public async Task A_resend_that_differs_only_in_a_refused_tag_is_refused_while_the_same_tags_still_replay()
+    {
+        // Card Q-017: the fingerprint hashes the tags as *sent*. The list the trigger path accepts is the
+        // wrong input, because it silently drops exactly the entries validation refuses - so a resend
+        // differing only in such a tag hashed identically and replayed a 200 where a new key is a 400.
+        // Only two kinds of entry are dropped: one longer than MaxTagLength, and one that still carries a
+        // non-whitespace control character after trimming (MaxRequiredTagsLength is a refusal of its own,
+        // not a drop). The whitespace controls tab/vertical-tab/form-feed are trimmed away and are *not*
+        // refused, so a tag list padded with those is still the same request and must still replay.
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync();
+        var token = await host.MintTokenPlaintextAsync(owner, "tagged-key");
+        using var api = host.CreateApiClient(token);
+
+        // The organization needs a worker that covers the base tags, or the base trigger is refused for
+        // the other reason (tag-unknown) - this fact is about the key, not about claimability.
+        await host.Inner.RegisterWorkerAsync(name: "tagged-agent", tags: "linux,gpu");
+
+
+        Guid firstRunId;
+        using (var first = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main", requiredTags = "linux, gpu" }, idempotencyKey: "tags-1"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(first);
+            firstRunId = body.RootElement.GetProperty("id").GetGuid();
+        }
+
+        // (a) The same tag set, re-spelled: another order, padded, a repeated entry, and a list whose
+        //     padding is made of whitespace controls (trimmed, never refused). Every reader treats tags
+        //     as a trimmed set, so this is the request that already ran - it replays.
+        foreach (var respelled in new[] { " gpu , linux ", "gpu,linux,gpu", " linux\t, gpu\v", "linux, gpu" })
+        {
+            using var replay = await ApiV1TestHost.TriggerAsync(
+                api, projectId, new { branch = "main", requiredTags = respelled }, idempotencyKey: "tags-1");
+            AssertStatus(
+                HttpStatusCode.OK,
+                replay.StatusCode,
+                $"tag dimension: the legal re-spelling '{respelled.Replace("\t", "\\t", StringComparison.Ordinal).Replace("\v", "\\v", StringComparison.Ordinal)}' must still replay the run it repeats");
+            Assert.Equal("true", Assert.Single(replay.Headers.GetValues("Idempotency-Replayed")));
+            using var body = await ApiV1TestHost.ReadJsonAsync(replay);
+            Assert.Equal(firstRunId, body.RootElement.GetProperty("id").GetGuid());
+        }
+
+        Assert.Single(await host.ReadProjectRunsAsync(projectId));
+
+        // (b) The differences that are *refusals*: an over-long entry, a control-bearing one, and the
+        //     adversarial one - "lin\u0001ux" is dropped as control-bearing, so a fingerprint that
+        //     sanitized instead of hashing as sent would collapse it onto the first "linux" and replay.
+        var refusedTags = new[]
+        {
+            $"linux, gpu, {new string('a', RunValidation.MaxTagLength + 1)}",
+            "linux, gpu, bad\u0001tag",
+            "linux, gpu, lin\u0001ux",
+        };
+        foreach (var refused in refusedTags)
+        {
+            var shown = refused.Replace("\u0001", "<U+0001>", StringComparison.Ordinal);
+            using (var reused = await ApiV1TestHost.TriggerAsync(
+                api, projectId, new { branch = "main", requiredTags = refused }, idempotencyKey: "tags-1"))
+            {
+                AssertStatus(
+                    HttpStatusCode.Conflict,
+                    reused.StatusCode,
+                    $"tag dimension: a resend differing only in the refused tag '{shown}' is not the request that ran");
+                using var body = await ApiV1TestHost.ReadJsonAsync(reused);
+                Assert.Equal("idempotency-key-reused", body.RootElement.GetProperty("error").GetString());
+                Assert.False(reused.Headers.Contains("Idempotency-Replayed"));
+            }
+
+            // The symmetry that makes this a refusal rather than a hiccup: a fresh key sending the very
+            // same body is refused on its merits, as tag-invalid. Without this the assertion above could
+            // pass while the body was refused for some unrelated reason.
+            using var freshKey = await ApiV1TestHost.TriggerAsync(
+                api, projectId, new { branch = "main", requiredTags = refused }, idempotencyKey: "tags-2");
+            Assert.Equal(HttpStatusCode.BadRequest, freshKey.StatusCode);
+            using var freshBody = await ApiV1TestHost.ReadJsonAsync(freshKey);
+            Assert.Equal("tag-invalid", freshBody.RootElement.GetProperty("error").GetString());
+            Assert.Equal(
+                "requiredTags",
+                freshBody.RootElement.GetProperty("fieldErrors")[0].GetProperty("field").GetString());
+        }
+
+        // Nothing extra was queued by any of the refusals, and the accepted request is still the one the
+        // key names (a refusal must not re-point or overwrite the binding).
+        var run = Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        Assert.Equal(firstRunId, run.Id);
+        var record = Assert.Single(await host.ReadIdempotencyRecordsAsync());
+        Assert.Equal(firstRunId, record.RunId);
+
+        // The legal retry is still a replay after all of that - the fingerprint did not become an
+        // "anything that differs is new" rule, and the refused attempts left no trace behind.
+        using var retried = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main", requiredTags = "gpu, linux" }, idempotencyKey: "tags-1");
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        Assert.Equal("true", Assert.Single(retried.Headers.GetValues("Idempotency-Replayed")));
+        Assert.Single(await host.ReadProjectRunsAsync(projectId));
+    }
+
+    [Fact]
+    public async Task A_reused_key_refuses_a_different_tag_set_before_the_worker_coverage_check()
+    {
+        // Card Q-017, the tag dimension of AC-2 (branch and timeout already had their assertions). The
+        // second tag is *legal* - so the difference is not a validation error - but no worker covers it.
+        // The key's decision is taken before field validation and before the coverage check, so the answer
+        // is the key's refusal; a route that validated first would answer 400 tag-unknown instead.
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync();
+        var token = await host.MintTokenPlaintextAsync(owner, "tag-set");
+        using var api = host.CreateApiClient(token);
+        await host.Inner.RegisterWorkerAsync(name: "linux-agent", tags: "linux");
+
+        Guid firstRunId;
+        using (var first = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main", requiredTags = "linux" }, idempotencyKey: "tagset-1"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(first);
+            firstRunId = body.RootElement.GetProperty("id").GetGuid();
+        }
+
+        using (var changedTags = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main", requiredTags = "linux,docker" }, idempotencyKey: "tagset-1"))
+        {
+            AssertStatus(
+                HttpStatusCode.Conflict,
+                changedTags.StatusCode,
+                "tag-set dimension: one added tag is a different payload");
+            using var body = await ApiV1TestHost.ReadJsonAsync(changedTags);
+            Assert.Equal("idempotency-key-reused", body.RootElement.GetProperty("error").GetString());
+            Assert.False(changedTags.Headers.Contains("Idempotency-Replayed"));
+        }
+
+        // The control: the added tag really is legal-but-unclaimable, so a fresh key sending the same body
+        // reads the field refusal - which is what makes the 409 above a statement about the key rather
+        // than about a body that is refused either way.
+        using (var freshKey = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main", requiredTags = "linux,docker" }, idempotencyKey: "tagset-2"))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, freshKey.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(freshKey);
+            Assert.Equal("tag-unknown", body.RootElement.GetProperty("error").GetString());
+        }
+
+        var run = Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        Assert.Equal(firstRunId, run.Id);
+    }
+
+    [Fact]
+    public async Task A_reused_key_refuses_a_different_parameter_value()
+    {
+        // Card Q-017, the parameter dimension of AC-2. A value change is a different payload; the control
+        // below shows the changed body is otherwise acceptable, so the 409 is the key's decision and not
+        // the parameter validator's.
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync();
+        await host.SetParameterDefinitionsAsync(
+            projectId,
+            """[{"name":"GREETING","type":"string","defaultValue":"hello"}]""");
+        var token = await host.MintTokenPlaintextAsync(owner, "param-scope");
+        using var api = host.CreateApiClient(token);
+
+        Guid firstRunId;
+        using (var first = await ApiV1TestHost.TriggerAsync(
+            api,
+            projectId,
+            new { branch = "main", parameters = new Dictionary<string, string> { ["GREETING"] = "hi" } },
+            idempotencyKey: "params-1"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(first);
+            firstRunId = body.RootElement.GetProperty("id").GetGuid();
+        }
+
+        using (var changedValue = await ApiV1TestHost.TriggerAsync(
+            api,
+            projectId,
+            new { branch = "main", parameters = new Dictionary<string, string> { ["GREETING"] = "bye" } },
+            idempotencyKey: "params-1"))
+        {
+            AssertStatus(
+                HttpStatusCode.Conflict,
+                changedValue.StatusCode,
+                "parameters dimension: one changed value is a different payload");
+            using var body = await ApiV1TestHost.ReadJsonAsync(changedValue);
+            Assert.Equal("idempotency-key-reused", body.RootElement.GetProperty("error").GetString());
+            Assert.False(changedValue.Headers.Contains("Idempotency-Replayed"));
+        }
+
+        Assert.Single(await host.ReadProjectRunsAsync(projectId));
+
+        // The control: the changed body is accepted under a new key, so the refusal above is about the key.
+        using (var freshKey = await ApiV1TestHost.TriggerAsync(
+            api,
+            projectId,
+            new { branch = "main", parameters = new Dictionary<string, string> { ["GREETING"] = "bye" } },
+            idempotencyKey: "params-2"))
+        {
+            Assert.Equal(HttpStatusCode.Created, freshKey.StatusCode);
+        }
+
+        // Two runs now (the base and the control), and the first key still names the first run.
+        Assert.Equal(2, (await host.ReadProjectRunsAsync(projectId)).Count);
+        var record = Assert.Single(await host.ReadIdempotencyRecordsAsync(), row => row.Key == "params-1");
+        Assert.Equal(firstRunId, record.RunId);
+    }
+
+    [Fact]
+    public async Task The_fingerprint_of_a_legal_request_is_the_byte_the_deployed_algorithm_produced()
+    {
+        // Card Q-017's frozen values. The RequestHash is stored and compared for the key's whole retention
+        // window, so a legal request's hash must not move: if it did, every key already in the table would
+        // refuse its own retry with 409 - the bug this card fixes, made worse. These two digests are the
+        // output of the algorithm as it shipped before the tags input changed, computed from its own
+        // framing (branch.trim, the accepted tag list ordered OrdinalIgnoreCase-then-Ordinal, timeout.trim,
+        // the parameter count, then name/value pairs by Ordinal - each field written "{length}:{value};"):
+        //
+        //   4:main;12:dotnet,Linux;2:30;1:1;8:GREETING;2:hi;
+        //   4:main;0:;0:;1:0;
+        //
+        // A fingerprint that sanitized tags, widened the fields or reordered them would break these.
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync();
+        await host.SetParameterDefinitionsAsync(
+            projectId,
+            """[{"name":"GREETING","type":"string","defaultValue":"hello"}]""");
+        var token = await host.MintTokenPlaintextAsync(owner, "frozen-digest");
+        using var api = host.CreateApiClient(token);
+        await host.Inner.RegisterWorkerAsync(name: "digest-agent", tags: "dotnet,Linux");
+
+        using (var full = await ApiV1TestHost.TriggerAsync(
+            api,
+            projectId,
+            new
+            {
+                branch = "main",
+                requiredTags = "dotnet,Linux",
+                timeoutMinutes = "30",
+                parameters = new Dictionary<string, string> { ["GREETING"] = "hi" },
+            },
+            idempotencyKey: "digest-1"))
+        {
+            Assert.Equal(HttpStatusCode.Created, full.StatusCode);
+        }
+
+        using (var branchOnly = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main" }, idempotencyKey: "digest-2"))
+        {
+            Assert.Equal(HttpStatusCode.Created, branchOnly.StatusCode);
+        }
+
+        var records = await host.ReadIdempotencyRecordsAsync();
+        Assert.Equal(
+            "a7413c7e579d36a8fe90b723434ca771286c9cd447bbf4be55636d5f5e118c1c",
+            Assert.Single(records, row => row.Key == "digest-1").RequestHash);
+        Assert.Equal(
+            "70982699a4a519ea2d90305a08ed6a489f9ab5d079323c78680112320ba5ace8",
+            Assert.Single(records, row => row.Key == "digest-2").RequestHash);
+    }
+
+    [Fact]
     public async Task A_reused_key_cannot_straddle_projects_or_payloads_and_an_unknown_project_stays_a_bare_404()
     {
         using var host = await ApiV1TestHost.CreateAsync();
@@ -326,6 +599,78 @@ public sealed class ApiV1RunApiTests
         }
 
         Assert.Single(await host.ReadProjectRunsAsync(projectId));
+    }
+
+    [Fact]
+    public async Task A_replay_wins_over_a_full_queue_and_a_new_key_reads_the_refusal()
+    {
+        // Card Q-017's fact for F-029's documented precedence. Before this, the rule rested on statement
+        // order alone - the key was looked up before the cap counted - and no fact filled a queue. Here the
+        // queue is genuinely at its cap (MaxQueuedRuns = 1 holding exactly one queued run), so the cap is
+        // what a new key hits and the key's own decision is what the retry reads.
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync("queue-cap-replay");
+
+        using (var saved = await RunTestHost.SaveLimitsAsync(owner, projectId, maxQueuedRuns: 1))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, saved.StatusCode);
+            Assert.Contains("notice=limits-saved", saved.Headers.Location!.OriginalString, StringComparison.Ordinal);
+        }
+
+        var token = await host.MintTokenPlaintextAsync(owner, "replay-vs-cap");
+        using var api = host.CreateApiClient(token);
+
+        Guid occupancyRunId;
+        using (var first = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main" }, idempotencyKey: "nightly"))
+        {
+            Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(first);
+            occupancyRunId = body.RootElement.GetProperty("id").GetGuid();
+        }
+
+        // The placeholder is the key's own run: exactly one row, still queued, the id the 201 returned.
+        // (Not simply "a row exists" - the queue is full *because* this request's run occupies it.)
+        var occupancy = Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        Assert.Equal(occupancyRunId, occupancy.Id);
+        Assert.Equal(BuildRunStatus.Queued, occupancy.Status);
+
+        // A *new* key is a new trigger, and the cap answers it: 409 queue-full with the field error the
+        // form's vocabulary uses, no replay marker, nothing queued - and no binding for that key either
+        // (a refused trigger is not a request the server accepted, so it is decided afresh next time).
+        using (var fresh = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main" }, idempotencyKey: "nightly-2"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, fresh.StatusCode);
+            using var body = await ApiV1TestHost.ReadJsonAsync(fresh);
+            Assert.Equal("queue-full", body.RootElement.GetProperty("error").GetString());
+            Assert.Equal("queue", body.RootElement.GetProperty("fieldErrors")[0].GetProperty("field").GetString());
+            Assert.False(fresh.Headers.Contains("Idempotency-Replayed"));
+        }
+
+        Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        var records = await host.ReadIdempotencyRecordsAsync();
+        Assert.Equal("nightly", Assert.Single(records).Key);
+        Assert.DoesNotContain(records, row => row.Key == "nightly-2");
+
+        // The cap is still the live state when the retry arrives - the occupancy is re-read, not assumed.
+        var stillOccupied = Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        Assert.Equal(BuildRunStatus.Queued, stillOccupied.Status);
+
+        // The *same* key is the request that already ran: 200 with the replay marker and the same run id,
+        // even though the queue is still at its cap - the cap is not what a retry is asking about.
+        using (var replay = await ApiV1TestHost.TriggerAsync(
+            api, projectId, new { branch = "main" }, idempotencyKey: "nightly"))
+        {
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+            Assert.Equal("true", Assert.Single(replay.Headers.GetValues("Idempotency-Replayed")));
+            using var body = await ApiV1TestHost.ReadJsonAsync(replay);
+            Assert.Equal(occupancyRunId, body.RootElement.GetProperty("id").GetGuid());
+        }
+
+        var stillOne = Assert.Single(await host.ReadProjectRunsAsync(projectId));
+        Assert.Equal(occupancyRunId, stillOne.Id);
+        Assert.Single(await host.ReadIdempotencyRecordsAsync());
     }
 
     [Fact]

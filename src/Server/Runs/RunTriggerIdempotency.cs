@@ -18,11 +18,21 @@ public sealed record RunTriggerIdempotency(Guid ApiTokenId, string Key);
 /// <para>
 /// <b>What the hash covers, and why it is canonical.</b> The branch, the required tags, the timeout and
 /// the parameter values - the four inputs a trigger actually decides something with - each normalized
-/// the way the trigger path normalizes it: the branch and the timeout are trimmed, tags are trimmed,
-/// deduplicated and ordered (they are a set to every reader), and parameters are ordered by name (a JSON
-/// object's member order is not a promise). The same retried request therefore hashes to the same value
-/// on every platform and process, while a changed branch, tag, timeout or parameter value does not - and
-/// that difference is what turns "silently replay the old run" into a refusal.
+/// the way the trigger path normalizes it: the branch and the timeout are trimmed, tags are trimmed and
+/// deduplicated (they are a set to every reader), and parameters are ordered by name (a JSON object's
+/// member order is not a promise). The same retried request therefore hashes to the same value on every
+/// platform and process, while a changed branch, tag, timeout or parameter value does not - and that
+/// difference is what turns "silently replay the old run" into a refusal.
+/// </para>
+/// <para>
+/// <b>Tags as sent, not as accepted (card Q-017).</b> The tag list is normalized by
+/// <see cref="RunValidation.ParseTagsAsSent"/>, not by the trigger path's own
+/// <see cref="RunValidation.ParseTags"/>. The two differ on exactly the entries validation refuses
+/// (<c>tag-invalid</c>: over-long, or carrying a control character), and the fingerprint must cover
+/// those: hashing the accepted list made a resend that differs only in such a tag hash identically and
+/// replay a <c>200</c>, whereas the same request with a new key is a <c>400 tag-invalid</c> - a refusal
+/// silently lost. Keeping them changes nothing for a legal resend, whose tags survive both parses
+/// identically (trimmed, deduplicated case-insensitively, then ordered below).
 /// </para>
 /// <para>
 /// <b>Raw, not resolved.</b> The hash is taken from the request as sent, because the replay decision is
@@ -49,7 +59,7 @@ internal static class RunTriggerFingerprint
             text,
             string.Join(
                 ',',
-                RunValidation.ParseTags(input.RequiredTags)
+                RunValidation.ParseTagsAsSent(input.RequiredTags)
                     .OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(tag => tag, StringComparer.Ordinal)));
         AppendField(text, input.TimeoutMinutes?.Trim() ?? string.Empty);

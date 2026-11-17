@@ -147,6 +147,44 @@ public static class RunValidation
     }
 
     /// <summary>
+    /// The same trim, empty-drop and case-insensitive de-duplication as <see cref="ParseTags"/>, but it
+    /// <b>keeps</b> the over-long/control-bearing entries that one drops - so the result is the tag list
+    /// <em>as sent</em>, not the list this server happened to accept.
+    /// <para>
+    /// Card Q-017: the trigger's idempotency fingerprint hashes this list. <see cref="ParseTags"/> is the
+    /// wrong input for it, because the entries it drops are exactly the ones
+    /// <see cref="ValidateRequiredTags"/> refuses with <see cref="RunErrorCodes.TagInvalid"/>: hashing the
+    /// accepted list made a resend that differs only in an invalid tag hash identically and replay a
+    /// <c>200</c>, where the same request with a new key is a <c>400 tag-invalid</c>. Nothing was built
+    /// twice; a refusal was lost. Keeping the refused values makes that difference a difference again,
+    /// while the trim, de-duplication and ordering keep a merely re-spelled tag list (extra spaces,
+    /// another order, a repeated entry) hashing to the request it repeats.
+    /// </para>
+    /// </summary>
+    public static string[] ParseTagsAsSent(string? tagsText)
+    {
+        if (string.IsNullOrWhiteSpace(tagsText))
+        {
+            return [];
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tags = new List<string>();
+        foreach (var raw in tagsText.Split(','))
+        {
+            var tag = raw.Trim();
+            if (tag.Length == 0 || !seen.Add(tag))
+            {
+                continue;
+            }
+
+            tags.Add(tag);
+        }
+
+        return [.. tags];
+    }
+
+    /// <summary>
     /// Whether the worker's comma-separated tags cover every required tag (case-insensitive). A
     /// run without required tags is satisfiable by any worker, including a tagless one.
     /// </summary>

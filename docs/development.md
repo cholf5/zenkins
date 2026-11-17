@@ -117,6 +117,26 @@ loop (`dotnet run` from a clone).
 > never runs - plus a source-level pin of the Windows `cmd /d /s /c` invocation, because no Windows host was
 > in the loop when the fact was written; the card records that reason). No new category and no new
 > exclusion - the sextuple filter is unchanged.
+> Q-017 (the `Idempotency-Key` fingerprint and F-029's queue-cap replay) added **5** facts on
+> 2026-11-17, all in the fast suite and all in `ApiV1RunApiTests`: 1 for the tag dimension (a resend
+> differing only in a **refused** tag - over-long, or carrying a non-whitespace control character, the
+> two kinds validation answers `tag-invalid` for - is a `409 idempotency-key-reused` instead of a
+> replay, including the adversarial `lin\u0001ux` that a sanitizing fingerprint would collapse onto the
+> first `linux`, while a merely re-spelled legal list - another order, padded, a repeated entry, or
+> padding made of the whitespace controls tab/vertical-tab/form-feed that are trimmed and never refused -
+> still replays `200`, and a fresh key sending each refused body still reads `400 tag-invalid`); 1 for the
+> tag-set dimension (a legal second tag no worker covers is a `409` from the key, and the same body under
+> a fresh key reads `400 tag-unknown` - which is what proves the key was decided first); 1 for the
+> parameter dimension (one changed value is a `409`, and the same body under a fresh key is a `201`); 1
+> that the fingerprint of a legal request is still the exact byte the shipped algorithm produced (two
+> frozen `RequestHash` digests, so a key already in the table cannot start refusing its own retry); and 1
+> that fills a `MaxQueuedRuns = 1` queue with the key's own queued run and requires a **new** key to
+> answer `409 queue-full` (`fieldErrors[0].field = queue`, no replay marker, no binding written) and the
+> **same** key to answer `200` with `Idempotency-Replayed`, the same run id and no new run - the
+> queue-cap half of F-029's precedence, which until then rested on statement order alone. No existing
+> fact was removed or loosened; the fingerprint now hashes the tags as sent
+> (`RunValidation.ParseTagsAsSent`) instead of the list validation accepted. No new category and no new
+> exclusion - the sextuple filter is unchanged.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the

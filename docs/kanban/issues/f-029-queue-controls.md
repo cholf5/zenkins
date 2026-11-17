@@ -194,11 +194,13 @@ is F-027's — see the AC note above.
   before, and an unknown project id is a bare `404` first. Implemented in
   `RunService.CreateQueuedRunAsync` (the replay lookup sits after the project read and
   before the queue-cap count in `StageQueuedRunAsync`), written into `docs/api-v1.md`.
-  Evidence, honestly split: the **disabled** half is pinned by
-  `ApiV1RunApiTests.A_replay_wins_over_the_disabled_gate_and_a_new_key_reads_the_refusal`;
-  the **queue-cap** half is pinned by code order alone — no fact fills a queue and then
-  replays (`The_idempotency_key_queues_one_run_for_a_retried_post` never sets
-  `MaxQueuedRuns`), so a fact covering it is recorded as Q-017.
+  Evidence: both halves are pinned by facts - the **disabled** half by
+  `ApiV1RunApiTests.A_replay_wins_over_the_disabled_gate_and_a_new_key_reads_the_refusal`,
+  and the **queue-cap** half (card Q-017, 2026-11-16) by
+  `ApiV1RunApiTests.A_replay_wins_over_a_full_queue_and_a_new_key_reads_the_refusal`: it
+  fills a `MaxQueuedRuns = 1` queue, requires a **new** key to answer `409 queue-full` with
+  nothing queued, and the **same** key to answer `200` with `Idempotency-Replayed` and no
+  new run. Before that fact the queue-cap half rested on statement order alone.
 
 ## Development Log
 
