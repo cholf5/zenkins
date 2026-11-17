@@ -34,29 +34,35 @@ public sealed class BaseTokenPaletteTests
         "--sidebar-border", "--sidebar-ring",
     ];
 
-    private const string AppThemePath = "styles/theme.css";
-    private const string PalettePath = "_content/BlazorBlueprint.Components/css/themes.css";
-    private const string FrameworkPath = "_content/BlazorBlueprint.Components/blazorblueprint.css";
+    private const string FrameworkPath = ShellStylesheets.FrameworkPath;
     private const string PrimaryBackgroundSelector = ".bb\\:bg-primary";
 
     [Fact(Timeout = 3 * 60 * 1000)]
     public async Task A_browser_that_picks_nothing_gets_an_opaque_primary_and_background_in_both_modes()
     {
         Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
-        var sheets = await LoadShellStylesheetsAsync();
+        var sheets = await ShellStylesheets.LoadAsync();
 
-        var light = ServedThemeCascade.Tokens(sheets.Bodies, isDark: false);
-        var dark = ServedThemeCascade.Tokens(sheets.Bodies, isDark: true);
+        // A token this model cannot answer for is absent from Tokens on purpose (Q-021), so this
+        // fact fails closed on a condition or selector the reader does not model instead of
+        // reading a winner it is not entitled to.
+        var lightCascade = ServedThemeCascade.Resolve(sheets.Bodies, isDark: false);
+        var darkCascade = ServedThemeCascade.Resolve(sheets.Bodies, isDark: true);
+        var light = lightCascade.Tokens;
+        var dark = darkCascade.Tokens;
 
         var painted = new Dictionary<string, (string? Body, string? Primary)>(StringComparer.Ordinal);
-        foreach (var (mode, tokens) in new[] { ("light", light), ("dark", dark) })
+        foreach (var (mode, cascade) in new[] { ("light", lightCascade), ("dark", darkCascade) })
         {
+            var tokens = cascade.Tokens;
             foreach (var token in RequiredTokens)
             {
+                var answer = cascade.Answer(token);
                 Assert.True(
                     tokens.TryGetValue(token, out var value),
-                    $"{mode}: {token} is undefined with no data attributes — the palette a browser "
-                    + "that never opened the theme popover sees is missing.");
+                    $"{mode}: {token} is {answer.State} with no data attributes — the palette a browser "
+                    + "that never opened the theme popover sees is missing"
+                    + (answer.Reason is null ? "." : $" ({answer.Reason})."));
                 Assert.True(
                     ServedThemeCascade.IsOpaqueColor(value),
                     $"{mode}: {token} resolves to '{value}', which is not a color the browser paints.");
@@ -95,24 +101,39 @@ public sealed class BaseTokenPaletteTests
     public async Task The_defaults_are_the_library_s_own_zinc_so_picking_zinc_changes_nothing()
     {
         Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
-        var sheets = await LoadShellStylesheetsAsync();
+        var sheets = await ShellStylesheets.LoadAsync();
         var bodies = sheets.Bodies;
 
         foreach (var isDark in new[] { false, true })
         {
-            var nothing = ServedThemeCascade.Tokens(bodies, isDark);
-            var zinc = ServedThemeCascade.Tokens(bodies, isDark, baseColor: "zinc");
+            var nothing = ServedThemeCascade.Resolve(bodies, isDark);
+            var zinc = ServedThemeCascade.Resolve(bodies, isDark, baseColor: "zinc");
 
             // Every token either path defines must agree, in both directions: a value that only one
-            // path has is a divergence just as much as a value that differs.
-            foreach (var token in nothing.Keys.Union(zinc.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal))
-            {
-                var mode = isDark ? "dark" : "light";
-                Assert.True(nothing.ContainsKey(token), $"{mode}: {token} exists only when zinc is picked.");
-                Assert.True(zinc.ContainsKey(token), $"{mode}: {token} exists only when nothing is picked.");
+            // path exists in is a divergence just as much as a value that differs. Walking Names
+            // rather than Tokens matters after Q-021: a token the reader cannot answer for is absent
+            // from Tokens, and skipping it here would hide a state difference between the two paths.
+            var mode = isDark ? "dark" : "light";
+            Assert.Equal(nothing.UnknownTokens, zinc.UnknownTokens);
 
-                var themed = ServedThemeCascade.Resolve(nothing[token], nothing);
-                var zincValue = ServedThemeCascade.Resolve(zinc[token], zinc);
+            foreach (var token in nothing.Names.Union(zinc.Names, StringComparer.Ordinal).Order(StringComparer.Ordinal))
+            {
+                var pickedNothing = nothing.Answer(token);
+                var pickedZinc = zinc.Answer(token);
+                Assert.Equal(pickedNothing.State, pickedZinc.State);
+
+                if (pickedNothing.State == CascadeState.Unknown)
+                {
+                    // A refusal by both paths is consistent by definition; the assertion above is
+                    // what stops one path refusing where the other answers.
+                    continue;
+                }
+
+                Assert.True(nothing.Tokens.ContainsKey(token), $"{mode}: {token} exists only when zinc is picked.");
+                Assert.True(zinc.Tokens.ContainsKey(token), $"{mode}: {token} exists only when nothing is picked.");
+
+                var themed = ServedThemeCascade.Resolve(nothing.Tokens[token], nothing.Tokens);
+                var zincValue = ServedThemeCascade.Resolve(zinc.Tokens[token], zinc.Tokens);
                 Assert.Equal(zincValue, themed);
             }
         }
@@ -122,13 +143,13 @@ public sealed class BaseTokenPaletteTests
     public async Task A_picked_accent_still_overrides_the_default_primary()
     {
         Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
-        var sheets = await LoadShellStylesheetsAsync();
+        var sheets = await ShellStylesheets.LoadAsync();
         var bodies = sheets.Bodies;
 
         foreach (var isDark in new[] { false, true })
         {
-            var nothing = ServedThemeCascade.Tokens(bodies, isDark);
-            var violet = ServedThemeCascade.Tokens(bodies, isDark, baseColor: "zinc", primaryColor: "violet");
+            var nothing = ServedThemeCascade.Resolve(bodies, isDark).Tokens;
+            var violet = ServedThemeCascade.Resolve(bodies, isDark, baseColor: "zinc", primaryColor: "violet").Tokens;
 
             // B-007's fix must not become the most specific rule on the page: the palette sheet has
             // to keep winning as soon as the switcher writes the attribute.
@@ -138,35 +159,5 @@ public sealed class BaseTokenPaletteTests
             // The base gray scale is untouched by an accent choice.
             Assert.Equal(nothing["--background"], violet["--background"]);
         }
-    }
-
-    /// <summary>
-    /// The stylesheets the shell really links, fetched from the running host in <c>&lt;head&gt;</c>
-    /// order — the same list a browser would cascade over.
-    /// </summary>
-    private static async Task<(List<string> Bodies, Dictionary<string, string> ByHref)> LoadShellStylesheetsAsync()
-    {
-        using var host = new AuthTestHost();
-        using var client = host.CreateClient();
-
-        // The account pages are static SSR, so this needs no signed-in session; App.razor renders
-        // the same <head> for them and for the shell.
-        var page = await AuthTestHost.GetStringAsync(client, "/account/login");
-
-        var hrefs = ServedThemeCascade.StylesheetHrefs(page);
-        Assert.Contains(AppThemePath, hrefs);
-        Assert.Contains(PalettePath, hrefs);
-        Assert.Contains(FrameworkPath, hrefs);
-
-        var bodies = new List<string>(hrefs.Count);
-        var byHref = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var href in hrefs)
-        {
-            var body = await AuthTestHost.GetStringAsync(client, "/" + href);
-            bodies.Add(body);
-            byHref[href] = body;
-        }
-
-        return (bodies, byHref);
     }
 }

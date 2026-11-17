@@ -29,7 +29,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
 | [Q-017](issues/q-017-idempotency-fingerprint-and-cap-replay.md) | The idempotency fingerprint drops invalid tags before hashing, and replay-vs-queue-cap has no fact | P3 | S | | none |
 | [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | S | | none |
-| [Q-021](issues/q-021-theme-cascade-model-blind-spots.md) | The theme cascade model counts element selectors as zero and ignores @layer, so it can pass what a browser rejects | P2 | S | | none |
 | [Q-012](issues/q-012-f020-f021-review-test-debt.md) | The F-020/F-021 review proved four behaviours with probes that the suite does not carry | P2 | S | | none |
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Duplicate choice entries accepted; a Freestyle row's inherited pipeline path | P3 | S | | none |
 
@@ -104,3 +103,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | 2026-11-16 |
 | [Q-014](issues/q-014-artifact-zip-temp-snapshot-flake.md) | The artifact zip fact snapshots the OS temp directory and fails whenever anything else writes there | P2 | 2026-11-17 |
 | [Q-019](issues/q-019-tenant-scan-escapde-base64-collision.md) | A short organization name collides with machine-generated base64 in the tenant page scan | P2 | 2026-11-17 |
+| [Q-021](issues/q-021-theme-cascade-model-blind-spots.md) | The theme cascade model counts element selectors as zero and ignores @layer, so it can pass what a browser rejects | P2 | 2026-11-17 |

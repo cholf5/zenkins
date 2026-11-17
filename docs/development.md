@@ -78,6 +78,29 @@ loop (`dotnet run` from a clone).
 > category and no new exclusion - the sextuple filter is unchanged. Q-014 (the artifact-zip temp snapshot)
 > moved no count: it retargeted the zip fact and two harness self-tests at the download's own scoped temp
 > root, 2 rewrites and 0 deletions.
+> Q-021 (the theme cascade model, which counted element selectors as zero and ignored `@layer`) added
+> **8** facts on 2026-11-17, all in `ThemeCascadeModelTests.cs`, and every one of them pins a dimension a
+> browser decides and the old reader got by luck: specificity is the (ids, classes, types) triple compared
+> lexicographically, so an unlayered `html:root` (0,1,1) beats a later `[data-base-color="zinc"]`
+> (0,1,0) in *both* sheet orders while `:root[data-base-color]` (0,2,0) still beats `html:root`, and a lone
+> `html` (0,0,1) does not outrank a bare attribute; an unlayered normal declaration beats every layered one
+> whichever sheet comes first, and layer order itself comes from the `@layer a, b;` statement and first
+> appearance rather than from block order, with nested layers weaker than unlayered rules; and on the real
+> served sheets `--sidebar-width` is exactly `15rem`, `--sidebar-width-icon` exactly `3rem` (that pair is
+> deliberate - the first is only right if layers are compared, the second is declared *only* inside
+> `@layer base`, so skipping or refusing layered declarations cannot pass both) and
+> `--sidebar-width-mobile` `18rem`. The rest pin the refusals: an `@media`/`@supports` prelude the reader
+> cannot evaluate makes the properties inside it answer unknown - per property, not per sheet or block, and
+> a conditional declaration that provably loses still lets the answer through - and unknown is asserted to
+> be distinguishable from "never declared"; a rule that cannot select `<html>` (`body`, `@container`,
+> `@keyframes` frames) supplies it nothing; and `!important` is ranked, never left in the value, so
+> `red !important` beats a later `blue` and `IsOpaqueColor("oklch(1 0 0) !important")` is false. **One
+> value on the real sheets moved, and it was the wrong one:** `--sidebar-width` `16rem` → `15rem`, because
+> the `16rem` sits in `blazorblueprint.css`'s `@layer base` and the `15rem` is unlayered in
+> `styles/theme.css`. No existing assertion was removed or loosened (two were tightened), and the reader
+> now answers unknown for the 74 tokens it cannot place - 73 `--tw-*` declarations inside Tailwind's
+> `@supports` fallback blocks plus `--bb-menu-accent` - none of which any fact ever asserted. No new
+> category and no new exclusion - the sextuple filter is unchanged.
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
