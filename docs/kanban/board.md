@@ -27,7 +27,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | M | | F-021 |
 | [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
-| [Q-014](issues/q-014-artifact-zip-temp-snapshot-flake.md) | The artifact zip fact snapshots the OS temp directory and fails whenever anything else writes there | P2 | S | | none |
 | [Q-017](issues/q-017-idempotency-fingerprint-and-cap-replay.md) | The idempotency fingerprint drops invalid tags before hashing, and replay-vs-queue-cap has no fact | P3 | S | | none |
 | [Q-018](issues/q-018-schedule-race-catch-path.md) | The schedule's lost-race catch path has no committed fact, and it drops the candidate it caught | P3 | S | | none |
 | [Q-019](issues/q-019-tenant-scan-escapde-base64-collision.md) | A short organization name collides with machine-generated base64 in the tenant page scan | P2 | S | | none |
@@ -104,3 +103,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [Q-020](issues/q-020-concurrency-offline-window-margin.md) | The concurrency mass trigger gives the offline window no margin, so a stalled heartbeat reads as a product failure | P2 | 2026-11-16 |
 | [B-009](issues/b-009-ilcompiler-audit-blocks-fresh-build.md) | A fresh Windows machine cannot restore — NU1903 on ILCompiler, and warnings are errors | P2 | 2026-11-16 |
 | [D-007](issues/d-007-theme-switcher.md) | Multi-theme switcher in the app bar (dark/light, base gray scale, accent, radius) | P2 | 2026-11-16 |
+| [Q-014](issues/q-014-artifact-zip-temp-snapshot-flake.md) | The artifact zip fact snapshots the OS temp directory and fails whenever anything else writes there | P2 | 2026-11-17 |
