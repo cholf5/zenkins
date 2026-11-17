@@ -62,10 +62,13 @@
                                     <p class="bb:font-medium">
                                         <a href="/projects/@project.Id" class="bb:underline bb:underline-offset-4">@project.Name</a>
                                     </p>
-                                    @* F-020: a Freestyle project has no repository - the secondary line
-                                       says so instead of rendering an empty string. *@
+                                    @* F-020/F-022: a project with no repository says so instead of
+                                       rendering an empty string. *@
                                     <p class="bb:truncate bb:text-xs bb:text-muted-foreground">
-                                        @(project.RepositoryUrl ?? "Freestyle project - steps configured on the server")
+                                        @(project.RepositoryUrl
+                                            ?? (project.Kind == ProjectKinds.Freestyle
+                                                ? "Freestyle project - steps configured on the server"
+                                                : "Inline pipeline - script stored on the server"))
                                     </p>
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
@@ -78,6 +81,11 @@
                                     @if (project.Kind == ProjectKinds.Freestyle)
                                     {
                                         <BbBadge Variant="BadgeVariant.Secondary">Freestyle</BbBadge>
+                                    }
+                                    else if (project.PipelineSource == ProjectSources.Inline)
+                                    {
+                                        <BbBadge Variant="BadgeVariant.Secondary">Inline</BbBadge>
+                                        <span>pipeline.lua</span>
                                     }
                                     else
                                     {

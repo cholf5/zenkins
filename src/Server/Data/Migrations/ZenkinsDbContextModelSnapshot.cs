@@ -367,6 +367,9 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
 
+                    b.Property<string>("PipelineScriptText")
+                        .HasColumnType("text");
+
                     b.Property<string>("PipelineSpecJson")
                         .HasColumnType("text");
 
@@ -630,6 +633,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<Guid?>("GitCredentialId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("InlineScript")
+                        .HasColumnType("text");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -667,6 +673,13 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
 
+                    b.Property<string>("PipelineSource")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("repository");
+
                     b.Property<int>("QuietPeriodSeconds")
                         .HasColumnType("integer");
 
@@ -693,6 +706,8 @@ namespace Zenkins.Server.Data.Migrations
                             t.HasCheckConstraint("CK_Projects_MaxConcurrentRuns", "\"MaxConcurrentRuns\" IS NULL OR \"MaxConcurrentRuns\" >= 1");
 
                             t.HasCheckConstraint("CK_Projects_MaxQueuedRuns", "\"MaxQueuedRuns\" IS NULL OR \"MaxQueuedRuns\" >= 1");
+
+                            t.HasCheckConstraint("CK_Projects_PipelineSource", "\"PipelineSource\" IN ('repository', 'inline')");
 
                             t.HasCheckConstraint("CK_Projects_QuietPeriodSeconds", "\"QuietPeriodSeconds\" >= 0");
                         });

@@ -86,7 +86,13 @@ public sealed record ProjectView(
     DateTimeOffset? LastProbeAt = null,
 
     /// <summary>Card I-005: the probe's diagnostic words, if it had any.</summary>
-    string? LastProbeMessage = null);
+    string? LastProbeMessage = null,
+
+    /// <summary>F-022: where a Pipeline project's definition lives (<see cref="ProjectSources"/>).</summary>
+    string PipelineSource = ProjectSources.Repository,
+
+    /// <summary>F-022: the inline Pipeline's Lua body; null for a repository project and for Freestyle.</summary>
+    string? InlineScript = null);
 
 /// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
 /// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
@@ -96,7 +102,16 @@ public sealed record ProjectInput(
     string? Kind,
     string? RepositoryUrl,
     string? DefaultBranch,
-    string? PipelinePath);
+    string? PipelinePath,
+
+    /// <summary>
+    /// F-022: the definition source (only honoured on create, like <see cref="Kind"/>). Blank means
+    /// <see cref="ProjectSources.Repository"/>; an inline Pipeline needs <see cref="InlineScript"/>.
+    /// </summary>
+    string? PipelineSource = null,
+
+    /// <summary>F-022: the inline Pipeline's Lua body, if the source is inline.</summary>
+    string? InlineScript = null);
 
 /// <summary>
 /// The queue-controls form's raw values (card F-029), before trimming and validation. Blank means "the
@@ -238,7 +253,26 @@ public sealed class ProjectService(
             errors.Add(new ProjectFieldError(ProjectFields.Kind, kindError));
         }
 
-        errors.AddRange(Validate(input, kind, out var name, out var repositoryUrl, out var branch, out var pipelinePath));
+        // F-022: the source is a create-time decision. A Freestyle project has no definition source -
+        // its steps are frozen in FreestyleSpecJson - so the column keeps the historical default and
+        // the inline body is ignored for it, exactly as the repository fields are.
+        var sourceError = ProjectValidation.ValidatePipelineSource(input.PipelineSource, out var source);
+        if (sourceError is not null)
+        {
+            errors.Add(new ProjectFieldError(ProjectFields.PipelineSource, sourceError));
+        }
+
+        source = kind == ProjectKinds.Pipeline ? source : ProjectSources.Repository;
+
+        errors.AddRange(Validate(
+            input,
+            kind,
+            source,
+            out var name,
+            out var repositoryUrl,
+            out var branch,
+            out var pipelinePath,
+            out var inlineScript));
         if (errors.Count > 0)
         {
             return ProjectMutationResult.Invalid([.. errors]);
@@ -250,6 +284,8 @@ public sealed class ProjectService(
             OrganizationId = activeOrganizationId.Value,
             Name = name,
             Kind = kind,
+            PipelineSource = source,
+            InlineScript = inlineScript,
             RepositoryUrl = repositoryUrl,
             DefaultBranch = branch,
             PipelinePath = pipelinePath,
@@ -309,8 +345,24 @@ public sealed class ProjectService(
 
         // The kind is immutable after create (F-020): the edit validates the repository fields against
         // the project's existing kind and never rewrites it, so a kind swap cannot strand the
-        // run semantics a queued run already snapshotted.
-        var errors = Validate(input, project.Kind, out var name, out var repositoryUrl, out var branch, out var pipelinePath);
+        // run semantics a queued run already snapshotted. F-022 gives the source the same rule: a posted
+        // source is ignored, so a Pipeline project cannot turn inline (or back) and strand its runs.
+        //
+        // F-022: the kind-locked edit form renders no script field (the Pipelines tab owns the editor),
+        // so an absent InlineScript means "keep the stored one" rather than "clear it". An explicitly
+        // posted empty value is still refused by the validator.
+        var effectiveInput = project.PipelineSource == ProjectSources.Inline && input.InlineScript is null
+            ? input with { InlineScript = project.InlineScript }
+            : input;
+        var errors = Validate(
+            effectiveInput,
+            project.Kind,
+            project.PipelineSource,
+            out var name,
+            out var repositoryUrl,
+            out var branch,
+            out var pipelinePath,
+            out var inlineScript);
         if (errors.Count > 0)
         {
             return ProjectMutationResult.Invalid([.. errors]);
@@ -319,9 +371,19 @@ public sealed class ProjectService(
         project.Name = name;
         if (project.Kind == ProjectKinds.Pipeline)
         {
-            project.RepositoryUrl = repositoryUrl;
-            project.DefaultBranch = branch;
-            project.PipelinePath = pipelinePath;
+            // A definition source decides which half of the form is the project's own state: an inline
+            // project stores the script and keeps every repository field null (the honest empty value
+            // AC-1 asks for); a repository project stores the three fields and no script.
+            if (project.PipelineSource == ProjectSources.Inline)
+            {
+                project.InlineScript = inlineScript;
+            }
+            else
+            {
+                project.RepositoryUrl = repositoryUrl;
+                project.DefaultBranch = branch;
+                project.PipelinePath = pipelinePath;
+            }
         }
 
         try
@@ -677,13 +739,75 @@ public sealed class ProjectService(
         return ProjectMutationResult.Success(project.Id);
     }
 
+    /// <summary>
+    /// Saves the inline script editor's body (card F-022). Members may edit, like every other project
+    /// field. The project must be a Pipeline with the inline source: a repository project's definition
+    /// is its repository's file, and a Freestyle project's is its frozen steps, so neither has a script
+    /// to save. The text is stored verbatim after the same bound the trigger and the Worker apply.
+    /// </summary>
+    public async Task<ProjectMutationResult> SaveInlineScriptAsync(
+        string actingUserId,
+        Guid projectId,
+        string? script,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to edit.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return ProjectMutationResult.NotFound();
+        }
+
+        if (project.Kind != ProjectKinds.Pipeline || project.PipelineSource != ProjectSources.Inline)
+        {
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectFields.InlineScript, ProjectErrorCodes.PipelineSourceInvalid));
+        }
+
+        var scriptError = ProjectValidation.ValidateInlineScript(script, out var normalized);
+        if (scriptError is not null)
+        {
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectFields.InlineScript, scriptError));
+        }
+
+        project.InlineScript = normalized;
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Inline pipeline script saved. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId} ScriptBytes={ScriptBytes}",
+            activeOrganizationId,
+            project.Id,
+            actingUserId,
+            System.Text.Encoding.UTF8.GetByteCount(normalized));
+        return ProjectMutationResult.Success(project.Id);
+    }
+
     private static List<ProjectFieldError> Validate(
         ProjectInput input,
         string kind,
+        string source,
         out string name,
         out string? repositoryUrl,
         out string? branch,
-        out string? pipelinePath)
+        out string? pipelinePath,
+        out string? inlineScript)
     {
         var errors = new List<ProjectFieldError>();
 
@@ -700,9 +824,29 @@ public sealed class ProjectService(
             repositoryUrl = null;
             branch = null;
             pipelinePath = null;
+            inlineScript = null;
             return errors;
         }
 
+        if (source == ProjectSources.Inline)
+        {
+            // F-022: an inline project has no repository fields and one Lua body. The empty values are
+            // stored as null on the row (the honest empty value), and the pipeline path stays null -
+            // the run's own snapshot names pipeline.lua, because that is the file the script becomes.
+            repositoryUrl = null;
+            branch = null;
+            pipelinePath = null;
+            var scriptError = ProjectValidation.ValidateInlineScript(input.InlineScript, out var normalizedScript);
+            if (scriptError is not null)
+            {
+                errors.Add(new ProjectFieldError(ProjectFields.InlineScript, scriptError));
+            }
+
+            inlineScript = normalizedScript;
+            return errors;
+        }
+
+        inlineScript = null;
         var repositoryUrlError = ProjectValidation.ValidateRepositoryUrl(input.RepositoryUrl, out var normalizedUrl);
         if (repositoryUrlError is not null)
         {
@@ -769,5 +913,7 @@ public sealed class ProjectService(
         project.MaxQueuedRuns,
         project.LastProbeOutcome,
         project.LastProbeAt,
-        project.LastProbeMessage);
+        project.LastProbeMessage,
+        project.PipelineSource,
+        project.InlineScript);
 }

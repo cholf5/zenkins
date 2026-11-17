@@ -2,9 +2,11 @@
 @attribute [Authorize]
 @using Zenkins.Shared.Pipelines
 @using Zenkins.Shared.Projects
+@using Zenkins.Server.Probes
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
 @inject RunService RunsService
+@inject Zenkins.Server.Probes.DefinitionValidationService Validations
 
 @* D-003: the definition tab, read-only by decision for a Pipeline project - it answers "what does
    this project actually run": the pipeline file from settings, and - when any run exists - the
@@ -54,6 +56,116 @@
                                       ErrorCode="@ErrorCode" />
             </BbCardContent>
         </BbCard>
+    }
+    else if (_project.Kind == ProjectKinds.Pipeline && _project.PipelineSource == ProjectSources.Inline)
+    {
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <BbCardTitle As="h1" tabindex="-1">Pipelines · @_project.Name</BbCardTitle>
+                <BbBadge Variant="BadgeVariant.Outline">Inline</BbBadge>
+            </div>
+        </div>
+
+        <ProjectTabs ProjectId="@_project.Id" Active="pipelines" Kind="@_project.Kind" />
+
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Pipeline script</BbCardTitle>
+                <BbCardDescription>
+                    This project's definition lives here, not in a repository. Every run snapshots the
+                    script at trigger time and its worker runs the definition phase against
+                    <code>pipeline.lua</code>, so a later edit never moves a queued or running run.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <form method="post"
+                      action="@($"/projects/{_project.Id}/inline/script")"
+                      data-zenkins-antiforgery
+                      class="bb:space-y-3">
+                    <label for="inline-script" class="bb:text-sm bb:font-medium">Script</label>
+                    <textarea id="inline-script"
+                              name="Script"
+                              rows="18"
+                              maxlength="65536"
+                              spellcheck="false"
+                              autocomplete="off"
+                              class="bb:flex bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-sm">@_project.InlineScript</textarea>
+                    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                        <button type="submit"
+                                class="bb:inline-flex bb:h-9 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                            Save script
+                        </button>
+                        @* F-022 (AC-6): Validate runs the definition phase on a worker and shows the
+                           step list. It does not save and does not create a run - the button posts the
+                           textarea's text to its own endpoint (formaction), which is the honest version
+                           of Jenkins' "validate on save". A plain <button> so formaction is guaranteed
+                           to render. *@
+                        <button type="submit"
+                                formaction="@($"/projects/{_project.Id}/inline/validate")"
+                                class="bb:inline-flex bb:h-9 bb:items-center bb:justify-center bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-4 bb:text-sm bb:font-medium">
+                            Validate
+                        </button>
+                    </div>
+                </form>
+            </BbCardContent>
+        </BbCard>
+
+        @if (_validation is { } validation)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Validation result</BbCardTitle>
+                    <BbCardDescription>
+                        What the definition phase produced for the text that was validated. No step ran and
+                        no run was created. Saving the script alone never claims it is valid.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    @if (validation.NoWorker)
+                    {
+                        <p id="inline-validation-no-worker" class="bb:text-sm bb:text-muted-foreground">
+                            No worker answered the validation before the wait ended. Start a worker and try
+                            again; the script was not saved and nothing was queued.
+                        </p>
+                    }
+                    else if (validation.Valid)
+                    {
+                        <p id="inline-validation-valid" class="bb:text-sm">
+                            Valid — the definition declares <span class="bb:font-medium">@validation.StepNames.Count</span> step(s):
+                        </p>
+                        <ol id="inline-validation-steps" class="bb:mt-2 bb:space-y-2 bb:text-sm">
+                            @for (var stepIndex = 0; stepIndex < validation.StepNames.Count; stepIndex++)
+                            {
+                                <li>
+                                    <span class="bb:text-xs bb:text-muted-foreground">@(stepIndex + 1).</span>
+                                    <span class="bb:font-medium">@validation.StepNames[stepIndex]</span>
+                                </li>
+                            }
+                        </ol>
+                    }
+                    else
+                    {
+                        <p id="inline-validation-invalid" class="bb:text-sm bb:text-destructive">
+                            Invalid — @validation.FailureReason
+                        </p>
+                        <pre id="inline-validation-diagnostic" class="bb:mt-2 bb:overflow-x-auto bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-xs">@validation.Diagnostic</pre>
+                    }
+                </BbCardContent>
+            </BbCard>
+        }
     }
     else
     {
@@ -176,15 +288,26 @@
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
 
+    /// <summary>F-022: the script save's / validation's notice.</summary>
+    [SupplyParameterFromQuery(Name = "validated")]
+    private string? ValidatedId { get; set; }
+
+    /// <summary>The specific settled validation the PRG redirect named; a malformed/forged id is null.</summary>
+    private Guid? RequestedValidationId => Guid.TryParse(ValidatedId, out var id) ? id : null;
+
     private string? Notice => NoticeCode switch
     {
         "steps-saved" => "The steps were saved; the next run carries this snapshot.",
+        "script-saved" => "The script was saved; the next run carries this snapshot. Saving does not prove it valid - use Validate.",
         _ => null,
     };
+
+    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
 
     private ProjectView? _project;
     private RunView? _newestRun;
     private IReadOnlyList<PipelineStep>? _savedSteps;
+    private DefinitionValidationView? _validation;
 
     protected override async Task OnInitializedAsync()
     {
@@ -209,6 +332,13 @@
         if (_project.Kind == ProjectKinds.Freestyle)
         {
             _savedSteps = LoadSavedSteps(_project.FreestyleSpecJson);
+        }
+
+        // F-022: the last settled validation for this project, so the PRG redirect can show its step
+        // list. It is deliberately a GET-time read of an in-memory result, not a run or a stored row.
+        if (_project.Kind == ProjectKinds.Pipeline && _project.PipelineSource == ProjectSources.Inline)
+        {
+            _validation = Validations.LastValidation(ProjectId, RequestedValidationId);
         }
 
         // The same read the Runs tab uses (newest first), so "newest" means the same run everywhere.

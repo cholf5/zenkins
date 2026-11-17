@@ -183,10 +183,11 @@ public sealed class WebhookService(
             return WebhookManagementResult.NotFound();
         }
 
-        // F-020: a webhook triggers on git pushes, and a Freestyle project has no repository to push
-        // to. There is no branch to filter and no commit to pin, so creating one for that kind is
-        // refused here rather than minting a webhook that can never fire honestly.
-        if (project.Kind == ProjectKinds.Freestyle)
+        // F-020/F-022: a webhook triggers on git pushes, and a project with no repository (Freestyle,
+        // or an inline Pipeline) has nothing to push to. There is no branch to filter and no commit to
+        // pin, so creating one is refused here rather than minting a webhook that can never fire
+        // honestly. One shared predicate covers both sources - the guard does not multiply.
+        if (!ProjectSources.HasRepository(project.Kind, project.PipelineSource))
         {
             return WebhookManagementResult.Invalid(
                 new WebhookFieldError(WebhookFields.BranchFilter, WebhookErrorCodes.ProjectNotPipeline));

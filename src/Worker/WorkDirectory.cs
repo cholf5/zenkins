@@ -105,6 +105,34 @@ public sealed class WorkDirectoryService
     }
 
     /// <summary>
+    /// Prepares a definition-only validation's scratch tree (card F-022):
+    /// <c>{work-root}/validations/{validation-id}/temp</c>. A validation is not a run - no
+    /// repository, no artifacts, no claim in the run table - so it gets its own two-level tree under
+    /// the same root and deletes it when the answer is reported. The id is the Server's GUID, so the
+    /// same canonical-name discipline applies as everywhere else.
+    /// </summary>
+    public ValidationWorkDirectory PrepareValidation(Guid validationId)
+    {
+        var rootPath = Path.Combine(_root, "validations", validationId.ToString("D"));
+        var validation = new ValidationWorkDirectory(
+            validationId,
+            rootPath,
+            Path.Combine(rootPath, "temp"));
+        Directory.CreateDirectory(validation.TempPath);
+        return validation;
+    }
+
+    /// <summary>Deletes a validation's whole scratch tree; a missing tree is fine.</summary>
+    public void CleanupValidation(ValidationWorkDirectory validation)
+    {
+        ArgumentNullException.ThrowIfNull(validation);
+        if (Directory.Exists(validation.RootPath))
+        {
+            Directory.Delete(validation.RootPath, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// Deletes the run's <c>temp/</c> tree (card decision: on by default via
     /// <c>ZENKINS_CLEANUP_TEMP</c>). <c>repository/</c> and <c>artifacts/</c> are kept; retention
     /// for those is a later card. Deleting a missing directory is fine.
@@ -149,6 +177,12 @@ public sealed record RunWorkDirectory(
     /// </summary>
     public string WorkspacePath => Path.Combine(RootPath, "workspace");
 }
+
+/// <summary>One definition-only validation's scratch tree (card F-022): no repository, no artifacts.</summary>
+/// <param name="ValidationId">The Server's validation id (the canonical directory name).</param>
+/// <param name="RootPath">Where the script is materialised; deleted when the answer is reported.</param>
+/// <param name="TempPath">The scratch directory (the script is written here).</param>
+public sealed record ValidationWorkDirectory(Guid ValidationId, string RootPath, string TempPath);
 
 /// <summary>
 /// One probe's scratch tree (card I-005): the credential carrier's <c>temp/</c> and the git/ssh hardening

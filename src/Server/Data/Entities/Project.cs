@@ -27,6 +27,24 @@ public sealed class Project : ITenantOwned
     public string Kind { get; set; } = ProjectKinds.Pipeline;
 
     /// <summary>
+    /// Where a <see cref="ProjectKinds.Pipeline"/> project's definition lives (card F-022): a Git
+    /// repository (<see cref="ProjectSources.Repository"/>, the original source) or a Lua body stored
+    /// on this row (<see cref="ProjectSources.Inline"/>). <b>Immutable after create</b>, exactly like
+    /// <see cref="Kind"/>: a run snapshots its definition shape, and letting the source move would strand
+    /// queued runs. A Freestyle project never reads this column and keeps the historical default.
+    /// </summary>
+    public string PipelineSource { get; set; } = ProjectSources.Repository;
+
+    /// <summary>
+    /// The inline Pipeline's Lua body (card F-022), bounded by
+    /// <see cref="Zenkins.Shared.Pipelines.PipelineScriptLimits.MaxScriptBytes"/>. Null for a
+    /// repository project - there the definition is the repository's file - and null for Freestyle,
+    /// whose definition is <see cref="FreestyleSpecJson"/>. The script is copied onto every run at
+    /// trigger time; editing it here never moves a queued or running run.
+    /// </summary>
+    public string? InlineScript { get; set; }
+
+    /// <summary>
     /// The repository Pipeline projects clone (nullable since F-020: a Freestyle project has none).
     /// <see langword="null"/> never reaches a clone - the Freestyle path skips it.
     /// </summary>

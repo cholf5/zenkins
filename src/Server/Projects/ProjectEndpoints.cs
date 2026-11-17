@@ -51,6 +51,12 @@ public static class ProjectEndpoints
         // F-021: the parameters editor's save - the same shape, both kinds.
         group.MapPost("/{projectId:guid}/parameters", SaveParametersAsync);
 
+        // F-022: the inline Pipeline editor's save and its definition-only Validate action. Both are
+        // the same form-post + antiforgery shape as every other project mutation; the page that owns
+        // the editor renders the notice/error and the validation's step list.
+        group.MapPost("/{projectId:guid}/inline/script", SaveInlineScriptAsync);
+        group.MapPost("/{projectId:guid}/inline/validate", ValidateInlineScriptAsync);
+
         // F-028: the reversible trigger brake, and F-029: the queue controls. Same form-post shape
         // (antiforgery through UseAntiforgery) and the same 404/403 answers as every other project
         // mutation; the PRG target is the settings tab, which owns the forms and renders the codes.
@@ -178,6 +184,74 @@ public static class ProjectEndpoints
             ProjectMutationStatus.Forbidden => Forbidden(result),
             ProjectMutationStatus.NotFound => Results.NotFound(),
             _ => Results.Redirect($"/projects/{projectId}/parameters?error={ProjectErrorCodes.ParametersInvalid}"),
+        };
+    }
+
+    private static async Task<IResult> SaveInlineScriptAsync(
+        Guid projectId,
+        [FromForm] InlineScriptForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await projects.SaveInlineScriptAsync(
+            userId,
+            projectId,
+            form?.Script,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/pipelines?notice=script-saved"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect(
+                $"/projects/{projectId}/pipelines?error={result.FieldErrors?.FirstOrDefault()?.Code ?? ProjectErrorCodes.InlineScriptRequired}"),
+        };
+    }
+
+    /// <summary>
+    /// F-022's Validate: run the posted script's definition phase on a Worker and show the resulting
+    /// step list. It is deliberately <b>not</b> a save: the text the person is looking at is what gets
+    /// validated, and saving alone never claims a script is valid. The request creates no run row and
+    /// takes no build slot (see <see cref="Probes.DefinitionValidationService"/>); a repository project
+    /// has no script to validate and is refused with the editor's own stable code.
+    /// </summary>
+    private static async Task<IResult> ValidateInlineScriptAsync(
+        Guid projectId,
+        [FromForm] InlineScriptForm form,
+        HttpContext httpContext,
+        ProjectService projects,
+        Probes.DefinitionValidationService validations)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await validations.ValidateInlineScriptAsync(
+            userId,
+            projectId,
+            form?.Script,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            Probes.DefinitionValidationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/pipelines?validated={result.ValidationId}"),
+            Probes.DefinitionValidationStatus.Forbidden =>
+                Results.Redirect($"/projects/{projectId}/pipelines?error={ProjectErrorCodes.PipelineSourceInvalid}"),
+            Probes.DefinitionValidationStatus.NotFound => Results.NotFound(),
+            Probes.DefinitionValidationStatus.InvalidInput =>
+                Results.Redirect($"/projects/{projectId}/pipelines?error={result.ErrorCode ?? ProjectErrorCodes.InlineScriptRequired}"),
+            _ => Results.Redirect($"/projects/{projectId}/pipelines?error={ProjectErrorCodes.InlineScriptRequired}"),
         };
     }
 
@@ -334,6 +408,10 @@ public static class ProjectEndpoints
             ["repositoryUrl"] = form?.RepositoryUrl,
             ["defaultBranch"] = form?.DefaultBranch,
             ["pipelinePath"] = form?.PipelinePath,
+
+            // F-022: the source is small enough to echo back (the script is not: it can be 64 KiB and
+            // the URL is not the place for it; the editor starts empty after a refused create).
+            ["pipelineSource"] = form?.PipelineSource,
         });
 
         return Results.Redirect($"{formPath}{query}");
@@ -406,7 +484,29 @@ public static class ProjectEndpoints
 
         public string? PipelinePath { get; set; }
 
-        public ProjectInput ToInput() => new(Name, Kind, RepositoryUrl, DefaultBranch, PipelinePath);
+        /// <summary>F-022: the create form's definition source (Pipeline kind only).</summary>
+        public string? PipelineSource { get; set; }
+
+        /// <summary>F-022: the create form's inline Lua body, posted only for the inline source.</summary>
+        public string? InlineScript { get; set; }
+
+        public ProjectInput ToInput() => new(
+            Name,
+            Kind,
+            RepositoryUrl,
+            DefaultBranch,
+            PipelinePath,
+            PipelineSource,
+            InlineScript);
+    }
+
+    /// <summary>
+    /// F-022's inline editor payload: the Lua body, on its own. The save endpoint stores it; the
+    /// validate endpoint runs its definition phase without storing anything.
+    /// </summary>
+    public sealed class InlineScriptForm
+    {
+        public string? Script { get; set; }
     }
 
     /// <summary>

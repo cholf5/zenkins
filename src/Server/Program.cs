@@ -257,6 +257,10 @@ app.MapRunEndpoints();
 // GitProbeService, never a route (see ProbeEndpoints).
 app.MapProbeEndpoints();
 
+// F-022: the definition-only validation's worker claim/report API (the inline Pipelines tab's
+// Validate action). It is deliberately not a run, and the requesting side is a Server service.
+app.MapDefinitionValidationEndpoints();
+
 // F-016: the worker artifact API (create/files/finalize) and the per-artifact download.
 app.MapArtifactEndpoints();
 

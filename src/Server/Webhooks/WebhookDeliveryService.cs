@@ -169,17 +169,18 @@ public sealed class WebhookDeliveryService(
         //    copy taken when the webhook was created).
         var project = await context.Projects
             .Where(candidate => candidate.Id == webhook.ProjectId)
-            .Select(candidate => new { candidate.Id, candidate.Kind, candidate.DefaultBranch })
+            .Select(candidate => new { candidate.Id, candidate.Kind, candidate.PipelineSource, candidate.DefaultBranch })
             .SingleOrDefaultAsync(cancellationToken);
         if (project is null)
         {
             return WebhookDeliveryResult.NotFound();
         }
 
-        // F-020, defence in depth: a Freestyle project has no repository to push to. Webhook creation
-        // refuses that kind and a project's kind is immutable, so this is unreachable in practice - the
-        // delivery is still recorded honestly instead of queueing a run nothing can execute.
-        if (project.Kind == Zenkins.Shared.Projects.ProjectKinds.Freestyle)
+        // F-020/F-022, defence in depth: a project with no repository (Freestyle, or an inline Pipeline)
+        // has nothing to push to. Webhook creation refuses both, and neither kind nor source is mutable,
+        // so this is unreachable in practice - the delivery is still recorded honestly instead of
+        // queueing a run nothing can execute. The same shared predicate as creation, not a second guard.
+        if (!Zenkins.Shared.Projects.ProjectSources.HasRepository(project.Kind, project.PipelineSource))
         {
             outcome = WebhookOutcomes.IgnoredNoRepository;
         }

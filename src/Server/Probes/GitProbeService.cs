@@ -209,9 +209,11 @@ public sealed class GitProbeService(
             return GitProbeRequestResult.NotFound();
         }
 
-        // A Freestyle project has no repository, so there is nothing to probe. Refusing here is the
-        // same answer the trigger form gives: two features, one statement about the same fact.
-        if (project.Kind == ProjectKinds.Freestyle || string.IsNullOrWhiteSpace(project.RepositoryUrl))
+        // F-020/F-022: a project with no repository (Freestyle, or an inline Pipeline) has nothing to
+        // probe. The shared predicate answers "has a repository"; an empty URL is still a separate
+        // fact (a row written out of band), and both are the same refusal.
+        if (!ProjectSources.HasRepository(project.Kind, project.PipelineSource)
+            || string.IsNullOrWhiteSpace(project.RepositoryUrl))
         {
             return GitProbeRequestResult.Invalid(GitProbeErrorCodes.ProjectHasNoRepository);
         }

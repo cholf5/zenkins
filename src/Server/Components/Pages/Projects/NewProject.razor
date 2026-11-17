@@ -31,7 +31,8 @@
                 <BbCardTitle As="h2">Project details</BbCardTitle>
                 <BbCardDescription>
                     A Pipeline project is the Git repository, the default branch to build and the
-                    pipeline file inside it. A Freestyle project (F-020) needs no repository: its
+                    pipeline file inside it - or, since F-022, a Lua script stored here with no
+                    repository at all. A Freestyle project (F-020) needs no repository: its
                     steps are configured on the server after it is created.
                 </BbCardDescription>
             </BbCardHeader>
@@ -41,6 +42,7 @@
                                  CancelHref="/projects"
                                  Name="@Name"
                                  Kind="@Kind"
+                                 PipelineSource="@PipelineSource"
                                  RepositoryUrl="@RepositoryUrl"
                                  DefaultBranch="@(DefaultBranch ?? "main")"
                                  PipelinePath="@(PipelinePath ?? ProjectValidation.DefaultPipelinePath)"
@@ -61,6 +63,11 @@
 
     [SupplyParameterFromQuery(Name = "kind")]
     private string? Kind { get; set; }
+
+    /// <summary>F-022: the definition source echoed back after a refused create (the script itself is
+    /// not echoed: it can be 64 KiB and the redirect URL is not the place for it).</summary>
+    [SupplyParameterFromQuery(Name = "pipelineSource")]
+    private string? PipelineSource { get; set; }
 
     [SupplyParameterFromQuery(Name = "repositoryUrl")]
     private string? RepositoryUrl { get; set; }

@@ -22,6 +22,14 @@ public static class ProbeServiceCollectionExtensions
             sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<GitProbeRegistry>();
         services.AddScoped<GitProbeService>();
+
+        // F-022: the definition-only validation reuses the same shape. Its registry is singleton (the
+        // in-memory queue) and its scoped service reads the request/circuit tenant; the options come
+        // from the fully loaded configuration, so a test can compress the wait.
+        services.AddSingleton(sp => DefinitionValidationOptions.FromConfiguration(key =>
+            sp.GetRequiredService<IConfiguration>()[key]));
+        services.AddSingleton<DefinitionValidationRegistry>();
+        services.AddScoped<DefinitionValidationService>();
         return services;
     }
 }

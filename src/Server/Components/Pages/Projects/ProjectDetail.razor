@@ -97,6 +97,37 @@
             </div>
         }
 
+        @if (_project.Kind == ProjectKinds.Pipeline && _project.PipelineSource == ProjectSources.Inline)
+        {
+            @* F-022: an inline Pipeline's overview - no repository, no branch; the script is the
+               project's definition and is edited (and validated) on the Pipelines tab. *@
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Inline Pipeline project</BbCardTitle>
+                    <BbCardDescription>
+                        No repository is cloned: the pipeline script is stored on the server (the
+                        Pipelines tab) and every run carries the snapshot it was triggered with.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Script</dt>
+                            <dd>@(_project.InlineScript is { Length: > 0 } ? "Saved on the server" : "Not saved yet")</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
+                            <dd>Not available without a repository</dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
+                            <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                        </div>
+                    </dl>
+                </BbCardContent>
+            </BbCard>
+        }
+
         @if (_project.Kind == ProjectKinds.Freestyle)
         {
             @* F-020: a Freestyle project's overview - there is no repository, so the card says what
@@ -275,12 +306,12 @@
         <BbCard>
             <BbCardHeader>
                 <BbCardTitle As="h2">Start run</BbCardTitle>
-                @if (_project.Kind == ProjectKinds.Freestyle)
+                @if (!ProjectSources.HasRepository(_project.Kind, _project.PipelineSource))
                 {
                     <BbCardDescription>
-                        A run executes this project's saved steps (the snapshot taken when the run is
-                        queued). Optional required tags restrict which worker may claim the run: one
-                        worker must declare all of them.
+                        A run executes this project's saved definition (the snapshot taken when the run
+                        is queued; for an inline Pipeline that snapshot is its script). Optional required
+                        tags restrict which worker may claim the run: one worker must declare all of them.
                     </BbCardDescription>
                 }
                 else
@@ -311,7 +342,7 @@
                         {
                             <p id="run-form-error" role="alert" class="bb:text-sm bb:text-destructive">@runRequestError</p>
                         }
-                        @if (_project.Kind != ProjectKinds.Freestyle)
+                        @if (ProjectSources.HasRepository(_project.Kind, _project.PipelineSource))
                         {
                             <div>
                                 <label for="run-branch" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branch (optional)</label>

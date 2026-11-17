@@ -471,6 +471,111 @@ public sealed class PipelineRunnerTests
     /// in a throwaway work root. The only stand-ins are the server hop (the definition report) and the
     /// credential fetch (there is no server here, so there is no credential).
     /// </summary>
+    // ------------------------------------------------------------------
+    // F-022: an inline script is described like a repository file
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task An_inline_script_runs_its_steps_in_the_workspace_and_leaves_repository_empty()
+    {
+        var script = PipelineTestData.MarkerPipeline("marker.txt");
+        using var run = new PipelineRunHarness(script, inline: true);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+        Assert.Null(outcome.Commit);
+
+        // TC-001, read against the card's own §3.4.6 trio: Prepare always creates repository/, so the
+        // honest assertion is that it stays EMPTY - the steps' cwd is workspace/, where the marker lands.
+        Assert.True(Directory.Exists(run.Work.RepositoryPath));
+        Assert.Empty(Directory.GetFiles(run.Work.RepositoryPath, "*", SearchOption.AllDirectories));
+        Assert.Equal(
+            ["restore", "build", "package"],
+            File.ReadAllLines(Path.Combine(run.Work.WorkspacePath, "marker.txt")));
+
+        // The script really became temp/pipeline.lua, byte for byte (UTF-8 without a BOM), and the
+        // definition's chunk name is pipeline.lua - not the absolute path, not empty.
+        var materialized = Path.Combine(run.Work.TempPath, PipelineScriptLimits.InlineFileName);
+        Assert.True(File.Exists(materialized));
+        Assert.Equal(script, await File.ReadAllTextAsync(materialized, CancellationToken));
+        Assert.Equal(1, run.SourceReads);
+
+        var report = Assert.Single(run.DefinitionReports);
+        Assert.Null(report.GitCommit);
+        Assert.Equal(["Restore", "Build", "Package"], report.StepNames);
+        Assert.Empty(run.CommitReports);
+        Assert.Equal(["definition"], run.ReportOrder);
+        Assert.Contains(run.LogLines, line => line.Contains("inline pipeline run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_inline_definition_carries_its_triggers_pipeline_env_and_secret_references()
+    {
+        var script = """
+            local token = secret("TOKEN")
+            pipeline {
+              name = "inline-definition",
+              env = { REGION = "eu" },
+              triggers = { branches = { "main", "release/*" } },
+              steps = { { name = "Only", run = { "echo", "hi" } } },
+            }
+            """;
+        using var run = new PipelineRunHarness(script, inline: true);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Null(outcome.FailureReason);
+        var report = Assert.Single(run.DefinitionReports);
+        Assert.True(PipelineSpecJson.TryRead(report.PipelineSpecJson, out var spec, out var error), error);
+        Assert.Equal("inline-definition", spec!.Name);
+        Assert.Equal("eu", spec.Env!["REGION"]);
+        Assert.Equal(["main", "release/*"], spec.Triggers!.Branches!);
+        Assert.Equal(["TOKEN"], spec.SecretReferences!);
+    }
+
+    [Fact]
+    public async Task An_inline_definition_that_never_returns_times_out_instead_of_holding_the_run()
+    {
+        using var run = new PipelineRunHarness(
+            "while true do end\npipeline { name = \"spin\", steps = { { name = \"Never\", run = { \"echo\" } } } }",
+            inline: true)
+        {
+            Deadline = DateTimeOffset.UtcNow.AddSeconds(1),
+        };
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(PipelineFailureReasons.PipelineTimeout, outcome.FailureReason);
+        Assert.Empty(run.DefinitionReports);
+        Assert.Contains(run.LogLines, line => line.Contains("did not finish within the run's deadline", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_syntax_error_carries_the_same_reason_and_the_same_position_for_both_sources(bool inline)
+    {
+        // One fact, two sources: AC-2's "behaves exactly as a repository pipeline" would be false if the
+        // origin of the bytes changed the failure taxonomy or the diagnostic's name.
+        const string broken = "pipeline {";
+        using var run = inline
+            ? new PipelineRunHarness(broken, inline: true)
+            : new PipelineRunHarness(PipelineRepository.Create(broken));
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(PipelineFailureReasons.PipelineSyntax, outcome.FailureReason);
+        Assert.Null(outcome.ExitCode);
+        Assert.Empty(run.DefinitionReports);
+
+        var line = Assert.Single(run.LogLines, line => line.Contains("pipeline.lua:(", StringComparison.Ordinal));
+        // Anchored on purpose: an absolute path would still contain "pipeline.lua:(", so a loose
+        // Matches/DoesNotContain let a mutation that leaks the temp path stay green (F-022 review F1).
+        Assert.StartsWith("zenkins: pipeline.lua:(", line, StringComparison.Ordinal);
+        Assert.Matches(@"^zenkins: pipeline\.lua:\(1,\d+\)", line);
+    }
     private sealed class PipelineRunHarness : IDisposable
     {
         private readonly string _workRoot = Path.Combine(
@@ -506,8 +611,26 @@ public sealed class PipelineRunnerTests
             Work = new WorkDirectoryService(_workRoot).Prepare(Guid.NewGuid());
         }
 
-        /// <summary>The Freestyle run's frozen spec; null for a Pipeline run.</summary>
+        /// <summary>
+        /// An inline Pipeline run (card F-022): no repository, the script is snapshotted on the run, and
+        /// the definition phase describes it after writing it to <c>temp/pipeline.lua</c>.
+        /// </summary>
+        public PipelineRunHarness(string inlineScript, bool inline)
+        {
+            Assert.True(inline);
+            _repository = null;
+            InlineScript = inlineScript;
+            Branch = string.Empty;
+            PipelinePath = "pipeline.lua";
+            Directory.CreateDirectory(_workRoot);
+            Work = new WorkDirectoryService(_workRoot).Prepare(Guid.NewGuid());
+        }
+
+        /// <summary>The Freestyle run's frozen spec; null for a Pipeline or inline run.</summary>
         public string? FrozenSpecJson { get; }
+
+        /// <summary>The inline run's script snapshot; null for a repository or Freestyle run.</summary>
+        public string? InlineScript { get; }
 
         public RunWorkDirectory Work { get; }
 
@@ -550,8 +673,10 @@ public sealed class PipelineRunnerTests
 
         public async Task<PipelineRunOutcome> ExecuteAsync(CancellationToken cancellationToken)
         {
+            var secretReferences = new SecretReferenceCapture();
             var definitions = new PipelineDefinitionRunner(
-                PipelineDefinitionRunner.CreateRuntime(PipelineRunner.CreateLogSink(Emit)))
+                PipelineDefinitionRunner.CreateRuntime(PipelineRunner.CreateLogSink(Emit), secretReferences),
+                secretReferences)
             {
                 // F-014's "the pipeline file is read exactly once per run" as an assertion, not a claim.
                 ReadSource = path =>
@@ -567,6 +692,12 @@ public sealed class PipelineRunnerTests
                     Work = Work,
                     RepositoryUrl = _repository?.FileUrl,
                     PipelineSpecJson = FrozenSpecJson,
+                    PipelineScriptText = InlineScript,
+                    DefinitionSource = _repository is not null
+                        ? Zenkins.Shared.Pipelines.RunDefinitionSources.Repository
+                        : FrozenSpecJson is not null
+                            ? Zenkins.Shared.Pipelines.RunDefinitionSources.Freestyle
+                            : Zenkins.Shared.Pipelines.RunDefinitionSources.Inline,
                     Branch = Branch,
                     PipelinePath = PipelinePath,
                     Deadline = Deadline,

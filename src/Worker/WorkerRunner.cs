@@ -108,7 +108,18 @@ public sealed class WorkerRunner(
                 + $"each probe's git budget is {(configuration.ProbeTimeout ?? WorkerConfiguration.DefaultProbeTimeout).TotalSeconds:0}s.");
         }
 
-        await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops, .. probeLoops]);
+        // F-022: one definition-only validation loop, always on - answering "is this script valid?" is
+        // not a build (it takes no slot and writes no run), so it does not depend on a capability flag.
+        var validationLoop = new WorkerDefinitionValidationLoop(
+            configuration,
+            api,
+            workerToken,
+            workDirectories,
+            BackoffScheduler.Default(),
+            log,
+            errorLog).RunAsync(shutdown);
+
+        await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops, .. probeLoops, validationLoop]);
 
         await SendFinalHeartbeatAsync(workerToken);
         Log("stopped cleanly.");

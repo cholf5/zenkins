@@ -76,6 +76,74 @@
         </div>
     }
 
+    @if (!KindLocked)
+    {
+        @* F-022: the create form's definition source, only for the Pipeline kind. The JS hides this
+           section for Freestyle and swaps the repository fields for the script editor per selection;
+           the service is the authority (ProjectValidation.ValidatePipelineSource). *@
+        <div data-project-source-fields class="bb:space-y-2">
+            <span class="bb:text-sm bb:font-medium">Definition</span>
+            <div class="bb:grid bb:gap-2 bb:sm:grid-cols-2" role="radiogroup" aria-label="Pipeline definition source">
+                <label class="bb:flex bb:cursor-pointer bb:items-start bb:gap-3 bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-sm">
+                    <input type="radio"
+                           name="PipelineSource"
+                           value="@ProjectSources.Repository"
+                           checked="@(SelectedSource == ProjectSources.Repository)"
+                           data-project-source-choice
+                           class="bb:mt-0.5" />
+                    <span>
+                        <span class="bb:font-medium">Pipeline script from SCM</span>
+                        <span class="bb:block bb:text-xs bb:text-muted-foreground">
+                            The script is a file in a Git repository.
+                        </span>
+                    </span>
+                </label>
+                <label class="bb:flex bb:cursor-pointer bb:items-start bb:gap-3 bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-sm">
+                    <input type="radio"
+                           name="PipelineSource"
+                           value="@ProjectSources.Inline"
+                           checked="@(SelectedSource == ProjectSources.Inline)"
+                           data-project-source-choice
+                           class="bb:mt-0.5" />
+                    <span>
+                        <span class="bb:font-medium">Pipeline script</span>
+                        <span class="bb:block bb:text-xs bb:text-muted-foreground">
+                            The script lives on the server; no repository is needed.
+                        </span>
+                    </span>
+                </label>
+            </div>
+            @if (PipelineSourceError is { } sourceError)
+            {
+                <p id="project-pipeline-source-error" role="alert" class="bb:text-xs bb:text-destructive">@sourceError</p>
+            }
+        </div>
+    }
+
+    @if (ShowInlineFields)
+    {
+        <div data-project-inline-fields class="bb:space-y-2">
+            <label for="project-inline-script" class="bb:text-sm bb:font-medium">Pipeline script</label>
+            <textarea id="project-inline-script"
+                      name="InlineScript"
+                      rows="14"
+                      maxlength="65536"
+                      spellcheck="false"
+                      autocomplete="off"
+                      aria-invalid="@(InlineScriptError is null ? null : "true")"
+                      aria-describedby="@(InlineScriptError is null ? null : "project-inline-script-error")"
+                      class="bb:flex bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-sm">@InlineScript</textarea>
+            @if (InlineScriptError is { } scriptError)
+            {
+                <p id="project-inline-script-error" role="alert" class="bb:text-xs bb:text-destructive">@scriptError</p>
+            }
+            <p class="bb:text-xs bb:text-muted-foreground">
+                A <code>pipeline { ... }</code> body, at most 64 KiB. Saving does not prove it valid -
+                the Pipelines tab's Validate action runs the definition phase on a worker.
+            </p>
+        </div>
+    }
+
     @if (ShowRepositoryFields)
     {
         <div data-project-repository-fields class="bb:space-y-4">
@@ -191,6 +259,14 @@
     [Parameter]
     public string? ErrorCode { get; set; }
 
+    /// <summary>F-022: the create form's definition source (ignored by a kind-locked edit).</summary>
+    [Parameter]
+    public string? PipelineSource { get; set; }
+
+    /// <summary>F-022: the inline Lua body on the create form.</summary>
+    [Parameter]
+    public string? InlineScript { get; set; }
+
     private string SelectedKind => Kind == ProjectKinds.Freestyle ? ProjectKinds.Freestyle : ProjectKinds.Pipeline;
 
     private string KindLabel => SelectedKind == ProjectKinds.Freestyle ? "Freestyle" : "Pipeline";
@@ -198,7 +274,18 @@
     /// <summary>Whether the repository fields render at all: unlocked (the create form - the JS then
     /// toggles them per selection) or locked onto the Pipeline kind. A kind-locked Freestyle edit
     /// form renders none - the fields do not exist for that kind, and the service keeps them null.</summary>
-    private bool ShowRepositoryFields => !KindLocked || SelectedKind == ProjectKinds.Pipeline;
+    private bool ShowRepositoryFields => SelectedKind == ProjectKinds.Pipeline && SelectedSource == ProjectSources.Repository;
+
+    private bool ShowInlineFields => !KindLocked && SelectedKind == ProjectKinds.Pipeline && SelectedSource == ProjectSources.Inline;
+
+    /// <summary>F-022: the definition source the create form starts on (the historical repository default).</summary>
+    private string SelectedSource => PipelineSource == ProjectSources.Inline
+        ? ProjectSources.Inline
+        : ProjectSources.Repository;
+
+    private string? PipelineSourceError => ErrorFor(ProjectFields.PipelineSource);
+
+    private string? InlineScriptError => ErrorFor(ProjectFields.InlineScript);
 
     private string? NameError => ErrorFor(ProjectFields.Name);
 

@@ -184,6 +184,53 @@ public sealed class WorkerRunLoopTests : IDisposable
         }
     }
 
+    [Fact(Timeout = 90 * 1000)]
+    public async Task An_inline_run_publishes_an_artifact_from_its_workspace()
+    {
+        // F-022 review M8: WorkerRunLoop chooses the artifact source root by definition-source. If it
+        // falls back to repository/ for an inline run, the step's `probe` writes report.txt into
+        // workspace/ but the publisher looks in the empty repository/ - the step fails and no artifact
+        // appears. This drives the real loop, so the choice is the production one.
+        var script = $$"""
+            pipeline {
+              name = "inline-artifact",
+              steps = {
+                { name = "Publish",
+                  run = { [[{{PipelineTestData.DotNet}}]], [[{{PipelineTestData.ArgvEcho}}]], "probe", "report.txt", "from-workspace" },
+                  artifacts = { "report.txt" } },
+              },
+            }
+            """;
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await InlinePipelineRunTests.CreateInlineProjectAsync(
+            owner, $"inline-artifact-{Guid.NewGuid():N}", script);
+        var (token, _) = await host.RegisterWorkerAsync(name: $"inline-artifact-{Guid.NewGuid():N}");
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
+
+        var (loop, stop) = CreateLoop(host, token, cleanupTemp: true);
+        var loopTask = loop.RunAsync(stop.Token);
+        try
+        {
+            var finished = await WaitUntilTerminalAsync(host, runId);
+            Assert.True(
+                finished.Status == "Success",
+                $"the inline artifact run ended {finished.Status} ({finished.FailureReason}).");
+
+            var artifacts = await host.InSystemScopeAsync(context =>
+                context.SystemQueryAsync<Zenkins.Server.Data.Entities.Artifact>(artifact => artifact.RunId == runId));
+            var artifact = Assert.Single(artifacts);
+            Assert.Equal("Ready", artifact.Status);
+            Assert.Equal(1, artifact.FileCount);
+            Assert.Contains("report.txt", artifact.ManifestJson!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await loopTask.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Plumbing
     // ------------------------------------------------------------------

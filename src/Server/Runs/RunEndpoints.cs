@@ -324,7 +324,9 @@ public static class RunEndpoints
                 result.LeaseExpiresAt!.Value,
                 result.PipelineSpecJson,
                 result.Parameters,
-                result.Number)),
+                result.Number,
+                result.PipelineScriptText,
+                result.DefinitionSource)),
         };
     }
 
@@ -588,7 +590,16 @@ public static class RunEndpoints
         // F-036: the run's per-project build number, injected as ZENKINS_BUILD_NUMBER beside the
         // ZENKINS_RUN_ID/ZENKINS_BUILD_ID guid. Null (never 0) when the row carries no positive number,
         // so the worker's "no number, no variable" defence is reachable rather than dead.
-        int? Number = null);
+        int? Number = null,
+
+        // F-022: an inline Pipeline run's script, snapshotted at trigger time. Null (and absent from an
+        // older server's JSON) for a repository or Freestyle run; the Worker writes a non-null value to
+        // temp/pipeline.lua and runs the definition phase instead of cloning.
+        string? PipelineScript = null,
+
+        // F-022: the run's definition shape word (repository | freestyle | inline). The Worker switches
+        // on this, never on "is there a frozen spec?" - an inline run can carry both.
+        string? DefinitionSource = null);
 
     /// <param name="DeadlineAt">F-014: the accepted answer carries the run's frozen deadline.</param>
     public sealed record RunReportResponse(string Status, DateTimeOffset? DeadlineAt = null);

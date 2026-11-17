@@ -226,7 +226,14 @@ public sealed record RunView(
     /// "rebuilt from #N". <see langword="null"/> when this is not a re-run, or when the original is gone
     /// (the page then falls back to <see cref="RebuiltFromRunId"/>'s short id instead of inventing one).
     /// </summary>
-    int? RebuiltFromNumber = null)
+    int? RebuiltFromNumber = null,
+
+    /// <summary>
+    /// F-022: whether this run's definition came from a script snapshotted onto the run (an inline
+    /// Pipeline) rather than from a repository. A re-run of such a run carries the same script, so the
+    /// definition phase runs again instead of falling back to a frozen-spec-only Freestyle path.
+    /// </summary>
+    bool InlineDefinition = false)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -252,12 +259,23 @@ public sealed record RunView(
     /// refusal, and the page's redirect then explains it.
     /// </summary>
     public bool CanRebuild =>
-        RunReruns.CanRebuild(Status, GitBranch, GitCommit, Pipeline, RunReruns.IsFreestyleShape(GitBranch));
+        RunReruns.CanRebuild(
+            Status,
+            GitBranch,
+            GitCommit,
+            Pipeline,
+            !InlineDefinition && RunReruns.IsFreestyleShape(GitBranch),
+            InlineDefinition);
 
     /// <summary>Card F-037: whether the run page offers Replay for this run (a run whose snapshot <em>is</em>
-    /// its definition - today a Freestyle run); a repository pipeline's spec cannot be replayed as source.</summary>
+    /// its definition - a Freestyle or inline run); a repository pipeline's spec cannot be replayed as source.</summary>
     public bool CanReplay =>
-        RunReruns.CanReplay(Status, GitBranch, Pipeline, RunReruns.IsFreestyleShape(GitBranch));
+        RunReruns.CanReplay(
+            Status,
+            GitBranch,
+            Pipeline,
+            !InlineDefinition && RunReruns.IsFreestyleShape(GitBranch),
+            InlineDefinition);
 }
 
 /// <summary>
@@ -301,16 +319,25 @@ public static class RunReruns
         string gitBranch,
         string? gitCommit,
         PipelineSpec? pipeline,
-        bool projectIsFreestyle) =>
-        Refusal(BuildRunTriggerType.Rebuild, status, gitBranch, gitCommit, pipeline, projectIsFreestyle) is null;
+        bool projectIsFreestyle,
+        bool isInline = false) =>
+        Refusal(BuildRunTriggerType.Rebuild, status, gitBranch, gitCommit, pipeline, projectIsFreestyle, isInline) is null;
 
     /// <summary>Whether a replay of this run is possible (and would be accepted).</summary>
     public static bool CanReplay(
         string status,
         string gitBranch,
         PipelineSpec? pipeline,
-        bool projectIsFreestyle) =>
-        Refusal(BuildRunTriggerType.Replay, status, gitBranch, gitCommit: null, pipeline, projectIsFreestyle) is null;
+        bool projectIsFreestyle,
+        bool isInline = false) =>
+        Refusal(
+            BuildRunTriggerType.Replay,
+            status,
+            gitBranch,
+            gitCommit: null,
+            pipeline,
+            projectIsFreestyle,
+            isInline) is null;
 
     /// <summary>
     /// The reason <paramref name="triggerType"/> cannot re-run this run, or <see langword="null"/> when it can.
@@ -329,10 +356,11 @@ public static class RunReruns
         string gitBranch,
         string? gitCommit,
         PipelineSpec? pipeline,
-        bool projectIsFreestyle)
+        bool projectIsFreestyle,
+        bool isInline = false)
     {
         var isReplay = triggerType == BuildRunTriggerType.Replay;
-        var wasFreestyle = IsFreestyleShape(gitBranch);
+        var wasFreestyle = !isInline && IsFreestyleShape(gitBranch);
 
         if (!IsTerminal(status))
         {
@@ -352,7 +380,7 @@ public static class RunReruns
                 "The project's kind no longer matches the run's: this run cannot be rebuilt as the project is now.");
         }
 
-        if (isReplay && (!wasFreestyle || pipeline is null))
+        if (isReplay && (!wasFreestyle && !isInline || pipeline is null && !isInline))
         {
             return new RunRerunRefusal(
                 RunErrorCodes.ReplayUnavailable,
@@ -360,7 +388,7 @@ public static class RunReruns
                 + "cannot be replayed as a definition. Use Rebuild instead.");
         }
 
-        if (!isReplay && !wasFreestyle && string.IsNullOrWhiteSpace(gitCommit))
+        if (!isReplay && !wasFreestyle && !isInline && string.IsNullOrWhiteSpace(gitCommit))
         {
             // No commit recorded means the original never got far enough to name what it built; rebuilding
             // would silently take the branch head instead of "the same inputs", so it is refused.
@@ -475,6 +503,15 @@ public sealed record RunClaimResult(
     // F-020: the Freestyle run's frozen spec, snapshotted at trigger time. Null for a Pipeline run -
     // its spec comes from the Worker's definition phase, never from the claim.
     string? PipelineSpecJson = null,
+
+    // F-022: the inline Pipeline run's script, snapshotted at trigger time. Null for a repository or
+    // Freestyle run; a non-null value with no repository is what makes the Worker write the script to
+    // temp/pipeline.lua and run the definition phase instead of cloning.
+    string? PipelineScriptText = null,
+
+    // F-022: the run's definition shape word (repository | freestyle | inline), written from the run's
+    // own snapshot so the Worker never guesses from "is there a spec?" - an inline run can carry both.
+    string? DefinitionSource = null,
 
     // F-021: the run's resolved build-parameter values. Null when the project declares none.
     IReadOnlyDictionary<string, string>? Parameters = null,
@@ -787,8 +824,20 @@ public sealed class RunService(
             return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.StepsMissing));
         }
 
+        // F-022: an inline Pipeline has no repository and no branch - the run snapshots the script at
+        // trigger time. The script must exist (the create/edit paths already require it; this is the
+        // same defence the Freestyle spec gets, so a row written out of band cannot queue nothing).
+        var isInline = !isFreestyle
+            && project.Kind == ProjectKinds.Pipeline
+            && project.PipelineSource == ProjectSources.Inline;
+        if (isInline && string.IsNullOrWhiteSpace(project.InlineScript))
+        {
+            return RunTriggerResult.Invalid(
+                new RunFieldError(ProjectFields.InlineScript, ProjectErrorCodes.InlineScriptRequired));
+        }
+
         var requestedBranch = string.Empty;
-        if (!isFreestyle)
+        if (!isFreestyle && !isInline)
         {
             var branchError = RunValidation.ValidateBranch(input.Branch, out requestedBranch);
             if (branchError is not null)
@@ -796,6 +845,13 @@ public sealed class RunService(
                 return RunTriggerResult.Invalid(new RunFieldError(RunFields.Branch, branchError));
             }
         }
+
+        // F-022: an inline run's branch is always the honest empty value - even for an out-of-band row
+        // that carries a DefaultBranch. This is the manual path's half of the schedule path's rule
+        // (B-006's "decide by kind/source, not by whatever the row holds").
+        var branchForRun = isInline
+            ? string.Empty
+            : requestedBranch.Length > 0 ? requestedBranch : project.DefaultBranch;
 
         var tagsError = RunValidation.ValidateRequiredTags(input.RequiredTags, out var requiredTags);
         if (tagsError is not null)
@@ -838,7 +894,7 @@ public sealed class RunService(
         var run = BuildQueuedRun(
             organizationId,
             project,
-            requestedBranch.Length > 0 ? requestedBranch : project.DefaultBranch,
+            branchForRun,
             requiredTags,
             timeoutMinutes is { } minutes ? minutes * 60 : null,
             triggerType,
@@ -847,7 +903,12 @@ public sealed class RunService(
             // F-020: a Freestyle run freezes the project's spec at trigger time - the same snapshot
             // discipline the branch and pipeline path follow (a later edit cannot move this run).
             pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
-            parametersJson: SerializeParameters(values));
+            parametersJson: SerializeParameters(values),
+
+            // F-022: an inline run freezes the script the same way. The branch and commit stay empty
+            // (there is no repository), while the pipeline path is pipeline.lua - the file the script
+            // becomes - which is the run's own fact, not the project row's null.
+            pipelineScriptText: isInline ? project.InlineScript : null);
 
         // F-028 + F-029: the project's own gate (disabled / queue cap) is applied inside the staging
         // routine, under the project row lock, in the same transaction as the insert - never as a
@@ -1313,7 +1374,8 @@ public sealed class RunService(
             return RunTriggerResult.NotFound();
         }
 
-        var originalWasFreestyle = RunReruns.IsFreestyleShape(original.GitBranch);
+        var originalIsInline = original.PipelineScriptText is not null;
+        var originalWasFreestyle = !originalIsInline && RunReruns.IsFreestyleShape(original.GitBranch);
         var originalPipeline = ReadPipeline(original.PipelineSpecJson);
 
         // One predicate, shared with the run page's buttons: `Refusal` answers "can this intent re-run this
@@ -1325,7 +1387,8 @@ public sealed class RunService(
                 original.GitBranch,
                 original.GitCommit,
                 originalPipeline,
-                project.Kind == ProjectKinds.Freestyle) is { } refusal)
+                project.Kind == ProjectKinds.Freestyle,
+                originalIsInline) is { } refusal)
         {
             return RunTriggerResult.RebuildRefused(refusal.Code, refusal.Message);
         }
@@ -1384,9 +1447,11 @@ public sealed class RunService(
             GitCommit = originalWasFreestyle ? null : original.GitCommit,
 
             // The definition: a Freestyle run executes the snapshot the original executed (a "definition
-            // change since" is exactly what must not leak in); a Pipeline run re-reads its definition from
-            // the pinned commit, so the claim carries no spec.
+            // change since" is exactly what must not leak in); an inline run carries the same script, so
+            // its definition phase runs again; a repository Pipeline run re-reads its definition from the
+            // pinned commit, so the claim carries no spec.
             PipelineSpecJson = originalWasFreestyle ? original.PipelineSpecJson : null,
+            PipelineScriptText = originalIsInline ? original.PipelineScriptText : null,
 
             ParametersJson = SerializeParameters(values),
             RebuiltFromRunId = original.Id,
@@ -1477,11 +1542,12 @@ public sealed class RunService(
             return RunTriggerResult.NotFound();
         }
 
-        // F-020, defence in depth: a webhook triggers on git pushes, and a Freestyle project has no
-        // repository to push to. Webhook creation already refuses this kind, and a project's kind is
-        // immutable, so this line should be unreachable - it exists so a future caller of this method
-        // cannot queue a run nothing can execute.
-        if (project.Kind == ProjectKinds.Freestyle)
+        // F-020, defence in depth: a webhook triggers on git pushes, and a project with no repository
+        // (Freestyle, or an inline Pipeline) has nothing to push to. Webhook creation already refuses
+        // those kinds/sources, and both are immutable, so this line should be unreachable - it exists so
+        // a future caller of this method cannot queue a run nothing can execute. F-022 reuses the one
+        // shared predicate rather than adding a second condition beside the Freestyle one.
+        if (!ProjectSources.HasRepository(project.Kind, project.PipelineSource))
         {
             return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.NotPipeline));
         }
@@ -1576,10 +1642,21 @@ public sealed class RunService(
             return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.StepsMissing));
         }
 
+        // F-022: an inline project's schedule carries the script snapshot, not a branch - exactly the
+        // manual trigger's shape (a headless trigger has no branch input either).
+        var isInline = !isFreestyle
+            && project.Kind == ProjectKinds.Pipeline
+            && project.PipelineSource == ProjectSources.Inline;
+        if (isInline && string.IsNullOrWhiteSpace(project.InlineScript))
+        {
+            return RunTriggerResult.Invalid(
+                new RunFieldError(ProjectFields.InlineScript, ProjectErrorCodes.InlineScriptRequired));
+        }
+
         var run = BuildQueuedRun(
             activeOrganizationId.Value,
             project,
-            isFreestyle ? string.Empty : project.DefaultBranch,
+            isFreestyle || isInline ? string.Empty : project.DefaultBranch,
             requiredTags: string.Empty,
             timeoutSeconds: null,
             BuildRunTriggerType.Schedule,
@@ -1588,6 +1665,8 @@ public sealed class RunService(
             // F-020: the Freestyle run freezes the project's spec at trigger time (the same snapshot discipline
             // a click follows); a Pipeline run's worker reports its own definition.
             pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
+            // F-022: an inline run freezes the project's script at trigger time.
+            pipelineScriptText: isInline ? project.InlineScript : null,
             // F-021: a headless trigger has no user to fill the form, so the parameters resolve to the
             // definitions' defaults - the same honest answer a webhook delivery gives.
             parametersJson: SerializeParameters(
@@ -1630,7 +1709,8 @@ public sealed class RunService(
         string? triggerUserId,
         string? gitCommit,
         string? pipelineSpecJson,
-        string? parametersJson) =>
+        string? parametersJson,
+        string? pipelineScriptText = null) =>
         new()
         {
             OrganizationId = organizationId,
@@ -1649,12 +1729,18 @@ public sealed class RunService(
             GitBranch = branch ?? string.Empty,
             PipelinePath = project.Kind == ProjectKinds.Freestyle
                 ? string.Empty
-                : project.PipelinePath ?? string.Empty,
+                : project.PipelineSource == ProjectSources.Inline
+                    ? PipelineScriptLimits.InlineFileName
+                    : project.PipelinePath ?? string.Empty,
             TimeoutSeconds = timeoutSeconds,
 
             // F-020: the Freestyle run's frozen spec, snapshotted by the trigger source. A Pipeline
             // run leaves it null - its Worker reports the spec through the definition endpoint.
             PipelineSpecJson = pipelineSpecJson,
+
+            // F-022: the inline run's script snapshot. A repository/Freestyle run leaves it null; the
+            // Worker's own rule is "script and no repository" - not a kind or source word it cannot read.
+            PipelineScriptText = pipelineScriptText,
 
             // F-021: the resolved parameter values, frozen with everything else the run builds.
             ParametersJson = parametersJson,
@@ -2059,6 +2145,18 @@ public sealed class RunService(
                     candidate.PipelinePath,
                     leaseExpiresAt,
                     candidate.PipelineSpecJson,
+
+                    // F-022: the inline run's script snapshot. Null for a repository/Freestyle run, so
+                    // an older Worker that does not know the field simply skips it.
+                    candidate.PipelineScriptText,
+
+                    // F-022: the shape word the Worker switches on (never "has a spec" - an inline
+                    // run can carry both a script and a spec).
+                    RunDefinitionSources.For(
+                        candidate.PipelineScriptText,
+                        candidate.PipelineSpecJson,
+                        candidate.GitBranch),
+
                     ReadParameters(candidate.ParametersJson),
 
                     // F-036 (review M1): a non-positive number is "no number", never `#0`.
@@ -3458,7 +3556,11 @@ public sealed class RunService(
                 run.RebuiltFromRunId,
                 run.RebuiltFromRunId is { } origin && rebuiltFromNumbers.TryGetValue(origin, out var originNumber)
                     ? originNumber
-                    : null);
+                    : null,
+
+                // F-022: the run's definition came from its snapshotted script (inline), so a re-run
+                // knows to carry the script instead of guessing a Freestyle shape from the empty branch.
+                run.PipelineScriptText is not null);
         }).ToList();
     }
 

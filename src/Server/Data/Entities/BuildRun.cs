@@ -186,6 +186,20 @@ public sealed class BuildRun : ITenantOwned
     public string? GitCommit { get; set; }
 
     /// <summary>
+    /// The inline Pipeline run's script, snapshotted at trigger time (card F-022). The same discipline
+    /// <see cref="PipelinePath"/> follows: editing the project afterwards never changes a queued or
+    /// running run. Null for a repository run (whose definition is the checkout's file) and for
+    /// Freestyle (whose definition is <see cref="PipelineSpecJson"/>).
+    /// <para>
+    /// The Worker writes this text to <c>work/{run-id}/temp/pipeline.lua</c> and runs the definition
+    /// phase against it, so the diagnostic is <c>pipeline.lua:(line,col)</c> - exactly a repository
+    /// pipeline's - and the frozen spec it reports is the one execution contract either way. The claim
+    /// carries the same value; this column is what makes the snapshot durable across a worker restart.
+    /// </para>
+    /// </summary>
+    public string? PipelineScriptText { get; set; }
+
+    /// <summary>
     /// The frozen, validated pipeline spec (card F-014): the JSON the worker produced from the
     /// definition phase and the server stored verbatim.
     /// <para>

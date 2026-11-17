@@ -217,8 +217,70 @@ public sealed class PipelineDefinitionRunner
                 PipelineFailureReasons.PipelineInvalid);
         }
 
-        var source = ReadSource(path);
-        var chunkName = Path.GetFileName(pipelinePath);
+        return RunSource(
+            ReadSource(path),
+            Path.GetFileName(pipelinePath),
+            deadline,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs the definition phase for an <b>inline</b> Pipeline run (card F-022): the script was
+    /// snapshotted on the run, so the Worker materialises it at
+    /// <c>work/{run-id}/temp/pipeline.lua</c> and describes that file. The on-disk name is what keeps
+    /// the diagnostic (<c>pipeline.lua:(line,col)</c>) and the frozen spec's name identical to a
+    /// repository run's - only the bytes' origin changed.
+    /// <para>
+    /// <b>The same taxonomy, deliberately.</b> A syntax error is <c>pipeline-syntax</c> and a raising
+    /// or rejected definition is <c>pipeline-invalid</c>, exactly as for a repository file: AC-2's
+    /// "behaves exactly as a repository pipeline" would be false if the source changed the reason a
+    /// run carries. The card records that its TC-003 prose said <c>pipeline-invalid</c> for a syntax
+    /// error; the implementation follows the shipped taxonomy instead.
+    /// </para>
+    /// </summary>
+    public PipelineDefinitionResult RunInline(
+        RunWorkDirectory work,
+        string source,
+        DateTimeOffset deadline,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        ArgumentNullException.ThrowIfNull(source);
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes(source);
+        if (bytes.Length > PipelineScriptLimits.MaxScriptBytes)
+        {
+            throw new PipelineDefinitionException(
+                $"the inline pipeline script is larger than {PipelineScriptLimits.MaxScriptBytes} bytes.",
+                PipelineFailureReasons.PipelineInvalid);
+        }
+
+        Directory.CreateDirectory(work.TempPath);
+        var path = Path.Combine(work.TempPath, PipelineScriptLimits.InlineFileName);
+
+        // UTF-8 without a BOM, byte for byte: the diagnostic's column must not shift by a preamble, and
+        // the file is the artifact a person can inspect after a failure.
+        File.WriteAllText(path, source, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        return RunSource(
+            ReadSource(path),
+            PipelineScriptLimits.InlineFileName,
+            deadline,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// The definition phase over one source text - the half <see cref="Run"/> and <see cref="RunInline"/>
+    /// share, and what a definition-only validation calls (card F-022).
+    /// </summary>
+    public PipelineDefinitionResult RunSource(
+        string source,
+        string chunkName,
+        DateTimeOffset deadline,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(chunkName);
 
         LuaExecutionResult result;
         try
@@ -239,7 +301,7 @@ public sealed class PipelineDefinitionRunner
         {
             // A compile failure is pipeline-syntax (the message already carries source:(line,col)); a
             // script that raises while declaring - including a refused I/O primitive - could not
-            // produce a valid spec, which is pipeline-invalid.
+            // produce a valid spec, which is pipeline-invalid. The same taxonomy serves both sources.
             throw new PipelineDefinitionException(
                 failure.Message,
                 failure.Kind == LuaScriptErrorKind.Syntax

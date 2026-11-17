@@ -91,7 +91,23 @@ public sealed record WorkerClaimResponse(
     /// document that predates the field) still binds - a missing number then simply leaves the variable
     /// unset rather than failing the whole claim.
     /// </summary>
-    int? Number = null);
+    int? Number = null,
+
+    /// <summary>
+    /// F-022: an inline Pipeline run's script, snapshotted on the server at trigger time. Nullable -
+    /// and absent from an older server's JSON - for a repository or Freestyle run. A non-null value
+    /// with no <see cref="RepositoryUrl"/> means "write this to temp/pipeline.lua and run the definition
+    /// phase against it"; the Worker never reads the project or its source word.
+    /// </summary>
+    string? PipelineScript = null,
+
+    /// <summary>
+    /// F-022: the run's definition shape word (<see cref="Zenkins.Shared.Pipelines.RunDefinitionSources"/>).
+    /// The Worker switches on this - not on "is there a frozen spec?" - because an inline run can carry
+    /// both a script and a spec. Absent from an older server's JSON: the Worker then derives the shape
+    /// from the fields it does know, exactly as the Server did before the word existed.
+    /// </summary>
+    string? DefinitionSource = null);
 
 /// <summary>
 /// The accepted report's answer (card F-014 extends the bodyless answer): the run's execution deadline,
@@ -182,6 +198,29 @@ public sealed record WorkerProbeReportRequest(
 
 /// <summary>The probe report's answer (one word; the worker needs nothing else).</summary>
 public sealed record WorkerProbeReportResponse(string Status);
+
+/// <summary>
+/// A definition-only validation leased to this worker (card F-022): the id to report against, the
+/// exact script to describe, and until when the lease holds. No repository and no run: the worker
+/// writes the script to its scratch tree and runs the definition phase alone.
+/// </summary>
+public sealed record WorkerDefinitionValidationClaimResponse(
+    Guid ValidationId,
+    string Script,
+    DateTimeOffset LeaseExpiresAt);
+
+/// <summary>
+/// One validation's answer (card F-022): <c>valid</c> carries the frozen spec, <c>invalid</c> the
+/// diagnostic (which already carries <c>pipeline.lua:(line,col)</c>). The Server re-validates both.
+/// </summary>
+public sealed record WorkerDefinitionValidationReportRequest(
+    string Outcome,
+    string? SpecJson = null,
+    string? Diagnostic = null,
+    string? FailureReason = null);
+
+/// <summary>The validation report's answer (one word; the worker needs nothing else).</summary>
+public sealed record WorkerDefinitionValidationReportResponse(string Status);
 
 /// <summary>The server answered with a definitive failure (e.g. 401); retries cannot fix it.</summary>
 public sealed class WorkerApiRejectedException(string message, int statusCode) : Exception(message)
@@ -410,6 +449,58 @@ public sealed class WorkerApiClient(HttpClient httpClient)
         await EnsureSuccessAsync(
             inFlight.Response,
             "reporting a Git probe",
+            inFlight.Timeout,
+            isRunReport: true);
+    }
+
+    /// <summary>
+    /// Asks for the next definition-only validation (card F-022). Returns <see langword="null"/> for
+    /// the 204 answer. A 404 is a Server that predates this card: the loop stops for the process's
+    /// lifetime, exactly like the probe loop's behaviour.
+    /// </summary>
+    public async Task<WorkerDefinitionValidationClaimResponse?> ClaimDefinitionValidationAsync(
+        string workerToken,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(HttpMethod.Post, "api/workers/definitions/claim", workerToken),
+            cancellationToken);
+        await EnsureSuccessAsync(inFlight.Response, "claiming a pipeline definition validation", inFlight.Timeout);
+        if ((int)inFlight.Response.StatusCode == 204)
+        {
+            return null;
+        }
+
+        return await inFlight.Response.Content
+            .ReadFromJsonAsync(
+                WorkerJsonContext.Default.WorkerDefinitionValidationClaimResponse,
+                inFlight.Timeout)
+            ?? throw new WorkerApiRejectedException(
+                "the server returned an empty definition validation claim response.",
+                (int)inFlight.Response.StatusCode);
+    }
+
+    /// <summary>
+    /// Reports one definition validation's answer (card F-022). A definitive 4xx (the validation was
+    /// settled, the lease lapsed, the payload was refused) is given up - retrying cannot change it.
+    /// </summary>
+    public async Task ReportDefinitionValidationAsync(
+        string workerToken,
+        Guid validationId,
+        WorkerDefinitionValidationReportRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/definitions/{validationId}/report",
+                workerToken,
+                request,
+                WorkerJsonContext.Default.WorkerDefinitionValidationReportRequest),
+            cancellationToken);
+        await EnsureSuccessAsync(
+            inFlight.Response,
+            "reporting a pipeline definition validation",
             inFlight.Timeout,
             isRunReport: true);
     }
@@ -855,6 +946,10 @@ public sealed record WorkerArtifactErrorResponse(string Error, string Message);
 [JsonSerializable(typeof(GitProbeRef[]))]
 [JsonSerializable(typeof(WorkerProbeReportRequest))]
 [JsonSerializable(typeof(WorkerProbeReportResponse))]
+// F-022: the definition-only validation's claim and report.
+[JsonSerializable(typeof(WorkerDefinitionValidationClaimResponse))]
+[JsonSerializable(typeof(WorkerDefinitionValidationReportRequest))]
+[JsonSerializable(typeof(WorkerDefinitionValidationReportResponse))]
 [JsonSerializable(typeof(ArtifactCreateRequest))]
 [JsonSerializable(typeof(ArtifactCreateResponse))]
 [JsonSerializable(typeof(ArtifactFileEntry))]

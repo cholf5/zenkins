@@ -5,6 +5,7 @@ using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Workers;
+using Zenkins.Shared.Projects;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Git;
@@ -486,6 +487,23 @@ public sealed class GitCredentialService(
         if (project.GitCredentialId == credential.Id)
         {
             return GitCredentialMutationResult.Success(credential.Id);
+        }
+
+        // F-022 (AC-5): a credential materializes a clone, so a project with no repository (Freestyle,
+        // or an inline Pipeline) must refuse the assignment on the server. Until this card only the
+        // settings UI hid the section, which protected nothing against a direct POST; the same shared
+        // predicate that hides it here refuses it. Forbidden (not Found) mirrors the no-repository
+        // answer the webhook surface gives and discloses nothing about ids the caller already named.
+        if (!ProjectSources.HasRepository(project.Kind, project.PipelineSource))
+        {
+            logger.LogInformation(
+                "Git credential assignment refused: the project has no repository. OrganizationId={OrganizationId} ProjectId={ProjectId} GitCredentialId={GitCredentialId} ByUserId={UserId}",
+                activeOrganizationId,
+                project.Id,
+                credential.Id,
+                actingUserId);
+            return GitCredentialMutationResult.Forbidden(
+                "This project has no repository, so it cannot clone and cannot use a Git credential.");
         }
 
         var previousCredentialId = project.GitCredentialId;

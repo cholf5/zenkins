@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Projects;
 
 namespace Zenkins.Server.Projects;
@@ -11,6 +12,12 @@ public static class ProjectFields
 {
     public const string Name = "Name";
     public const string Kind = "Kind";
+
+    /// <summary>F-022: the create form's definition-source selector (Pipeline kind only).</summary>
+    public const string PipelineSource = "PipelineSource";
+
+    /// <summary>F-022: the Pipelines tab's inline script editor.</summary>
+    public const string InlineScript = "InlineScript";
     public const string RepositoryUrl = "RepositoryUrl";
     public const string DefaultBranch = "DefaultBranch";
     public const string PipelinePath = "PipelinePath";
@@ -40,6 +47,15 @@ public static class ProjectErrorCodes
 
     /// <summary>F-020: the kind selector's value is not one of the known kinds.</summary>
     public const string KindInvalid = "kind-invalid";
+
+    /// <summary>F-022: the definition source is not one of the known sources.</summary>
+    public const string PipelineSourceInvalid = "pipeline-source-invalid";
+
+    /// <summary>F-022: an inline Pipeline needs a Lua body - there is no repository file to fall back on.</summary>
+    public const string InlineScriptRequired = "inline-script-required";
+
+    /// <summary>F-022: the inline script is longer than <c>PipelineScriptLimits.MaxScriptBytes</c>.</summary>
+    public const string InlineScriptTooLong = "inline-script-too-long";
 
     public const string RepositoryUrlRequired = "repository-url-required";
     public const string RepositoryUrlTooLong = "repository-url-too-long";
@@ -83,6 +99,8 @@ public static class ProjectErrorCodes
     {
         NameRequired or NameTooLong or NameInvalid or NameDuplicate => ProjectFields.Name,
         KindInvalid => ProjectFields.Kind,
+        PipelineSourceInvalid => ProjectFields.PipelineSource,
+        InlineScriptRequired or InlineScriptTooLong => ProjectFields.InlineScript,
         RepositoryUrlRequired or RepositoryUrlTooLong or RepositoryUrlInvalid => ProjectFields.RepositoryUrl,
         DefaultBranchRequired or DefaultBranchInvalid => ProjectFields.DefaultBranch,
         PipelinePathTooLong or PipelinePathInvalid => ProjectFields.PipelinePath,
@@ -103,6 +121,10 @@ public static class ProjectErrorCodes
         NameInvalid => "The project name contains characters that are not allowed.",
         NameDuplicate => "A project with this name already exists in this organization.",
         KindInvalid => "The project kind is not one of the known kinds.",
+        PipelineSourceInvalid => "The pipeline definition source is not one of the known sources.",
+        InlineScriptRequired => "Enter the pipeline script - an inline Pipeline has no repository file to read.",
+        InlineScriptTooLong =>
+            $"The pipeline script must be at most {PipelineScriptLimits.MaxScriptBytes / 1024} KiB.",
         RepositoryUrlRequired => "Enter the Git repository URL.",
         RepositoryUrlTooLong => $"The repository URL must be at most {ProjectValidation.MaxRepositoryUrlLength} characters.",
         RepositoryUrlInvalid =>
@@ -313,6 +335,44 @@ public static class ProjectValidation
 
         return ProjectKinds.IsValid(kind) ? null : ProjectErrorCodes.KindInvalid;
     }
+
+    /// <summary>
+    /// Validates the definition-source selector (card F-022). Blank means
+    /// <see cref="ProjectSources.Repository"/> - the historical default, so a client that posts no
+    /// source keeps the F-003/F-020 behaviour - and anything unknown is refused rather than coerced.
+    /// The source is only read on create: like the kind, an edit never rewrites it.
+    /// </summary>
+    public static string? ValidatePipelineSource(string? value, out string source)
+    {
+        source = value?.Trim() ?? string.Empty;
+        if (source.Length == 0)
+        {
+            source = ProjectSources.Repository;
+            return null;
+        }
+
+        return ProjectSources.IsValid(source) ? null : ProjectErrorCodes.PipelineSourceInvalid;
+    }
+
+    /// <summary>
+    /// Validates an inline Pipeline's Lua body (card F-022). Required and bounded by bytes (the same
+    /// UTF-8 bound the Worker re-checks): an inline project has no repository file to fall back on, and
+    /// an empty script would freeze a run that cannot define anything. The text is stored verbatim -
+    /// trimming would move every diagnostic's line/column.
+    /// </summary>
+    public static string? ValidateInlineScript(string? value, out string script)
+    {
+        script = value ?? string.Empty;
+        if (script.Trim().Length == 0)
+        {
+            return ProjectErrorCodes.InlineScriptRequired;
+        }
+
+        return System.Text.Encoding.UTF8.GetByteCount(script) > PipelineScriptLimits.MaxScriptBytes
+            ? ProjectErrorCodes.InlineScriptTooLong
+            : null;
+    }
+
 
     /// <summary>
     /// Validates and trims the repository URL. Only HTTPS, SSH and the scp-like SSH form pass; every

@@ -298,6 +298,20 @@ public sealed class RunTestHost : IDisposable
     public static Task<HttpResponseMessage> ClaimAsync(HttpClient client, string? workerToken) =>
         WorkerTestHost.SendWorkerJsonAsync(client, workerToken, "/api/workers/claim", new { });
 
+    /// <summary>
+    /// F-022: the Pipelines tab's Validate action. The textarea's text is posted, not the stored
+    /// script - the button exists to answer "is this valid?" before (or without) saving.
+    /// </summary>
+    public static Task<HttpResponseMessage> StartValidateAsync(
+        HttpClient client,
+        Guid projectId,
+        string script) =>
+        OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{projectId}/pipelines",
+            $"/projects/{projectId}/inline/validate",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["Script"] = script });
+
     public static Task<HttpResponseMessage> AcceptAsync(HttpClient client, string workerToken, Guid runId) =>
         WorkerTestHost.SendWorkerJsonAsync(
             client,

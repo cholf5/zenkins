@@ -197,7 +197,11 @@ Member 可以：
 
 Project 是 Zenkins 的作业单元，分两种 Kind：
 
-- **Pipeline**（原有 Kind）：Project 代表一个 Git Repository，构建定义来自仓库中的 `pipeline.lua`。
+- **Pipeline**（原有 Kind）：构建定义来自一段 `pipeline.lua`。定义来源（Source，v1.2 新增，见 §3.3.1）
+  有两种：
+  - `repository`（原有来源）：Project 代表一个 Git Repository，`pipeline.lua` 随代码存放在仓库中。
+  - `inline`（v1.2 新增）：不要求 Git Repository，`pipeline.lua` 正文直接保存在 Server 上（Pipelines
+    标签页的文本框），每次 Run 在触发时快照该脚本。
 - **Freestyle**（v1.1 新增，见 §3.10）：不要求 Git Repository，构建步骤在服务端 UI 中配置为脚本。
 
 每个 Project 包含：
@@ -206,10 +210,12 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 |---|---|
 | Name | 项目名称 |
 | Kind | 项目类型：`pipeline` 或 `freestyle`，创建后不可变更 |
-| Repository URL | Git 仓库地址（仅 Pipeline；Freestyle 为空） |
-| Default Branch | 默认分支（仅 Pipeline；Freestyle 为空） |
-| Credentials | Git 认证信息（仅 Pipeline） |
-| Pipeline Path | Pipeline 文件路径，默认 `pipeline.lua`（仅 Pipeline） |
+| Pipeline Source | Pipeline 项目的定义来源：`repository` 或 `inline`，创建后不可变更（仅 Pipeline） |
+| Inline Script | `inline` Pipeline 的 Lua 正文（仅 `inline`；上限 64 KiB） |
+| Repository URL | Git 仓库地址（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 为空） |
+| Default Branch | 默认分支（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 为空） |
+| Credentials | Git 认证信息（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 拒绝赋值） |
+| Pipeline Path | Pipeline 文件路径，默认 `pipeline.lua`（仅 `repository` 来源的 Pipeline；`inline` 的项目行留空，Run 快照记录 `pipeline.lua`） |
 | Disabled | 是否已禁用（见下）。禁用只停触发，不删历史 |
 | Disabled Reason | 禁用原因，禁用时必填——被拒绝的触发会把原因原样展示给用户 |
 | Disabled At / Disabled By | 何时、由谁禁用（无外键，账号删除不改写项目历史） |
@@ -219,13 +225,15 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 #### 功能要求
 
 - 创建、编辑、删除 Project。
-- 支持 HTTPS 和 SSH Git Repository（Pipeline）。
+- 支持 HTTPS 和 SSH Git Repository（`repository` 来源的 Pipeline）。
+- 支持从文本框保存 `inline` Pipeline 脚本；保存本身不证明脚本有效，Validate 在 Worker 上运行
+  definition phase 并返回步骤列表（不创建 Run、不占用构建槽位）。
 - 支持 Private Repository。
-- 支持配置 Git Credentials。
-- 支持指定默认分支。
-- 支持指定 Pipeline 文件路径。
+- 支持配置 Git Credentials（仅 `repository` 来源的 Pipeline）。
+- 支持指定默认分支（仅 `repository` 来源）。
+- 支持指定 Pipeline 文件路径（仅 `repository` 来源）。
 - 支持手动触发构建。
-- 支持 Git Webhook 触发构建（仅 Pipeline；Freestyle 无仓库可推送）。
+- 支持 Git Webhook 触发构建（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 无仓库可推送）。
 - 支持参数化构建（两种 Kind 通用，见 §3.11）。
 - 支持启用/禁用项目：禁用后所有触发路径一律拒绝，历史、Artifact 与设置仍可读。
 
@@ -257,9 +265,16 @@ Pipeline 是 Zenkins 的核心功能。
 
 `pipeline.lua`
 
-Pipeline 文件存放在 Git Repository 中，跟随代码一起进行版本管理。
+Pipeline 项目有两种定义来源：
 
-不采用 YAML，不采用 JSON，也不提供可视化 Pipeline 编辑器。
+- **repository**（原有）：Pipeline 文件存放在 Git Repository 中，跟随代码一起进行版本管理；Worker Clone
+  仓库后从 checkout 读取并运行 definition phase。
+- **inline**（v1.2）：文件正文保存在 Server 上，由 Pipelines 标签页的文本框编辑（纯文本，最多 64 KiB）。
+  触发时脚本快照到 Run 上；之后编辑项目不影响已排队/已运行的 Run。Worker 不 Clone，
+  将快照写到本次 Run 的 `temp/pipeline.lua` 后运行同一套 definition phase，因此冻结 spec 与
+  `pipeline.lua:(line,col)` 诊断与 repository 来源完全一致。
+
+不采用 YAML，不采用 JSON，也不提供可视化 Pipeline 编辑器；`inline` 仍然是一个文本编辑器。
 
 #### 3.3.2 Pipeline 示例
 
@@ -1203,7 +1218,7 @@ BuildRun 必须记录执行时的 Git Commit 和 Pipeline 版本信息，以便�
 
 - DAG Pipeline
 - 并行 Step
-- Pipeline 可视化编辑器
+- Pipeline 可视化编辑器（`inline` 来源只提供 Lua 文本编辑器，不是可视化编辑器）
 - 插件系统
 - Docker 集成
 - Kubernetes 集成

@@ -769,6 +769,17 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // layer) enforces them for Pipeline projects, and a null repository URL never reaches a
             // clone because the Freestyle path skips it.
             entity.Property(project => project.Kind).IsRequired().HasMaxLength(16);
+
+            // F-022: where a Pipeline project's definition lives. The column is immutable after create
+            // (enforced by ProjectService, the same shape Kind follows) and every existing row is a
+            // repository project - the migration's default is what keeps history honest.
+            entity.Property(project => project.PipelineSource).IsRequired().HasMaxLength(16)
+                .HasDefaultValue(ProjectSources.Repository);
+
+            // F-022: the inline Lua body. No max length on purpose (the column is text): the 64 KiB
+            // bound is enforced when the script is saved (PipelineScriptLimits.MaxScriptBytes), the
+            // same discipline the frozen spec follows.
+            entity.Property(project => project.InlineScript);
             entity.Property(project => project.RepositoryUrl).HasMaxLength(2048);
             entity.Property(project => project.DefaultBranch).HasMaxLength(200);
             entity.Property(project => project.PipelinePath).HasMaxLength(512);
@@ -807,6 +818,12 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 table.HasCheckConstraint(
                     "CK_Projects_Kind",
                     $"\"Kind\" IN ('{ProjectKinds.Pipeline}', '{ProjectKinds.Freestyle}')");
+
+                // F-022: the source is a closed vocabulary too. The default keeps every historical row
+                // a repository project; an inline row cannot be invented by an out-of-band writer.
+                table.HasCheckConstraint(
+                    "CK_Projects_PipelineSource",
+                    $"\"PipelineSource\" IN ('{ProjectSources.Repository}', '{ProjectSources.Inline}')");
                 table.HasCheckConstraint(
                     "CK_Projects_MaxConcurrentRuns",
                     "\"MaxConcurrentRuns\" IS NULL OR \"MaxConcurrentRuns\" >= 1");
@@ -913,6 +930,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // enforced when the definition is accepted (PipelineSpecSchema.MaxJsonBytes), where an
             // over-long spec is a clear 400 rather than a storage error.
             entity.Property(run => run.PipelineSpecJson);
+
+            // F-022: the inline run's script snapshot. Text on purpose: the 64 KiB bound is enforced
+            // where the text is authored (project save); the trigger only requires the script to exist,
+            // and the Worker re-checks the same bound before compiling it.
+            entity.Property(run => run.PipelineScriptText);
 
             // F-021: the run's resolved parameter values (a name → value object), bounded by
             // ProjectParameterLimits when both the definitions and the supplied values are validated.

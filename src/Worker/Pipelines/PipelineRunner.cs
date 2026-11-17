@@ -31,6 +31,22 @@ public sealed class PipelineRunOptions
     /// </summary>
     public string? PipelineSpecJson { get; init; }
 
+    /// <summary>
+    /// The inline Pipeline run's script (card F-022), handed over by the claim: no repository, no spec
+    /// yet - the Worker writes it to <c>temp/pipeline.lua</c>, runs the definition phase and executes the
+    /// spec it produces. <see langword="null"/> for a repository run (whose script is the checkout's
+    /// file) and for a Freestyle run (whose spec is <see cref="PipelineSpecJson"/>).
+    /// </summary>
+    public string? PipelineScriptText { get; init; }
+
+    /// <summary>
+    /// The run's definition shape word (card F-022): <see cref="RunDefinitionSources.Repository"/>,
+    /// <see cref="RunDefinitionSources.Freestyle"/> or <see cref="RunDefinitionSources.Inline"/>. The
+    /// claim carries it because presence alone cannot tell the three apart (an inline run may also have
+    /// a frozen spec). Defaults to a repository run for a caller that builds the options directly.
+    /// </summary>
+    public string DefinitionSource { get; init; } = RunDefinitionSources.Repository;
+
     /// <summary>The branch this run clones: the trigger's branch, or the project's default.</summary>
     public required string Branch { get; init; }
 
@@ -267,9 +283,24 @@ public sealed class PipelineRunner
         // frozen spec, so this run executes it directly in the run's workspace. The step loop, the
         // environment composition, the secrets, the artifacts, the cancellation and the deadline are
         // exactly the Pipeline run's: only the clone and the definition phase are skipped.
-        if (_options.PipelineSpecJson is not null)
+        if (string.Equals(_options.DefinitionSource, RunDefinitionSources.Freestyle, StringComparison.Ordinal))
         {
             return await RunFreestyleAsync(_options.PipelineSpecJson, cancellationToken);
+        }
+
+        // F-022: an inline Pipeline has no repository and no frozen spec yet - the claim carried the
+        // script, the Worker writes it to temp/pipeline.lua and runs the same definition phase a
+        // repository run does. Everything after that (report, steps, secrets, artifacts, cancel,
+        // deadline) is the one pipeline path, unchanged.
+        if (string.Equals(_options.DefinitionSource, RunDefinitionSources.Inline, StringComparison.Ordinal))
+        {
+            if (_options.PipelineScriptText is not { } inlineScript)
+            {
+                Log("zenkins: the claim says this is an inline run but carries no script; refusing to guess.");
+                return PipelineRunOutcome.Failed(PipelineFailureReasons.PipelineInvalid);
+            }
+
+            return await RunInlineAsync(inlineScript, cancellationToken);
         }
 
         // 1. Clone at the run's branch (F-013). The credential is fetched per run and never travels in
@@ -422,8 +453,14 @@ public sealed class PipelineRunner
     /// state (with the envelope's reason in the log) beats a run left <c>Running</c> forever.
     /// </para>
     /// </summary>
-    private async Task<PipelineRunOutcome> RunFreestyleAsync(string specJson, CancellationToken cancellationToken)
+    private async Task<PipelineRunOutcome> RunFreestyleAsync(string? specJson, CancellationToken cancellationToken)
     {
+        if (specJson is null)
+        {
+            Log("zenkins: the claim says this is a Freestyle run but carries no frozen step list; refusing to guess.");
+            return PipelineRunOutcome.Failed(PipelineFailureReasons.PipelineInvalid);
+        }
+
         if (!PipelineSpecJson.TryRead(specJson, out var spec, out var error) || spec is null)
         {
             Log($"zenkins: the claim's frozen step list was refused: {error}");
@@ -438,6 +475,68 @@ public sealed class PipelineRunner
         Directory.CreateDirectory(_options.Work.WorkspacePath);
 
         return await ExecuteStepsAsync(spec, commit: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// An inline Pipeline run (card F-022): no clone, no repository. The script is materialised in the
+    /// run's <c>temp/pipeline.lua</c> and described exactly like a repository file, so the diagnostic's
+    /// name and position are the same (<c>pipeline.lua:(line,col)</c>) and the frozen spec is the one
+    /// contract downstream. A refusal fails the run with the definition phase's own reason; nothing is
+    /// executed and no step is recorded.
+    /// </summary>
+    private async Task<PipelineRunOutcome> RunInlineAsync(string script, CancellationToken cancellationToken)
+    {
+        if (System.Text.Encoding.UTF8.GetByteCount(script) > PipelineScriptLimits.MaxScriptBytes)
+        {
+            Log($"zenkins: the inline pipeline script is larger than {PipelineScriptLimits.MaxScriptBytes} bytes; "
+                + "refusing to describe it.");
+            return PipelineRunOutcome.Failed(PipelineFailureReasons.PipelineInvalid);
+        }
+
+        Log("zenkins: inline pipeline run - the script was snapshotted on the server and travels with "
+            + "this run; no repository is cloned.");
+
+        // The workspace is the inline run's working directory (the Freestyle trio): repository/ stays
+        // empty, which is exactly what TC-001 asserts.
+        Directory.CreateDirectory(_options.Work.WorkspacePath);
+
+        PipelineDefinitionResult definition;
+        try
+        {
+            definition = _definitions.RunInline(
+                _options.Work,
+                script,
+                _options.Deadline,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return PipelineRunOutcome.Cancellation();
+        }
+        catch (PipelineDefinitionException failure)
+        {
+            Log($"zenkins: {failure.Message}");
+            return PipelineRunOutcome.Failed(failure.FailureReason);
+        }
+
+        // One report, with no commit: there is nothing to check out, so the definition IS the first
+        // report. A definitive refusal aborts before any step has a side effect.
+        bool definitionReported;
+        try
+        {
+            definitionReported = await ReportOrCancelAsync(commit: null, definition.SpecJson, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return PipelineRunOutcome.Cancellation();
+        }
+
+        if (!definitionReported)
+        {
+            return PipelineRunOutcome.GiveUp(null);
+        }
+
+        return await ExecuteStepsAsync(definition.Spec, commit: null, cancellationToken);
     }
 
     /// <summary>
@@ -575,11 +674,14 @@ public sealed class PipelineRunner
                         FileName = argv[0],
                         Arguments = [.. argv.Skip(1)],
 
-                        // F-020: a Freestyle run's steps execute in the run's workspace - there is no
-                        // checkout, so the repository directory stays empty and unused.
-                        WorkingDirectory = _options.PipelineSpecJson is not null
-                            ? _options.Work.WorkspacePath
-                            : _options.Work.RepositoryPath,
+                        // F-020/F-022: a Freestyle or inline run's steps execute in the run's workspace -
+                        // there is no checkout, so the repository directory stays empty and unused.
+                        WorkingDirectory = string.Equals(
+                            _options.DefinitionSource,
+                            RunDefinitionSources.Repository,
+                            StringComparison.Ordinal)
+                                ? _options.Work.RepositoryPath
+                                : _options.Work.WorkspacePath,
 
                         // The composed environment, in full: the child sees exactly the map env() reports, so
                         // the two can never disagree about a value or its precedence.

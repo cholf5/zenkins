@@ -447,6 +447,15 @@ public sealed class WorkerRunLoop(
                 // the definition phase and executes exactly what the server froze at trigger time.
                 PipelineSpecJson = claim.PipelineSpecJson,
 
+                // F-022: a non-null script (with no repository) makes this run an inline Pipeline -
+                // the worker writes it to temp/pipeline.lua and runs the definition phase there.
+                PipelineScriptText = claim.PipelineScript,
+
+                // F-022: the shape word from the claim. An older server omits it; the fallback derives
+                // the same word the Server would have, from the fields that server did send.
+                DefinitionSource = claim.DefinitionSource
+                    ?? RunDefinitionSources.For(claim.PipelineScript, claim.PipelineSpecJson, claim.Branch),
+
                 Deadline = deadline,
                 GitDepth = configuration.GitDepth,
                 KnownHostsPath = configuration.GitKnownHostsPath,
@@ -479,7 +488,13 @@ public sealed class WorkerRunLoop(
                 Artifacts = new Zenkins.Worker.Artifacts.ArtifactPublisher(
                     new Zenkins.Worker.Artifacts.ArtifactUploadClient(api, workerToken),
                     claim.RunId,
-                    claim.PipelineSpecJson is not null ? work.WorkspacePath : work.RepositoryPath,
+                    string.Equals(
+                        claim.DefinitionSource
+                            ?? RunDefinitionSources.For(claim.PipelineScript, claim.PipelineSpecJson, claim.Branch),
+                        RunDefinitionSources.Repository,
+                        StringComparison.Ordinal)
+                        ? work.RepositoryPath
+                        : work.WorkspacePath,
                     work.RootPath,
                     Zenkins.Shared.Artifacts.ArtifactLimits.FromConfiguration(
                         key => Environment.GetEnvironmentVariable(key.Replace(":", "__", StringComparison.Ordinal))),

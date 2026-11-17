@@ -157,17 +157,44 @@ loop (`dotnet run` from a clone).
 > fact was removed or loosened, and the entity initializer stayed: removing it would have left eight
 > `new Project { }` harness sites without a path and turned five F-014 assertions red. No new category
 > and no new exclusion - the sextuple filter is unchanged: fast 1284 → 1287 and all seven 1311 → 1314.
+> F-022 (the inline Pipeline source) added **23** facts on 2026-11-17: 11 server-side facts in
+> `Runs/InlinePipelineRunTests.cs` (the project row stores the script with null repository fields and the
+> source is immutable in both directions; a repository project keeps `repository`; a run snapshots the
+> script, keeps `pipeline.lua` as its path, and the claim reads the run row - not the edited project - and
+> carries `pipelineScript` + `definitionSource` with no repository; an out-of-band `DefaultBranch` never
+> reaches an inline run's snapshot; empty/over-bound scripts are refused; Validate runs a definition phase
+> on a worker while the project is at its concurrency cap, creates no run, step or number; a broken script
+> settles `invalid` with `pipeline.lua:(line,col)`; no worker settles `no-worker`; a repository project is
+> refused; a foreign tenant's editor/validate/worker-api calls are 404s; and an inline run offers
+> Rebuild/Replay while a rebuild carries the same script), 5 runner cases in
+> `Pipelines/PipelineRunnerTests.cs` (the inline script runs its steps in `workspace/` with `repository/`
+> empty and `temp/pipeline.lua` byte-identical; one Theory proves a syntax error is `pipeline-syntax` with
+> the same **anchored** `zenkins: pipeline.lua:(line,col)` position for both sources; a definition carries
+> its `triggers`, pipeline `env` and `secretReferences`; and `while true do end` is `pipeline-timeout`),
+> 2 real-Worker facts in `WorkerRuntime/WorkerDefinitionValidationLoopTests.cs` (the actual
+> `WorkerDefinitionValidationLoop` claims the script, describes it through the real runner, reports its own
+> step list and deletes the `validations/{id}` scratch tree; a syntax error is reported with
+> `pipeline.lua:(line,col)`), 2 webhook facts in `Webhooks/WebhookInlineGateTests.cs` (creation refused
+> with `webhookError=project-not-pipeline`; a seeded row's real signed delivery is
+> `ignored:no-repository` with no run), 2 Git facts in `Git/GitCredentialInlineGuardTests.cs` (the server
+> refuses an assignment for inline **and** Freestyle, not only the hidden UI) and 1 real-Worker artifact
+> fact in `WorkerRuntime/WorkerRunLoopTests.cs` (an inline step's `report.txt` is published from
+> `workspace/`). It also added 1 `Category=Postgres` fact
+> (`Concurrency/PostgresInlinePipelineMigrationTests.cs`) that **seeds a row on the pre-F-022 schema and
+> then migrates**: the historical row reads `repository`, the check constraint admits `inline` and
+> refuses a third word, and `BuildRuns.PipelineScriptText` exists. No new category and no new exclusion -
+> the sextuple filter is unchanged: fast 1287 → 1310, Postgres 4 → 5 and all seven 1314 → 1338 (the same
+> arithmetic below).
 > **Earlier revisions of this
 > note carried counts that
 > were behind HEAD** - some cards' tests had never been counted (the Milestone suite by four, the
 > fast suite by more than fifty) - so this revision drops those figures rather than repeating them
-> and re-baselines as **fast 1287 (a counted run) and all seven 1314 (that count plus the other six
-> suites' figures)** - Milestone 12, Recovery 4, PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 4,
+> and re-baselines as **fast 1310 (a counted run) and all seven 1338 (that count plus the other six
+> suites' figures)** - Milestone 12, Recovery 4, PublishSmoke 2, PublishAot 2, GitSshd 3, Postgres 5,
 > the last one skipping without `ZENKINS_TEST_POSTGRES`. The fast figure is a counted run of the tree
-> that carries Q-018 and B-006 (1279 plus the five Q-017 facts above plus B-006's three; Q-018's own
-> fact lives in the Postgres suite, so the fast count did not move for it and was re-measured anyway);
-> the all-seven total is that same arithmetic on the 1311 of the previous count, not a second
-> seven-suite run. Every command in the POSIX
+> that carries Q-018, B-006 and F-022 (1287 plus the twenty-three F-022 facts above); the all-seven total is
+> that same arithmetic on the 1314 of the previous count plus F-022's twenty-three fast facts and its
+> one `Category=Postgres` fact: 12 + 4 + 2 + 2 + 3 + 5 = 1338. Every command in the POSIX
 > (macOS/Linux) form below was run in that order from a fresh `git clone`; the expected outputs
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
@@ -354,17 +381,17 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1287 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~5 min on the reference machine (1310 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
 | GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
-| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus one migration run on a fresh schema (4 tests) |
+| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus one migration run on a fresh schema (5 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1314 on the tree that carries Q-018 and B-006, by the arithmetic in the note
+filter runs **all seven** (1338 on the tree that carries Q-018, B-006 and F-022, by the arithmetic in the note
 above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
