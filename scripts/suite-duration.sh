@@ -65,11 +65,11 @@ failed=$(awk -F'\t' '$2 == "failed"' "$work" | wc -l | tr -d ' ')
 
 echo "SUMMARY"
 echo "  tests with timings : $tests (failed $failed)"
-summary_lines=$(grep -E '^[ \t]*(total|succeeded|failed|skipped|duration|总计|通过|失败|已跳过|跳过|持续时间):' "$log" || true)
+summary_lines=$(grep -E '^[[:space:]]*(total|succeeded|failed|skipped|duration|总计|通过|失败|已跳过|跳过|持续时间):' "$log" || true)
 if [[ -n $summary_lines ]]; then
     # Keep the runner's own wording (it may be English or the host's locale); the parsed counts below are
     # authoritative because they come from the per-test lines this script actually understood.
-    sed 's/^[ \t]*/  run summary        : /' <<<"$summary_lines"
+    sed 's/^[[:space:]]*/  run summary        : /' <<<"$summary_lines"
 else
     echo "  run summary        : the runner did not print a summary block this script recognises"
 fi
