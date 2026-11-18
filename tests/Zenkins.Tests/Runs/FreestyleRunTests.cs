@@ -298,6 +298,67 @@ public sealed class FreestyleRunTests
         Assert.Contains("runsOn: fieldValue(row, \"runs-on\")", script, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_steps_editor_carries_the_stage_and_the_frozen_spec_renders_it()
+    {
+        // Card F-030's last mile for Freestyle: the field has to reach the browser (both halves of the
+        // editor), come back in the payload the endpoint parses, and end up in the run's frozen spec - the
+        // same spec the run page groups by. A rendered input whose serializer drops it looks saved and is
+        // not, which is the failure this fact exists to make impossible.
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner, "freestyle-stage");
+        var steps = JsonSerializer.Serialize(new object[]
+        {
+            new
+            {
+                name = "Compile",
+                stage = "Build",
+                script = "echo hello",
+                envLines = string.Empty,
+                continueOnError = false,
+                artifactsText = string.Empty,
+            },
+            new
+            {
+                name = "Notify",
+                stage = string.Empty,
+                script = "echo done",
+                envLines = string.Empty,
+                continueOnError = false,
+                artifactsText = string.Empty,
+            },
+        });
+        Assert.True(await SaveStepsAsync(owner, projectId, steps));
+
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/pipelines");
+        var templateStart = page.IndexOf("id=\"freestyle-step-template\"", StringComparison.Ordinal);
+        Assert.True(templateStart > 0, "the editor's row template is not on the page.");
+        var savedRows = page[..templateStart];
+        var template = page[templateStart..];
+
+        // The saved row renders the stage with the stored text and the envelope's bound.
+        var stageInputStart = savedRows.IndexOf("data-freestyle-field=\"stage\"", StringComparison.Ordinal);
+        Assert.True(stageInputStart >= 0, "the saved row has no stage field.");
+        var stageInput = savedRows[stageInputStart..savedRows.IndexOf('>', stageInputStart)];
+        Assert.Contains("value=\"Build\"", stageInput, StringComparison.Ordinal);
+        Assert.Contains($"maxlength=\"{PipelineSpecSchema.MaxStageLength}\"", stageInput, StringComparison.Ordinal);
+
+        // ...and so does the row template, or "add step" would produce a step that cannot declare one.
+        Assert.Contains("data-freestyle-field=\"stage\"", template, StringComparison.Ordinal);
+
+        // The serializer is what turns that input into the `stage` the endpoint reads.
+        var script = await AuthTestHost.GetStringAsync(owner, "/js/freestyle-steps.js");
+        Assert.Contains("stage: fieldValue(row, \"stage\")", script, StringComparison.Ordinal);
+
+        // The stored spec carries the names, and the run's snapshot is that spec.
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
+        var run = await host.ReadRunAsync(runId);
+        Assert.True(PipelineSpecJson.TryRead(run.PipelineSpecJson, out var spec, out var error), error);
+        Assert.NotNull(spec);
+        Assert.Equal(["Build", null], spec!.Steps.Select(step => step.Stage));
+    }
+
     private static async Task<Guid> CreateFreestyleProjectAsync(HttpClient owner, string name = "freestyle-e2e")
     {
         var response = await OrganizationTestHost.PostFormAsync(

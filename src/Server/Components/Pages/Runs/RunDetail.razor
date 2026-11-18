@@ -301,55 +301,45 @@
                     </p>
                     @* F-015: every declared step with the state the worker recorded for it, or Pending when
                        it has not been reached - so a page opened mid-run shows completed, current and
-                       pending steps (the frozen spec is the list, the step rows are the states). *@
+                       pending steps (the frozen spec is the list, the step rows are the states).
+                       F-030: the same rows, grouped by the stage the frozen spec declares. Adjacent steps
+                       of one stage form a collapsible section; a step with no stage renders directly in
+                       this list, outside every section - never folded into the previous one. A spec with
+                       no stages at all (v1/v2) therefore renders exactly the flat list it always has. *@
                     <ol id="run-steps" class="bb:mt-2 bb:space-y-3 bb:text-sm">
-                        @foreach (var step in _run.StepList)
+                        @foreach (var section in _run.StageGroups)
                         {
-                            <li id="@($"run-step-{step.Name}")" class="bb:break-all">
-                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
-                                    <span class="bb:text-xs bb:text-muted-foreground">@step.Index.</span>
-                                    <span class="bb:font-medium">@step.Name</span>
-                                    <BbBadge Variant="@StepBadgeVariant(step.Status)">@step.Status</BbBadge>
-                                    @if (step.ExitCode is { } exitCode)
-                                    {
-                                        <span class="bb:text-xs bb:text-muted-foreground">exit @exitCode</span>
-                                    }
-                                    @if (step.Duration is { } duration)
-                                    {
-                                        <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.FormatDuration(duration)</span>
-                                    }
-                                    @* F-032: how many attempts the step made, when it made more than one -
-                                       the count lives on the one row the step has, so the page never grows a
-                                       second row per attempt (the frozen spec's step identity stays 1:1). *@
-                                    @if (step.Attempts > 1)
-                                    {
-                                        <span id="@($"run-step-attempts-{step.Name}")" class="bb:text-xs bb:text-muted-foreground">attempts @step.Attempts</span>
-                                    }
-                                    @if (step.FailureReason is { } reason)
-                                    {
-                                        <span class="bb:text-xs bb:text-muted-foreground">@StepReasonText(reason)</span>
-                                    }
-                                    @* D-004: selecting a step jumps to the log filtered to that step.
-                                       The fragment brings the panel into view; the handler pushes the
-                                       step row's id down into the panel's filter (StepId, never text).
-                                       data-enhance-nav="none" keeps the jump a native same-document
-                                       fragment scroll - enhanced navigation would re-initialize the
-                                       page and throw away the panel's pause/search state. A step
-                                       without a recorded row has no id to filter on, so it offers no
-                                       link. *@
-                                    @if (step.Id is { } stepRowId)
-                                    {
-                                        <a id="@($"run-step-log-{step.Name}")" href="#run-log"
-                                           data-enhance-nav="none"
-                                           class="bb:text-xs bb:font-medium bb:text-primary bb:hover:underline"
-                                           @onclick="@(() => FilterLogToStep(stepRowId))">View log</a>
-                                    }
-                                </div>
-                                @if (step.Index <= pipeline.Steps.Length)
-                                {
-                                    <code class="bb:text-xs bb:text-muted-foreground">@string.Join(' ', pipeline.Steps[step.Index - 1].Argv)</code>
-                                }
-                            </li>
+                            if (section.IsNamed)
+                            {
+                                <li id="@($"run-stage-{section.Name}")" class="bb:break-all">
+                                    @* F-030: `open` is the card's default fold state - a failed stage is open
+                                       (and the jump script scrolls to its first failed step), a running one
+                                       is open so an in-flight run cannot hide what it is doing; success,
+                                       all-skipped and not-yet-reached sections are collapsed. *@
+                                    <details open="@section.IsExpandedByDefault">
+                                        <summary class="bb:flex bb:cursor-pointer bb:flex-wrap bb:items-center bb:gap-2">
+                                            <span class="bb:text-base bb:font-medium">@section.Name</span>
+                                            <BbBadge Variant="@RunDisplay.StepBadgeFor(section.Status)">@section.Status</BbBadge>
+                                            @if (section.Duration is { } stageDuration)
+                                            {
+                                                <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.FormatDuration(stageDuration)</span>
+                                            }
+                                            <span class="bb:text-xs bb:text-muted-foreground">@section.StepCount step(s)</span>
+                                        </summary>
+                                        <ol id="@($"run-stage-steps-{section.Name}")" class="bb:mt-2 bb:space-y-3">
+                                            <RunStepList Steps="@section.Steps" Pipeline="@pipeline"
+                                                         FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
+                                                         StepSelected="FilterLogToStep" />
+                                        </ol>
+                                    </details>
+                                </li>
+                            }
+                            else
+                            {
+                                <RunStepList Steps="@section.Steps" Pipeline="@pipeline"
+                                             FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
+                                             StepSelected="FilterLogToStep" />
+                            }
                         }
                     </ol>
                 }
@@ -936,37 +926,6 @@
             ? $"{failing.Index}. {failing.Name} (exit {exitCode})"
             : $"{failing.Index}. {failing.Name}";
     }
-
-    /// <summary>A step's state as a badge (card F-015). Pending is the declared-but-not-reached state.</summary>
-    private static BadgeVariant StepBadgeVariant(string status) => status switch
-    {
-        PipelineStepStatus.Running => BadgeVariant.Default,
-        PipelineStepStatus.Success => BadgeVariant.Success,
-        PipelineStepStatus.Failed => BadgeVariant.Destructive,
-        PipelineStepStatus.Skipped => BadgeVariant.Outline,
-        _ => BadgeVariant.Secondary,
-    };
-
-    /// <summary>
-    /// A step's failure/skip reason in words; the stored value is a closed code (card F-015). Every code the
-    /// vocabulary defines has a sentence here - the three cancel-ish values are worded so the page tells them
-    /// apart (a step killed by a user cancel, a step that a canceled run never reached, and a step killed by the
-    /// run's deadline) - and an unknown code still renders as itself rather than as nothing.
-    /// </summary>
-    private static string StepReasonText(string reason) => reason switch
-    {
-        PipelineStepFailureReasons.WhenNotMatched => "its when condition did not match",
-        PipelineStepFailureReasons.PreviousStepFailed => "an earlier step failed",
-        PipelineStepFailureReasons.RunCanceled => "the run was canceled before this step",
-        PipelineStepFailureReasons.Canceled => "the run was canceled by a user",
-        PipelineStepFailureReasons.TimedOut => "the run's deadline passed",
-        PipelineStepFailureReasons.StepTimeout => "its own timeout passed",
-        PipelineStepFailureReasons.NotStarted => "the process could not be started",
-        PipelineStepFailureReasons.SecretUnavailable => "a secret could not be resolved",
-        PipelineStepFailureReasons.ArtifactPathRejected => "an artifact path was refused",
-        PipelineStepFailureReasons.ArtifactFailed => "an artifact could not be published",
-        _ => reason,
-    };
 
     /// <summary>A stored size as prose ("1.5 MB"); the row stores bytes, people read units.</summary>
     private static string FormatBytes(long bytes) => ArtifactLimits.FormatBytes(bytes);

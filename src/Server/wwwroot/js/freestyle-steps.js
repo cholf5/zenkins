@@ -25,6 +25,9 @@
         var drafts = rows(form).map(function (row) {
             return {
                 name: fieldValue(row, "name"),
+                // F-030: the stage the step renders under. Without this line the field would render, look
+                // saved, and never reach the server - the same trap the runsOn line below documents.
+                stage: fieldValue(row, "stage"),
                 script: fieldValue(row, "script"),
                 envLines: fieldValue(row, "env-lines"),
                 continueOnError: fieldValue(row, "continue-on-error") === "true",

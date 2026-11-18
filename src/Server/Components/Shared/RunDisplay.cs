@@ -33,6 +33,40 @@ public static class RunDisplay
     };
 
     /// <summary>
+    /// A step's state as a badge (card F-015, reused by F-030's stage header): Pending is the
+    /// declared-but-not-reached state and an unknown state still renders as a badge instead of throwing.
+    /// </summary>
+    public static BadgeVariant StepBadgeFor(string status) => status switch
+    {
+        PipelineStepStatus.Running => BadgeVariant.Default,
+        PipelineStepStatus.Success => BadgeVariant.Success,
+        PipelineStepStatus.Failed => BadgeVariant.Destructive,
+        PipelineStepStatus.Skipped => BadgeVariant.Outline,
+        _ => BadgeVariant.Secondary,
+    };
+
+    /// <summary>
+    /// A step's failure/skip reason in words; the stored value is a closed code (card F-015). Every code the
+    /// vocabulary defines has a sentence here - the three cancel-ish values are worded so the page tells them
+    /// apart (a step killed by a user cancel, a step that a canceled run never reached, and a step killed by
+    /// the run's deadline) - and an unknown code still renders as itself rather than as nothing.
+    /// </summary>
+    public static string StepReasonText(string reason) => reason switch
+    {
+        PipelineStepFailureReasons.WhenNotMatched => "its when condition did not match",
+        PipelineStepFailureReasons.PreviousStepFailed => "an earlier step failed",
+        PipelineStepFailureReasons.RunCanceled => "the run was canceled before this step",
+        PipelineStepFailureReasons.Canceled => "the run was canceled by a user",
+        PipelineStepFailureReasons.TimedOut => "the run's deadline passed",
+        PipelineStepFailureReasons.StepTimeout => "its own timeout passed",
+        PipelineStepFailureReasons.NotStarted => "the process could not be started",
+        PipelineStepFailureReasons.SecretUnavailable => "a secret could not be resolved",
+        PipelineStepFailureReasons.ArtifactPathRejected => "an artifact path was refused",
+        PipelineStepFailureReasons.ArtifactFailed => "an artifact could not be published",
+        _ => reason,
+    };
+
+    /// <summary>
     /// A duration as prose: minutes with zero-padded seconds once the run is a minute old, a
     /// one-decimal seconds readout below that. Hours stay in minutes (a 90-minute run reads
     /// "90m 05s") - the same shape every page has shown since F-006.

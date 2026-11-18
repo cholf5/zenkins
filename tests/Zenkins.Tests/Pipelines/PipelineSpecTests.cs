@@ -248,10 +248,26 @@ public sealed class PipelineSpecTests
     [Fact]
     public void The_envelope_gate_refuses_an_unknown_schema_version()
     {
-        // F-020 moved the current schema to v2 (the script step) with v1 still readable; v3 is the
-        // unknown version, refused rather than guessed.
-        Assert.False(PipelineSpecJson.TryRead(SpecJson(version: 3, steps: StepJson("a")), out _, out var error));
+        // F-020 moved the schema to v2 (the script step) and F-030 to v3 (the stage), with v1 and v2 still
+        // readable; v4 is the unknown version, refused rather than guessed.
+        Assert.False(PipelineSpecJson.TryRead(SpecJson(version: 4, steps: StepJson("a")), out _, out var error));
         Assert.Contains("pipeline.version", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_v3_spec_with_a_stage_is_the_current_schema()
+    {
+        // The field F-030 added lives in v3's shape, and the writer emits exactly that version.
+        Assert.Equal(3, PipelineSpecSchema.Version);
+        Assert.Contains(3, PipelineSpecSchema.AcceptedVersions);
+
+        var json = SpecJson(version: 3, steps: """{ "name": "a", "run": [ "dotnet", "--info" ], "stage": "Build" }""");
+
+        Assert.True(PipelineSpecJson.TryRead(json, out var read, out var error), error);
+        Assert.NotNull(read);
+        Assert.Equal(3, read!.Version);
+        Assert.Equal("Build", read.Steps[0].Stage);
+        Assert.True(read.Steps[0].HasStage);
     }
 
     [Fact]
@@ -399,7 +415,7 @@ public sealed class PipelineSpecTests
 
         Assert.True(PipelineSpecJson.TryRead(json, out var read, out var error), error);
         Assert.NotNull(read);
-        Assert.Equal(2, read!.Version);
+        Assert.Equal(PipelineSpecSchema.Version, read!.Version);
         Assert.Equal("echo hello", read.Steps[0].Script);
         Assert.True(read.Steps[0].IsScript);
         Assert.Empty(read.Steps[0].Argv);

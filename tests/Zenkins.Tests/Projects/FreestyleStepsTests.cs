@@ -265,6 +265,63 @@ public sealed class FreestyleStepsTests
         Assert.Contains("no single Worker can satisfy both", Error!, StringComparison.Ordinal);
     }
 
+    // ------------------------------------------------------------------
+    // Card F-030: a Freestyle step's stage
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void A_freestyle_step_carries_its_stage_into_the_frozen_spec()
+    {
+        var json = Build("staged", drafts:
+        [
+            new FreestyleStepDraft("Compile", "dotnet build", null, false, null, Stage: "Build"),
+            new FreestyleStepDraft("Unit", "dotnet test", null, false, null, Stage: "Test"),
+            new FreestyleStepDraft("Notify", "notify", null, false, null),
+        ]);
+
+        Assert.NotNull(json);
+        var spec = Read(json!);
+
+        Assert.Equal(PipelineSpecSchema.Version, spec.Version);
+        Assert.Equal(["Build", "Test", null], spec.Steps.Select(step => step.Stage));
+    }
+
+    [Fact]
+    public void A_padded_freestyle_stage_is_trimmed_server_side_and_a_blank_one_is_no_stage()
+    {
+        var json = Build("trimmed", drafts:
+        [
+            new FreestyleStepDraft("Compile", "dotnet build", null, false, null, Stage: "  Build  "),
+            new FreestyleStepDraft("Notify", "notify", null, false, null, Stage: "   "),
+        ]);
+
+        Assert.NotNull(json);
+        Assert.Equal(["Build", null], Read(json!).Steps.Select(step => step.Stage));
+    }
+
+    [Fact]
+    public void An_over_long_freestyle_stage_is_refused_by_the_envelope_with_its_path()
+    {
+        var json = Build("too-long", drafts:
+        [
+            new FreestyleStepDraft(
+                "Compile",
+                "dotnet build",
+                null,
+                false,
+                null,
+                Stage: new string('s', PipelineSpecSchema.MaxStageLength + 1)),
+        ]);
+
+        Assert.Null(json);
+        Assert.NotNull(Error);
+        Assert.Contains("pipeline.steps[1].stage", Error!, StringComparison.Ordinal);
+        Assert.Contains(
+            $"at most {PipelineSpecSchema.MaxStageLength} characters",
+            Error!,
+            StringComparison.Ordinal);
+    }
+
     private static FreestyleStepDraft Step(string name, string script) =>
         new(Name: name, Script: script, EnvLines: null, ContinueOnError: false, ArtifactsText: null);
 

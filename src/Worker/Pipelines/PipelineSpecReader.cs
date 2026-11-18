@@ -26,7 +26,7 @@ public sealed class PipelineDefinitionException(string message, string failureRe
 
 /// <summary>
 /// Builds a validated <see cref="PipelineSpec"/> from the table a <c>pipeline.lua</c> declared (card
-/// F-014, spec schema v1).
+/// F-014; the schema is v3 since card F-030 added the optional per-step <c>stage</c>).
 /// <para>
 /// <b>Strict and field-addressed.</b> Every unknown key is refused at both levels, every required
 /// field is checked for the exact shape the executor consumes, and every message names the path it is
@@ -35,8 +35,9 @@ public sealed class PipelineDefinitionException(string message, string failureRe
 /// </para>
 /// <para>
 /// <b>Shapes.</b> The seam distinguishes a list from a map (<see cref="LuaHostTable.IsSequence"/>), so
-/// the reader can be exact: <c>steps</c>, <c>run</c>, <c>shell</c> and <c>triggers.branches</c> are
-/// lists, <c>env</c> and the pipeline/step/triggers tables themselves are maps. An empty table arrives
+/// the reader can be exact: <c>steps</c>, <c>stages</c>, <c>run</c>, <c>shell</c> and
+/// <c>triggers.branches</c> are lists, <c>env</c>, a stage entry and the pipeline/step/triggers tables
+/// themselves are maps. An empty table arrives
 /// as an empty list (the seam's neutral answer), so every map field accepts an empty list as "nothing
 /// declared" - which is exactly what an empty table means in Lua.
 /// </para>
@@ -46,9 +47,10 @@ public static class PipelineSpecReader
     private const string RunKey = "run";
     private const string ShellKey = "shell";
 
-    private static readonly string[] PipelineKeys = ["name", "env", "steps", "triggers"];
+    private static readonly string[] PipelineKeys = ["name", "env", "steps", "stages", "triggers"];
     private static readonly string[] StepKeys =
-        ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts", "timeout", "retry", "runs_on"];
+        ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts", "timeout", "retry", "runs_on", "stage"];
+    private static readonly string[] StageKeys = ["name", "steps"];
     private static readonly string[] WhenKeys = ["branch", "platform", "env"];
     private static readonly string[] TriggerKeys = ["branches"];
 
@@ -56,7 +58,7 @@ public static class PipelineSpecReader
     /// Validates the definition table and returns the spec it describes.
     /// </summary>
     /// <exception cref="PipelineDefinitionException">
-    /// The value is not a valid v1 spec; the message names the field path and
+    /// The value is not a valid spec; the message names the field path and
     /// <see cref="PipelineDefinitionException.FailureReason"/> is <c>pipeline-invalid</c>.
     /// </exception>
     public static PipelineSpec Read(LuaHostValue value)
@@ -82,11 +84,53 @@ public static class PipelineSpecReader
         return new PipelineSpec(PipelineSpecSchema.Version, name, steps, env, triggers);
     }
 
+    /// <summary>
+    /// Reads the pipeline's step list, declared in one of the two spellings the schema allows (card F-030):
+    /// <c>steps = { … }</c> - the flat list every v1/v2 definition uses, unchanged - or
+    /// <c>stages = { { name = "Build", steps = { … } }, … }</c>, the sugar form that assigns a stage name
+    /// to the steps it contains. Both produce <b>one flat list in declaration order</b>: the frozen spec
+    /// has a single step index, so the executor, the step reports and the run page keep one shape.
+    /// <para>
+    /// <b>The ordered list is the only stages form.</b> A Lua map (<c>stages = { Build = … }</c>) has no
+    /// declaration order the host could trust, and stages are read in the order they appear - so the map
+    /// form is refused with a message that shows the list form instead of silently reordering a pipeline.
+    /// </para>
+    /// </summary>
     private static PipelineStep[] ReadSteps(LuaHostTable root)
     {
-        if (!TryGet(root, "steps", out var stepsValue) || stepsValue.IsNil)
+        var hasSteps = TryGet(root, "steps", out var stepsValue) && !stepsValue.IsNil;
+        var hasStages = TryGet(root, "stages", out var stagesValue) && !stagesValue.IsNil;
+
+        if (hasSteps && hasStages)
         {
-            throw Invalid("pipeline.steps is required: declare at least one step.");
+            throw Invalid(
+                "pipeline must declare either steps or stages, not both: stages assigns the stage name to the "
+                + "steps it contains, so a pipeline that uses it declares no top-level steps.");
+        }
+
+        // One name registry across both spellings: a duplicate is a duplicate wherever it was declared.
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        var steps = hasStages
+            ? ReadStageSteps(stagesValue, names)
+            : ReadFlatSteps(stepsValue, names);
+
+        // Card F-033: a run executes on one Worker, so the union of the steps' requirements must be one Worker's
+        // worth. A contradiction is a definition mistake and is refused here, by path, naming both steps.
+        var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(steps);
+        if (requirementError is not null)
+        {
+            throw Invalid(requirementError);
+        }
+
+        return steps;
+    }
+
+    /// <summary>The flat <c>steps = { … }</c> form: the v1 spelling, read exactly as before F-030.</summary>
+    private static PipelineStep[] ReadFlatSteps(LuaHostValue stepsValue, Dictionary<string, string> names)
+    {
+        if (stepsValue.IsNil)
+        {
+            throw Invalid("pipeline.steps is required: declare at least one step (or a stages list).");
         }
 
         if (stepsValue.Kind != LuaHostValueKind.Table)
@@ -112,76 +156,203 @@ public static class PipelineSpecReader
         }
 
         var steps = new PipelineStep[count];
-        var names = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
-            var path = $"pipeline.steps[{i + 1}]";
-            var item = stepsTable.Items[i];
-            if (item.Kind != LuaHostValueKind.Table || item.Table.IsSequence)
-            {
-                throw Invalid($"{path} must be a table with name and run (or shell), got {Describe(item)}.");
-            }
-
-            var table = item.Table;
-            RejectUnknownKeys(table, path, StepKeys);
-
-            var stepName = ReadName(table, path + ".name");
-            if (names.TryGetValue(stepName, out var firstIndex))
-            {
-                throw Invalid(
-                    $"{path}.name '{stepName}' is already used by {FirstStepPath(firstIndex)}; step names must be unique.");
-            }
-
-            names.Add(stepName, i + 1);
-
-            var run = ReadArgv(table, path, RunKey);
-            var shell = ReadArgv(table, path, ShellKey);
-            if ((run is null) == (shell is null))
-            {
-                throw Invalid($"{path} must declare exactly one of run or shell.");
-            }
-
-            var stepEnv = ReadEnv(table, path + ".env");
-            var continueOnError = ReadContinueOnError(table, path);
-            var when = ReadWhen(table, path);
-            var artifactPaths = ReadArtifactPaths(table, path);
-            var stepTimeout = ReadStepLimit(
-                table,
-                "timeout",
-                path,
-                PipelineSpecSchema.MinStepTimeoutSeconds,
-                PipelineSpecSchema.MaxStepTimeoutSeconds);
-            var stepRetry = ReadStepLimit(
-                table,
-                "retry",
-                path,
-                PipelineSpecSchema.MinStepRetry,
-                PipelineSpecSchema.MaxStepRetry);
-            var runsOn = ReadRunsOn(table, path);
-
-            steps[i] = new PipelineStep(
-                stepName,
-                Run: run,
-                Shell: shell,
-                Env: stepEnv,
-                ContinueOnError: continueOnError,
-                When: when,
-                Artifacts: artifactPaths,
-                TimeoutSeconds: stepTimeout,
-                Retry: stepRetry,
-                RunsOn: runsOn.Raw,
-                Requirement: runsOn.Normalized);
-        }
-
-        // Card F-033: a run executes on one Worker, so the union of the steps' requirements must be one Worker's
-        // worth. A contradiction is a definition mistake and is refused here, by path, naming both steps.
-        var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(steps);
-        if (requirementError is not null)
-        {
-            throw Invalid(requirementError);
+            steps[i] = ReadStep(stepsTable.Items[i], $"pipeline.steps[{i + 1}]", inheritedStage: null, names);
         }
 
         return steps;
+    }
+
+    /// <summary>
+    /// The <c>stages = { … }</c> sugar form (card F-030): an ordered list of
+    /// <c>{ name = "Build", steps = { … } }</c> entries. Each entry's name is written onto every step it
+    /// contains, in declaration order, so the frozen spec carries the name on the step and a later reader
+    /// never has to reconstruct it. An entry without a <c>name</c> declares steps that belong to no stage
+    /// (they render outside every section), which is how a pipeline mixes staged and unstaged steps without
+    /// leaving the sugar form.
+    /// </summary>
+    private static PipelineStep[] ReadStageSteps(LuaHostValue stagesValue, Dictionary<string, string> names)
+    {
+        if (stagesValue.Kind != LuaHostValueKind.Table || !stagesValue.Table.IsSequence)
+        {
+            throw Invalid(
+                "pipeline.stages must be a list of stage tables ({ { name = \"Build\", steps = { … } } }), got "
+                + Describe(stagesValue) + ". A map has no declaration order, and stages are read in order.");
+        }
+
+        var stageItems = stagesValue.Table.Items;
+        if (stageItems.Count == 0)
+        {
+            throw Invalid("pipeline.stages must declare at least one stage.");
+        }
+
+        var steps = new List<PipelineStep>();
+        for (var stageIndex = 0; stageIndex < stageItems.Count; stageIndex++)
+        {
+            var path = $"pipeline.stages[{stageIndex + 1}]";
+            var stageItem = stageItems[stageIndex];
+            if (stageItem.Kind != LuaHostValueKind.Table || stageItem.Table.IsSequence)
+            {
+                throw Invalid($"{path} must be a stage table ({{ name = \"Build\", steps = {{ … }} }}), got "
+                    + Describe(stageItem) + ".");
+            }
+
+            var stageTable = stageItem.Table;
+            RejectUnknownKeys(stageTable, path, StageKeys);
+            var stageName = ReadStageName(stageTable, path);
+
+            if (!TryGet(stageTable, "steps", out var stageStepsValue) || stageStepsValue.IsNil)
+            {
+                throw Invalid($"{path}.steps is required: a stage holds at least one step.");
+            }
+
+            if (stageStepsValue.Kind != LuaHostValueKind.Table || !stageStepsValue.Table.IsSequence)
+            {
+                throw Invalid($"{path}.steps must be a list of step tables, not a map.");
+            }
+
+            var items = stageStepsValue.Table.Items;
+            if (items.Count == 0)
+            {
+                throw Invalid($"{path}.steps must declare at least one step.");
+            }
+
+            for (var i = 0; i < items.Count; i++)
+            {
+                steps.Add(ReadStep(items[i], $"{path}.steps[{i + 1}]", stageName, names));
+            }
+        }
+
+        if (steps.Count > PipelineSpecSchema.MaxSteps)
+        {
+            throw Invalid(
+                $"pipeline.stages must declare at most {PipelineSpecSchema.MaxSteps} steps in total (found {steps.Count}).");
+        }
+
+        return [.. steps];
+    }
+
+    /// <summary>
+    /// Reads one step table. <paramref name="inheritedStage"/> is the name the containing stage entry
+    /// assigned (card F-030); a step that also declares its own <c>stage</c> inside a named entry is refused
+    /// rather than silently overridden, because "which of the two names did the author mean" is not a
+    /// question a frozen record should leave open.
+    /// </summary>
+    private static PipelineStep ReadStep(
+        LuaHostValue item,
+        string path,
+        string? inheritedStage,
+        Dictionary<string, string> names)
+    {
+        if (item.Kind != LuaHostValueKind.Table || item.Table.IsSequence)
+        {
+            throw Invalid($"{path} must be a table with name and run (or shell), got {Describe(item)}.");
+        }
+
+        var table = item.Table;
+        RejectUnknownKeys(table, path, StepKeys);
+
+        var stepName = ReadName(table, path + ".name");
+        if (names.TryGetValue(stepName, out var firstPath))
+        {
+            throw Invalid(
+                $"{path}.name '{stepName}' is already used by {firstPath}; step names must be unique.");
+        }
+
+        names.Add(stepName, path);
+
+        var run = ReadArgv(table, path, RunKey);
+        var shell = ReadArgv(table, path, ShellKey);
+        if ((run is null) == (shell is null))
+        {
+            throw Invalid($"{path} must declare exactly one of run or shell.");
+        }
+
+        var stepEnv = ReadEnv(table, path + ".env");
+        var continueOnError = ReadContinueOnError(table, path);
+        var when = ReadWhen(table, path);
+        var artifactPaths = ReadArtifactPaths(table, path);
+        var stepTimeout = ReadStepLimit(
+            table,
+            "timeout",
+            path,
+            PipelineSpecSchema.MinStepTimeoutSeconds,
+            PipelineSpecSchema.MaxStepTimeoutSeconds);
+        var stepRetry = ReadStepLimit(
+            table,
+            "retry",
+            path,
+            PipelineSpecSchema.MinStepRetry,
+            PipelineSpecSchema.MaxStepRetry);
+        var runsOn = ReadRunsOn(table, path);
+        var declaredStage = ReadStage(table, path);
+
+        if (inheritedStage is not null && declaredStage is not null)
+        {
+            throw Invalid(
+                $"{path}.stage is assigned by the stage entry that contains it; declare the stage in one place "
+                + $"({inheritedStage}).");
+        }
+
+        return new PipelineStep(
+            stepName,
+            Run: run,
+            Shell: shell,
+            Env: stepEnv,
+            ContinueOnError: continueOnError,
+            When: when,
+            Artifacts: artifactPaths,
+            TimeoutSeconds: stepTimeout,
+            Retry: stepRetry,
+            RunsOn: runsOn.Raw,
+            Requirement: runsOn.Normalized,
+            Stage: declaredStage ?? inheritedStage);
+    }
+
+    /// <summary>
+    /// Reads a step's own <c>stage = "Build"</c> (card F-030) and validates the shape the run page renders -
+    /// non-empty, bounded, unpadded - with the field path, like every other declared field.
+    /// </summary>
+    private static string? ReadStage(LuaHostTable table, string path)
+    {
+        if (!TryGet(table, "stage", out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        if (value.Kind != LuaHostValueKind.String)
+        {
+            throw Invalid($"{path}.stage must be a string, got {Describe(value)}.");
+        }
+
+        if (!PipelineSpecSchema.TryValidateStageName(value.Text, out var error))
+        {
+            throw Invalid($"{path}.stage {error}");
+        }
+
+        return value.Text;
+    }
+
+    /// <summary>Reads a stage entry's optional <c>name</c> with the same shape rules as a step's stage.</summary>
+    private static string? ReadStageName(LuaHostTable table, string path)
+    {
+        if (!TryGet(table, "name", out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        if (value.Kind != LuaHostValueKind.String)
+        {
+            throw Invalid($"{path}.name must be a string, got {Describe(value)}.");
+        }
+
+        if (!PipelineSpecSchema.TryValidateStageName(value.Text, out var error))
+        {
+            throw Invalid($"{path}.name {error}");
+        }
+
+        return value.Text;
     }
 
     /// <summary>
@@ -613,8 +784,6 @@ public static class PipelineSpecReader
         LuaHostValueKind.Boolean => "a boolean",
         _ => "a string",
     };
-
-    private static string FirstStepPath(int index) => $"pipeline.steps[{index}]";
 
     private static PipelineDefinitionException Invalid(string message) =>
         new(message, PipelineFailureReasons.PipelineInvalid);

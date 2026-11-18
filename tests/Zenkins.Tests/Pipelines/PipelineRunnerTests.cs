@@ -70,6 +70,75 @@ public sealed class PipelineRunnerTests
     }
 
     // ------------------------------------------------------------------
+    // Card F-030: stages are presentation only - execution is unchanged
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_staged_pipeline_executes_the_same_flat_list_in_order_and_freezes_the_names()
+    {
+        // The same marker pipeline as TC-001, with the steps grouped Build/Build/Test/Package. If the card
+        // changed execution in any way, the marker file would show a different order (or a missing step).
+        using var repository =
+            PipelineRepository.Create(
+                PipelineTestData.Pipeline(
+                    "staged",
+                    PipelineTestData.StepInStage("Build", "Restore", "append", "marker.txt", "restore"),
+                    PipelineTestData.StepInStage("Build", "Build", "append", "marker.txt", "build"),
+                    PipelineTestData.StepInStage("Test", "Test", "append", "marker.txt", "test"),
+                    PipelineTestData.StepInStage("Package", "Package", "append", "marker.txt", "package")));
+        using var run = new PipelineRunHarness(repository);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+        Assert.Equal(
+            ["restore", "build", "test", "package"],
+            File.ReadAllLines(Path.Combine(run.Work.RepositoryPath, "marker.txt")));
+
+        // One step report per step, in index order - stages do not add, merge or reorder a step record.
+        var report = Assert.Single(run.DefinitionReports);
+        Assert.True(PipelineSpecJson.TryRead(report.PipelineSpecJson, out var spec, out var error), error);
+        Assert.NotNull(spec);
+        Assert.Equal(3, spec!.Version);
+        Assert.Equal(["Restore", "Build", "Test", "Package"], spec.Steps.Select(step => step.Name));
+        Assert.Equal(["Build", "Build", "Test", "Package"], spec.Steps.Select(step => step.Stage));
+    }
+
+    [Fact]
+    public async Task A_v2_frozen_spec_still_executes_exactly_as_it_did()
+    {
+        // A Freestyle spec frozen before F-030: version 2, no stage on its step. The executor reads the same
+        // flat list it always read - the field this card added is absent, not empty, and changes nothing.
+        var spec = new PipelineSpec(
+            2,
+            "legacy",
+            [
+                new PipelineStep(
+                    "Only",
+                    Run:
+                    [
+                        PipelineTestData.DotNet,
+                        PipelineTestData.ArgvEcho,
+                        "append",
+                        "marker.txt",
+                        "ran",
+                    ]),
+            ]);
+        using var run = new PipelineRunHarness(PipelineSpecJson.Serialize(spec));
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+        // A frozen-spec run has no checkout: its steps' cwd is the run's workspace (F-020), unchanged by
+        // this card - the marker is the proof the one step really ran where it always did.
+        Assert.Equal(["ran"], File.ReadAllLines(Path.Combine(run.Work.WorkspacePath, "marker.txt")));
+        Assert.Empty(Directory.GetFiles(run.Work.RepositoryPath, "*", SearchOption.AllDirectories));
+        Assert.Contains(run.LogLines, line => line.Contains("step 1/1", StringComparison.Ordinal));
+    }
+
+    // ------------------------------------------------------------------
     // TC-002: a failing step stops the run
     // ------------------------------------------------------------------
 

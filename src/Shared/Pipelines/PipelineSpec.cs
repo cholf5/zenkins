@@ -7,7 +7,8 @@ namespace Zenkins.Shared.Pipelines;
 
 /// <summary>
 /// The frozen shape of a validated pipeline definition (card F-014, spec schema of
-/// <c>docs/lua-runtime.md</c> §6.1; v2 adds the Freestyle <c>script</c> step, card F-020).
+/// <c>docs/lua-runtime.md</c> §6.1; v2 adds the Freestyle <c>script</c> step, card F-020, and v3 the
+/// optional per-step <c>stage</c>, card F-030).
 /// <para>
 /// <b>Two phases, one record.</b> The Worker runs the script once (the definition phase), validates
 /// the table it built and serialises it into this record; the Server stores that JSON verbatim as
@@ -62,6 +63,12 @@ public sealed record PipelineSpec(
 /// which is exactly the pre-F-032 behaviour, and the schema version stays put because a reader that does
 /// not know them simply executes the step as it always did.
 /// </para>
+/// <para>
+/// <b>The stage is presentation only, frozen with the step (card F-030, schema v3).</b> <see cref="Stage"/> is
+/// the name of the group the run page shows the step under (the Jenkins-style Build → Test → Package read),
+/// not an execution concept: the executor still runs the flat <see cref="PipelineSpec.Steps"/> list in
+/// order. It is frozen here, on the step, rather than derived from the step's name at render time, because a
+/// later rename must never rewrite what an old run displays.
 /// </para>
 /// </summary>
 public sealed record PipelineStep(
@@ -76,8 +83,16 @@ public sealed record PipelineStep(
     int? TimeoutSeconds = null,
     int? Retry = null,
     string? RunsOn = null,
-    string? Requirement = null)
+    string? Requirement = null,
+    string? Stage = null)
 {
+    /// <summary>
+    /// Card F-030: whether this step belongs to a named stage. A step without one renders outside every
+    /// stage section - never folded into the previous stage, which would attribute it to a group its author
+    /// never chose.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasStage => !string.IsNullOrWhiteSpace(Stage);
     /// <summary>
     /// Card F-033: what this step needs from the Worker, as the author wrote it (<c>"linux &amp;&amp; arm64"</c> or
     /// <c>"linux,arm64"</c>), kept for the page. <see cref="Requirement"/> is the same thing normalized to DNF,
@@ -188,13 +203,21 @@ public sealed record PipelineCondition(
 public static class PipelineSpecSchema
 {
     /// <summary>
-    /// The schema version newly frozen specs carry (v2, card F-020: the <c>script</c> step). An unknown
-    /// version is refused, never guessed; v1 documents - everything frozen before F-020 - stay readable.
+    /// The schema version newly frozen specs carry (v3, card F-030: the optional per-step <c>stage</c>).
+    /// An unknown version is refused, never guessed; v1 documents (frozen before F-020) and v2 documents
+    /// (before F-030) stay readable and render exactly as they did.
     /// </summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
-    /// <summary>The schema versions <see cref="PipelineSpecJson.TryRead"/> accepts. Only v2 is produced today.</summary>
-    public static readonly int[] AcceptedVersions = [1, 2];
+    /// <summary>The schema versions <see cref="PipelineSpecJson.TryRead"/> accepts. Only v3 is produced today.</summary>
+    public static readonly int[] AcceptedVersions = [1, 2, 3];
+
+    /// <summary>
+    /// An upper bound on a stage name (card F-030). A stage name is a section header a person reads, not a
+    /// path or a channel; 64 characters is enough for "Integration tests (linux)" and keeps a run page's
+    /// header column bounded.
+    /// </summary>
+    public const int MaxStageLength = 64;
 
     /// <summary>
     /// An upper bound on one <c>script</c> step's text (card F-020). A Freestyle step is a hand-written
@@ -305,6 +328,43 @@ public static class PipelineSpecSchema
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Validates a declared stage name (card F-030): non-empty, at most <see cref="MaxStageLength"/>
+    /// characters, and with no leading or trailing whitespace. The shape rules live here because the Lua
+    /// reader, the Freestyle builder and the Server's envelope gate all ask the same question - a second copy
+    /// is how two sides start accepting different stages.
+    /// </summary>
+    /// <param name="stage">The declared name, or <see langword="null"/> when the step declares none.</param>
+    /// <param name="error">A one-line reason, without the field path (the caller prefixes its own).</param>
+    public static bool TryValidateStageName(string? stage, out string? error)
+    {
+        error = null;
+        if (stage is null)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(stage))
+        {
+            error = "must be a non-empty string.";
+            return false;
+        }
+
+        if (stage.Length > MaxStageLength)
+        {
+            error = $"must be at most {MaxStageLength} characters.";
+            return false;
+        }
+
+        if (!string.Equals(stage, stage.Trim(), StringComparison.Ordinal))
+        {
+            error = "must not start or end with whitespace.";
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>An upper bound on the argv length of one step.</summary>
@@ -561,6 +621,22 @@ public static class PipelineSpecJson
             // (an empty entry, or more entries than a step may publish).
             if (!TryReadArtifactPaths(step.Artifacts, $"{path}.artifacts", out error))
             {
+                return false;
+            }
+
+            // F-030: the stage is frozen on the step, so the envelope checks the shape the page will render -
+            // an empty or whitespace-padded header is a definition mistake, not data to trim later.
+            if (!PipelineSpecSchema.TryValidateStageName(step.Stage, out var stageError))
+            {
+                error = $"{path}.stage {stageError}";
+                return false;
+            }
+
+            // The stage is v3's field. A v1/v2 document that carries one contradicts the version it was frozen
+            // under, so it is refused instead of being rendered as if the field had always been there.
+            if (step.Stage is not null && parsed.Version < 3)
+            {
+                error = $"{path}.stage requires pipeline.version 3 (this spec is v{parsed.Version}).";
                 return false;
             }
 

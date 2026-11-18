@@ -276,7 +276,7 @@ public sealed class PipelineRunEndpointTests
     }
 
     [Theory]
-    [InlineData("""{ "version": 3, "name": "X", "steps": [ { "name": "a", "run": [ "x" ] } ] }""")]
+    [InlineData("""{ "version": 4, "name": "X", "steps": [ { "name": "a", "run": [ "x" ] } ] }""")]
     [InlineData("""{ "version": 1, "name": "X", "steps": [] }""")]
     [InlineData("not json at all")]
     public async Task An_invalid_definition_payload_is_a_400_and_freezes_nothing(string specJson)

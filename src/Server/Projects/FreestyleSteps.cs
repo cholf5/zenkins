@@ -26,6 +26,8 @@ namespace Zenkins.Server.Projects;
 /// browser - the same discipline <paramref name="EnvLines"/> and <paramref name="ArtifactsText"/> get.</param>
 /// <param name="Retry">The step's attempt count as the editor's text field carries it (card F-032); blank
 /// means one attempt.</param>
+/// <param name="Stage">The stage the step renders under (card F-030); blank means it renders outside every
+/// stage section. Trimmed here, then bounded by the envelope's stage rules like every other declared field.</param>
 public sealed record FreestyleStepDraft(
     string? Name,
     string? Script,
@@ -34,7 +36,8 @@ public sealed record FreestyleStepDraft(
     string? ArtifactsText,
     string? TimeoutSeconds = null,
     string? Retry = null,
-    string? RunsOn = null);
+    string? RunsOn = null,
+    string? Stage = null);
 
 /// <summary>The steps editor's form payload: the drafts, serialized as JSON by the page.</summary>
 public sealed record FreestyleStepsInput(string? StepsJson);
@@ -131,6 +134,10 @@ public static class FreestyleSteps
                 requirement = parsed;
             }
 
+            // Card F-030: the stage is the editor's text field, trimmed server-side like the name - a blank
+            // field is "no stage", and the envelope then bounds the shape it stores (non-empty, <= 64, unpadded).
+            var stage = draft.Stage?.Trim();
+
             steps[i] = new PipelineStep(
                 draft.Name?.Trim() ?? string.Empty,
                 Script: draft.Script ?? string.Empty,
@@ -140,7 +147,8 @@ public static class FreestyleSteps
                 TimeoutSeconds: timeoutSeconds,
                 Retry: retry,
                 RunsOn: string.IsNullOrWhiteSpace(runsOn) ? null : runsOn,
-                Requirement: requirement?.StorageForm);
+                Requirement: requirement?.StorageForm,
+                Stage: string.IsNullOrEmpty(stage) ? null : stage);
 
             // The Server-side capture (D-006's semantics, extended by F-040): the exact reference form and
             // never a value - scanned from the same fields the Worker will substitute (the script text and the

@@ -24,16 +24,30 @@ end
 -- The declarative form of PRD §3.3.2. It only records the table: validation is the host's job, so
 -- a spec is rejected with one field path (`pipeline.steps[2].run`) instead of a vague Lua error, and
 -- the frozen JSON is produced by the host from this very table (docs/lua-runtime.md §6.1).
+--
+-- F-030: a pipeline may group its steps into stages instead of listing them flat:
+--
+--   pipeline { name = "release", stages = {
+--     { name = "Build", steps = { step{ name = "compile", run = {...} } } },
+--     { name = "Test",  steps = { ... } },
+--     { steps = { step{ name = "notify", run = {...} } } },   -- an entry with no name: unstaged
+--   } }
+--
+-- The name is written onto every step the entry contains (the host flattens the entries back into
+-- one ordered step list), so the frozen spec - not a reader's guess - is what a run page groups by.
+-- `stages` is an ordered list, not a map: a Lua map has no declaration order to show.
 function pipeline(spec)
   require_table(spec, "pipeline{}", 1)
   _zenkins_pipeline = spec
   return spec
 end
 
--- step{ name = ..., run = { ... } }
+-- step{ name = ..., run = { ... }, stage = "Build" }
 --
 -- Accepted for readability and for the imperative form F-015 will bring; today it is the identity
--- function, so `steps = { step { ... }, step { ... } }` and plain tables are the same thing.
+-- function, so `steps = { step { ... }, step { ... } }` and plain tables are the same thing - and
+-- so is `stage = "Build"` (F-030): it is recorded onto the step, read back by the host and validated
+-- there (non-empty, at most 64 characters, no surrounding whitespace).
 function step(spec)
   return require_table(spec, "step{}", 1)
 end

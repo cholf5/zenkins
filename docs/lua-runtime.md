@@ -545,15 +545,25 @@ validates it, serialises it, and executes the steps **in C#**:
 - Imperative orchestration (`step("x", function() ... end)` with `run()` inside) is a later
   capability, not a v0.3 one; the host-call protocol (§5.2) is built now precisely so it can land
   without re-architecting.
-- **The spec schema is versioned, and v2 adds the Freestyle `script` step** (card F-020). A
-  `pipeline.lua` never produces a script step — the Lua reader still accepts exactly one of
-  `run`/`shell` per step, and the schema version the definition phase freezes is v2 only because the
-  shared record now carries the field. A Freestyle project's steps (PRD §3.10) are configured in the
-  Server UI and frozen into the same record there: the Server builds the spec, captures the secret
-  references with the same scanner, and hands the frozen JSON to the Worker in the claim payload;
-  the Worker re-checks the envelope and executes it without a clone or a definition phase. The
-  envelope accepts **v1 and v2** — every spec frozen before F-020 stays readable — and refuses
-  anything newer.
+- **The spec schema is versioned, and v3 adds the optional per-step `stage`** (card F-030). v2 added
+  the Freestyle `script` step (card F-020): a `pipeline.lua` never produces a script step — the Lua
+  reader still accepts exactly one of `run`/`shell` per step. A Freestyle project's steps (PRD §3.10)
+  are configured in the Server UI and frozen into the same record there: the Server builds the spec,
+  captures the secret references with the same scanner, and hands the frozen JSON to the Worker in
+  the claim payload; the Worker re-checks the envelope and executes it without a clone or a definition
+  phase. The envelope accepts **v1, v2 and v3** — every spec frozen before the field existed stays
+  readable — and refuses anything newer. A v1/v2 document that carries a `stage` is refused: the field
+  is v3's, and a version that disagrees with its own shape is not data to guess about.
+- **A stage is a presentation label frozen on the step** (card F-030), never an execution concept: the
+  executor still runs the flat `steps` list in order, with the same skipping and cancellation. Both Lua
+  spellings produce the same record — `step { name = "compile", stage = "Build", … }` sets the field on
+  that one step, and `pipeline { stages = { { name = "Build", steps = { … } }, … } }` writes the entry's
+  name onto every step it contains (an entry without a `name` declares unstaged steps). `stages` is an
+  **ordered list**; a Lua map has no declaration order to show, so the map form is refused. The name is
+  non-empty, at most 64 characters, with no leading or trailing whitespace. Run pages group **adjacent**
+  steps by equal name — a repeat after another stage is a second section, and an unstaged step renders
+  outside every section. Because the name lives in the spec, a later rename of the step or the pipeline
+  never rewrites an old run's sections; a spec with no stage at all renders as the flat list it always was.
 - **Two optional step fields bound a step on its own** (card F-032): `timeout = 600` and `retry = 2`
   are additive, optional and defaulted to "no limit of its own" / "one attempt", so the schema version
   stays where it is — a reader that does not know them executes the step exactly as before. The

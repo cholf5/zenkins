@@ -8,6 +8,19 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **Stage grouping (F-030).** A pipeline can group its steps into named stages, and the run page
+  reads a 40-step build as Build → Test → Package instead of one flat list. The name lives **inside the
+  frozen spec** (`PipelineStep.Stage`, schema v3): it is not derived from step names, so a later rename
+  cannot rewrite what an old run shows, and v1/v2 specs still read, render and execute exactly as
+  before (a v1/v2 document carrying a stage is refused as a contradiction; a spec with no stage renders
+  as the flat list it always was). Lua has both spellings - `step { stage = "Build", … }` and the
+  `pipeline { stages = { { name = "Build", steps = { … } }, … } }` sugar, which assigns the name to the
+  steps it contains and flattens them back into the one ordered list. Adjacent steps of one name form
+  one collapsible section, with the worst state as its badge and its duration measured as last end
+  minus first start; an unstaged step renders outside every section. A failed stage is open and the
+  page jumps to its first failed step; successful stages are collapsed. Stages change presentation
+  only - execution order, skipping and cancellation are untouched, and Freestyle steps carry the same
+  field through the steps editor. No migration: the stage is spec JSON.
 - **Worker Git remote probe (I-005).** The Server can now ask a Worker "what heads does this repository
   have right now?" and get `refs/heads/* → sha` plus the remote HEAD back, without cloning and without
   the Server running git or dialing a Worker: a probe is a work item claimed through the existing pull

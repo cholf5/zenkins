@@ -295,6 +295,21 @@ public sealed record RunView(
     public string? PipelineName => Pipeline?.Name;
 
     /// <summary>
+    /// Card F-030: the run's steps grouped into stage sections, in declaration order, with each section's
+    /// worst state, span and step count. A spec frozen before schema v3 (or a spec with no stage names)
+    /// yields one unnamed section per contiguous run of unstaged steps, which the page renders as the flat
+    /// list it has always been - no empty headers, no invented stages.
+    /// </summary>
+    public IReadOnlyList<RunStageView> StageGroups => RunStages.Group(StepList);
+
+    /// <summary>
+    /// Card F-030: the first failed step, in declaration order - the one a failed run's page jumps to. Read
+    /// through <see cref="StepList"/> so it is the same list every other surface shows.
+    /// </summary>
+    public RunStepView? FirstFailedStep =>
+        StepList.FirstOrDefault(step => step.Status == PipelineStepStatus.Failed);
+
+    /// <summary>
     /// The run's steps in declaration order (card F-015): each declared step merged with the row the
     /// worker recorded for it, or <see cref="PipelineStepStatus.Pending"/> when it has not been
     /// reached yet. A run page opened mid-run therefore shows completed, current and pending steps.
@@ -497,7 +512,14 @@ public sealed record RunStepView(
     DateTimeOffset? EndedAt,
     int? ExitCode,
     string? FailureReason,
-    int Attempts = 1)
+    int Attempts = 1,
+
+    /// <summary>
+    /// Card F-030: the stage name the frozen spec recorded on this step, or <see langword="null"/> when the
+    /// step declares none (every v1/v2 run, and an unstaged step of a v3 one). It is read from the spec only -
+    /// never derived from <see cref="Name"/> - so a rename cannot rewrite an old run's sections.
+    /// </summary>
+    string? Stage = null)
 {
     /// <summary>Whether the step is declared but not reached (no row recorded).</summary>
     public bool IsPending => Status == PipelineStepStatus.Pending;
@@ -4359,22 +4381,26 @@ public sealed class RunService(
         {
             for (var index = 1; index <= spec.Steps.Length; index++)
             {
-                var name = spec.Steps[index - 1].Name;
+                var declared = spec.Steps[index - 1];
                 views.Add(byIndex.TryGetValue(index, out var step)
-                    ? ToStepView(step)
-                    : new RunStepView(null, index, name, PipelineStepStatus.Pending, null, null, null, null));
+                    ? ToStepView(step, declared.Stage)
+                    : new RunStepView(
+                        null, index, declared.Name, PipelineStepStatus.Pending, null, null, null, null,
+                        Stage: declared.Stage));
             }
         }
 
+        // A recorded position the spec does not cover has no declaration to read a stage from, so it is
+        // honestly unstaged rather than guessed into a neighbour's section.
         views.AddRange(recorded
             .Where(step => views.All(view => view.Index != step.Index))
             .OrderBy(step => step.Index)
-            .Select(ToStepView));
+            .Select(step => ToStepView(step, stage: null)));
 
         return [.. views];
     }
 
-    private static RunStepView ToStepView(BuildStep step) => new(
+    private static RunStepView ToStepView(BuildStep step, string? stage) => new(
         step.Id,
         step.Index,
         step.Name,
@@ -4383,7 +4409,8 @@ public sealed class RunService(
         step.EndedAt,
         step.ExitCode,
         step.FailureReason,
-        step.Attempts);
+        step.Attempts,
+        stage);
 
     /// <summary>
     /// The frozen spec as the page reads it (card F-014). A row whose JSON no longer parses is rendered

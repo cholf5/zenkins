@@ -163,7 +163,7 @@ internal static class PipelineTestData
     /// behaviour). Same argv shape as <see cref="Step"/>, so the retry/timeout facts run the same real child.
     /// </summary>
     public static string StepWith(string name, int? timeoutSeconds, int? retry, params string[] modeAndArgs) =>
-        RenderStep(name, timeoutSeconds, retry, continueOnError: false, modeAndArgs);
+        RenderStep(name, timeoutSeconds, retry, continueOnError: false, stage: null, modeAndArgs);
 
     /// <summary>The same, with <c>continue_on_error = true</c>: a step that fails must not stop the run.</summary>
     public static string StepWithContinueOnError(
@@ -171,13 +171,21 @@ internal static class PipelineTestData
         int? timeoutSeconds,
         int? retry,
         params string[] modeAndArgs) =>
-        RenderStep(name, timeoutSeconds, retry, continueOnError: true, modeAndArgs);
+        RenderStep(name, timeoutSeconds, retry, continueOnError: true, stage: null, modeAndArgs);
+
+    /// <summary>
+    /// The same step, declaring a stage (card F-030): the marker pipeline's order proof plus the stage the
+    /// frozen spec must carry. Nothing about the argv or the execution differs - that is the point.
+    /// </summary>
+    public static string StepInStage(string stage, string name, params string[] modeAndArgs) =>
+        RenderStep(name, timeoutSeconds: null, retry: null, continueOnError: false, stage, modeAndArgs);
 
     private static string RenderStep(
         string name,
         int? timeoutSeconds,
         int? retry,
         bool continueOnError,
+        string? stage,
         string[] modeAndArgs)
     {
         var arguments = string.Join(
@@ -187,7 +195,9 @@ internal static class PipelineTestData
         var knobs = string.Concat(
             timeoutSeconds is { } timeout ? $", timeout = {timeout}" : string.Empty,
             retry is { } attempts ? $", retry = {attempts}" : string.Empty,
-            continueOnError ? ", continue_on_error = true" : string.Empty);
+            continueOnError ? ", continue_on_error = true" : string.Empty,
+            stage is null ? string.Empty : $", stage = \"{LuaString(stage)}\"");
+
         return $"{{ name = \"{name}\", run = {{ {arguments} }}{knobs} }}";
     }
 

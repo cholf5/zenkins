@@ -33,7 +33,17 @@ internal sealed class RunUiHost : IDisposable
     /// transition itself through <see cref="RunUiRun.ReportStepAsync"/> (so a failure test can fail
     /// its second step, a filter test can leave a third silent).
     /// </summary>
-    public async Task<RunUiRun> CreateRunAsync(params string[] stepNames)
+    public Task<RunUiRun> CreateRunAsync(params string[] stepNames) =>
+        CreateRunAsync(
+            [.. stepNames.Select(name => new PipelineStep(name, Run: ["dotnet", "--info"]))]);
+
+    /// <summary>
+    /// The same, with steps the test declares itself (card F-030: stage names), and optionally an older
+    /// schema version - a v2 spec is how the "old runs still render flat" fact seeds its run honestly.
+    /// </summary>
+    public async Task<RunUiRun> CreateRunAsync(
+        IReadOnlyList<PipelineStep> steps,
+        int version = PipelineSpecSchema.Version)
     {
         var (projectId, owner) = await Streaming.CreateProjectAsync();
         var (token, _) = await Streaming.RegisterWorkerAsync();
@@ -45,15 +55,12 @@ internal sealed class RunUiHost : IDisposable
         using var accepted = await RunTestHost.AcceptAsync(workerClient, token, runId);
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
 
-        var spec = new PipelineSpec(
-            PipelineSpecSchema.Version,
-            "runui-pipeline",
-            [.. stepNames.Select(name => new PipelineStep(name, Run: ["dotnet", "--info"]))]);
+        var spec = new PipelineSpec(version, "runui-pipeline", [.. steps]);
         using var definition = await RunTestHost.ReportDefinitionAsync(
             workerClient, token, runId, PipelineSpecJson.Serialize(spec));
         Assert.Equal(HttpStatusCode.OK, definition.StatusCode);
 
-        return new RunUiRun(this, runId, owner, workerClient, token, stepNames);
+        return new RunUiRun(this, runId, owner, workerClient, token, [.. steps.Select(step => step.Name)]);
     }
 
     public void Dispose() => Streaming.Dispose();

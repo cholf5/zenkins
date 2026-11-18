@@ -48,6 +48,19 @@
                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                     </div>
                     <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-stage-@(stepIndex)">
+                            Stage (blank = outside any stage)
+                        </label>
+                        <input data-freestyle-field="stage"
+                               id="step-stage-@(stepIndex)"
+                               value="@step.Stage"
+                               maxlength="@MaxStageLength"
+                               placeholder="Build"
+                               autocomplete="off"
+                               spellcheck="false"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                    </div>
+                    <div>
                         <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-script-@(stepIndex)">
                             Script
                         </label>
@@ -164,6 +177,17 @@
                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                 </div>
                 <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="stage">
+                        Stage (blank = outside any stage)
+                    </label>
+                    <input data-freestyle-field="stage"
+                           maxlength="@MaxStageLength"
+                           placeholder="Build"
+                           autocomplete="off"
+                           spellcheck="false"
+                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                </div>
+                <div>
                     <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="script">Script</label>
                     <textarea data-freestyle-field="script"
                               rows="6"
@@ -263,6 +287,9 @@
     private const int MinStepRetry = PipelineSpecSchema.MinStepRetry;
 
     private const int MaxStepRetry = PipelineSpecSchema.MaxStepRetry;
+
+    /// <summary>Card F-030: the stage field's bound, so the input's maxlength matches the envelope's rule.</summary>
+    private const int MaxStageLength = PipelineSpecSchema.MaxStageLength;
 
     /// <summary>The step's environment rendered back into the editor's NAME=value lines, so editing
     /// what is stored round-trips through exactly one representation.</summary>

@@ -1,0 +1,72 @@
+@using Zenkins.Shared.Pipelines
+@* Card F-030: one section's step rows. The markup is F-015's unchanged step row (same ids, same badge,
+   same duration/attempts/reason, same D-004 "View log" jump); F-030 only decides where the rows are
+   nested - inside a collapsible stage section or directly in the step list for an unstaged step. Keeping
+   one component for both places is what makes "a stage changes nothing about a step" true on the page. *@
+@foreach (var step in Steps)
+{
+    <li id="@($"run-step-{step.Name}")" class="bb:break-all"
+        data-run-first-failed="@(step.Index == FirstFailedStepIndex ? "true" : null)">
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+            <span class="bb:text-xs bb:text-muted-foreground">@step.Index.</span>
+            <span class="bb:font-medium">@step.Name</span>
+            <BbBadge Variant="@RunDisplay.StepBadgeFor(step.Status)">@step.Status</BbBadge>
+            @if (step.ExitCode is { } exitCode)
+            {
+                <span class="bb:text-xs bb:text-muted-foreground">exit @exitCode</span>
+            }
+            @if (step.Duration is { } duration)
+            {
+                <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.FormatDuration(duration)</span>
+            }
+            @* F-032: how many attempts the step made, when it made more than one - the count lives on the
+               one row the step has, so the page never grows a second row per attempt (the frozen spec's
+               step identity stays 1:1). *@
+            @if (step.Attempts > 1)
+            {
+                <span id="@($"run-step-attempts-{step.Name}")" class="bb:text-xs bb:text-muted-foreground">attempts @step.Attempts</span>
+            }
+            @if (step.FailureReason is { } reason)
+            {
+                <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.StepReasonText(reason)</span>
+            }
+            @* D-004: selecting a step jumps to the log filtered to that step. The fragment brings the panel
+               into view; the handler pushes the step row's id down into the panel's filter (StepId, never
+               text). data-enhance-nav="none" keeps the jump a native same-document fragment scroll -
+               enhanced navigation would re-initialize the page and throw away the panel's pause/search
+               state. A step without a recorded row has no id to filter on, so it offers no link. *@
+            @if (step.Id is { } stepRowId)
+            {
+                <a id="@($"run-step-log-{step.Name}")" href="#run-log"
+                   data-enhance-nav="none"
+                   class="bb:text-xs bb:font-medium bb:text-primary bb:hover:underline"
+                   @onclick="@(() => StepSelected.InvokeAsync(stepRowId))">View log</a>
+            }
+        </div>
+        @if (step.Index <= Pipeline.Steps.Length)
+        {
+            <code class="bb:text-xs bb:text-muted-foreground">@string.Join(' ', Pipeline.Steps[step.Index - 1].Argv)</code>
+        }
+    </li>
+}
+
+@code {
+    /// <summary>The rows to render, in declaration order (one stage section, or an unstaged run).</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<RunStepView> Steps { get; set; } = [];
+
+    /// <summary>The run's frozen spec - the argv shown under each step comes from it.</summary>
+    [Parameter, EditorRequired]
+    public PipelineSpec Pipeline { get; set; } = null!;
+
+    /// <summary>
+    /// Card F-030: the index of the run's first failed step, or null when nothing failed. Exactly that row
+    /// carries the <c>data-run-first-failed</c> marker the page's jump script scrolls to.
+    /// </summary>
+    [Parameter]
+    public int? FirstFailedStepIndex { get; set; }
+
+    /// <summary>D-004: the row's id pushed into the log panel's filter.</summary>
+    [Parameter]
+    public EventCallback<Guid> StepSelected { get; set; }
+}
