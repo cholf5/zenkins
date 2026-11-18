@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Folders;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Tenancy;
@@ -163,6 +164,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>F-034: B's only organization environment variable (the id a cross-tenant probe substitutes).</summary>
     public static readonly Guid EnvironmentBId = new("b0000000-0000-4000-8000-0000000000d2");
 
+    /// <summary>F-042: A's only folder, the positive control for the folder probes.</summary>
+    public static readonly Guid FolderAId = new("a0000000-0000-4000-8000-0000000001a1");
+
+    /// <summary>F-042: B's only folder (the id a cross-tenant probe substitutes).</summary>
+    public static readonly Guid FolderBId = new("b0000000-0000-4000-8000-0000000001b1");
+
     /// <summary>F-027: A's only API token, the positive control for the API probes.</summary>
     public static readonly Guid ApiTokenAId = new("a0000000-0000-4000-8000-0000000000a1");
 
@@ -182,6 +189,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// auth tests use.
     /// </summary>
     public const string UserPassword = Zenkins.Tests.Auth.AuthTestHost.ValidPassword;
+
+    // F-042: one folder per organization. The names are distinct per tenant so a page that leaked one
+    // would be visible in the other's scan; the projects themselves stay at the root, so the isolation
+    // probes keep reading the same rows they always did.
+    public const string FolderAName = "alpha-group";
+    public const string FolderBName = "beta-group";
 
     public const string ProjectAName = "alpha-app";
     public const string ProjectBName = "beta-app";
@@ -393,12 +406,33 @@ public sealed class TwoOrgsFixture : IDisposable
                 Role = OrganizationRole.Owner,
             });
 
+        // F-042: one folder per organization. The projects below stay at the root (no FolderId, so the
+        // folder key is Guid.Empty), so every older probe reads exactly the rows it read before.
+        context.Folders.AddRange(
+            new Folder
+            {
+                Id = FolderAId,
+                OrganizationId = OrgAId,
+                Name = FolderAName,
+                NameKey = FolderValidation.NameKeyFor(FolderAName),
+                Depth = 1,
+            },
+            new Folder
+            {
+                Id = FolderBId,
+                OrganizationId = OrgBId,
+                Name = FolderBName,
+                NameKey = FolderValidation.NameKeyFor(FolderBName),
+                Depth = 1,
+            });
+
         context.Projects.AddRange(
             new Project
             {
                 Id = ProjectAId,
                 OrganizationId = OrgAId,
                 Name = ProjectAName,
+                NameKey = FolderValidation.NameKeyFor(ProjectAName),
                 RepositoryUrl = ProjectARepositoryUrl,
                 DefaultBranch = ProjectABranch,
             },
@@ -407,6 +441,7 @@ public sealed class TwoOrgsFixture : IDisposable
                 Id = ProjectBId,
                 OrganizationId = OrgBId,
                 Name = ProjectBName,
+                NameKey = FolderValidation.NameKeyFor(ProjectBName),
                 RepositoryUrl = ProjectBRepositoryUrl,
                 DefaultBranch = ProjectBBranch,
             });

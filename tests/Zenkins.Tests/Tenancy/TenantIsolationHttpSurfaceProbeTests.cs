@@ -107,6 +107,9 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
                      $"/projects/{TwoOrgsFixture.ProjectBId}/delete/confirm",
                      $"/runs/{TwoOrgsFixture.BuildRunBId}",
                      $"/workers/{TwoOrgsFixture.WorkerBId}",
+
+                     // F-042: another organization's folder id is the same bare 404 as a missing one.
+                     $"/folders/{TwoOrgsFixture.FolderBId}",
                  })
         {
             using var response = await client.GetAsync(path, CancellationToken);
@@ -262,6 +265,66 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
             host, run => run.Id == TwoOrgsFixture.BuildRunBId)).Single();
         Assert.Equal(BuildRunStatus.Queued, beta.Status);
         Assert.Null(beta.RebuiltFromRunId);
+    }
+
+    /// <summary>
+    /// F-042: the folder forms - the same shape every other tenant-owned mutation follows. A foreign
+    /// folder id is a bare 404 on rename/move/delete (nothing is written, the foreign row keeps its name
+    /// and its parent), and a create that names a foreign folder as its parent is refused as
+    /// parent-not-found rather than stored under a folder this tenant cannot see.
+    /// </summary>
+    [Fact]
+    public async Task Folder_mutations_cannot_reach_another_tenants_folder()
+    {
+        using var host = new TenantProbeHostFixture();
+        using var client = await TenantIsolationAuditProbes.SignInAsync(
+            host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
+
+        var rename = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/projects",
+            $"/folders/{TwoOrgsFixture.FolderBId}/rename",
+            new Dictionary<string, string> { ["Name"] = "hijacked-group" });
+        Assert.Equal(HttpStatusCode.NotFound, rename.StatusCode);
+
+        var move = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/projects",
+            $"/folders/{TwoOrgsFixture.FolderBId}/move",
+            new Dictionary<string, string> { ["ParentFolderId"] = string.Empty });
+        Assert.Equal(HttpStatusCode.NotFound, move.StatusCode);
+
+        var delete = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/projects",
+            $"/folders/{TwoOrgsFixture.FolderBId}/delete",
+            new Dictionary<string, string>());
+        Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
+
+        // A create under B's folder is the page's own refusal, not a row written into B's tree.
+        var create = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/folders/new",
+            "/folders/create",
+            new Dictionary<string, string>
+            {
+                ["Name"] = "alpha-child",
+                ["ParentFolderId"] = TwoOrgsFixture.FolderBId.ToString(),
+            });
+        Assert.Equal(HttpStatusCode.Redirect, create.StatusCode);
+        Assert.Contains(
+            "folder-parent-not-found",
+            create.Headers.Location!.OriginalString,
+            StringComparison.Ordinal);
+
+        var beta = (await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<Folder>(
+            host, folder => folder.Id == TwoOrgsFixture.FolderBId)).Single();
+        Assert.Equal(TwoOrgsFixture.FolderBName, beta.Name);
+        Assert.Null(beta.ParentFolderId);
+
+        // Org A gained nothing either: its own folder count is still one.
+        Assert.Single(await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<Folder>(
+            host, folder => folder.OrganizationId == TwoOrgsFixture.OrgAId));
     }
 
     // ---------------------------------------------------------------------

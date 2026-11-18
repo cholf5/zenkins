@@ -52,7 +52,9 @@
                                  DefaultBranch="@EffectiveDefaultBranch"
                                  PipelinePath="@EffectivePipelinePath"
                                  BranchDiscovery="@EffectiveBranchDiscovery"
-                                 ErrorCode="@ErrorCode" />
+                                 ErrorCode="@ErrorCode"
+                                 FolderName="@(_project.FolderName ?? "Root")"
+                                 ConflictName="@ConflictName" />
             </BbCardContent>
         </BbCard>
 
@@ -90,6 +92,10 @@
     /// <summary>F-023: the discovery mode echoed back after a refused edit.</summary>
     [SupplyParameterFromQuery(Name = "branchDiscovery")]
     private string? SubmittedBranchDiscovery { get; set; }
+
+    /// <summary>F-042: the existing project the name collided with (the message names it).</summary>
+    [SupplyParameterFromQuery(Name = "conflict")]
+    private string? ConflictName { get; set; }
 
     // On a validation redirect the submitted values (not the stored ones) are echoed back, so the
     // user fixes the field instead of retyping the form.

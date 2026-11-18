@@ -182,6 +182,29 @@ public sealed class OrganizationTestHost : IDisposable
             return project.Id;
         });
 
+    /// <summary>F-042: all folders of one organization, read across tenants for assertions.</summary>
+    public async Task<IReadOnlyList<Folder>> ReadFoldersAsync(Guid organizationId) =>
+        await Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+
+            return (IReadOnlyList<Folder>)await context.SystemQueryAsync<Folder>(
+                folder => folder.OrganizationId == organizationId);
+        });
+
+    /// <summary>F-042: one folder read across tenants (the assertion side of a probe).</summary>
+    public async Task<Folder> ReadFolderAsync(Guid folderId) =>
+        await Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+
+            return (await context.SystemQueryAsync<Folder>(folder => folder.Id == folderId)).Single();
+        });
+
     /// <summary>All projects of one organization, read across tenants for assertions.</summary>
     public async Task<IReadOnlyList<Project>> ReadProjectsAsync(Guid organizationId) =>
         await Host.InScopeAsync(async services =>

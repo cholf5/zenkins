@@ -45,6 +45,11 @@ public static class ProjectEndpoints
         group.MapPost("/{projectId:guid}/edit", UpdateAsync);
         group.MapPost("/{projectId:guid}/delete", DeleteAsync);
 
+        // F-042: the explicit move into another folder (or back to the root). Deliberately its own route:
+        // the edit form never moves a project, and this route refuses a name collision instead of
+        // renaming the project to fit.
+        group.MapPost("/{projectId:guid}/move", MoveAsync);
+
         // F-020: the Freestyle steps editor's save. Same form-post + antiforgery shape as the other
         // mutations; the drafts travel as one JSON field the page serializes.
         group.MapPost("/{projectId:guid}/freestyle/steps", SaveFreestyleStepsAsync);
@@ -138,6 +143,37 @@ public static class ProjectEndpoints
             ProjectMutationStatus.Forbidden => Forbidden(result),
             ProjectMutationStatus.NotFound => Results.NotFound(),
             _ => ValidationRedirect($"/projects/{projectId}/edit", result, form),
+        };
+    }
+
+    private static async Task<IResult> MoveAsync(
+        Guid projectId,
+        [FromForm] ProjectMoveForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await projects.MoveToFolderAsync(
+            userId,
+            projectId,
+            form?.FolderId,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            // The success lands where the project now lives, so the person sees it in its new place.
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"{FolderPathFor(form?.FolderId)}?notice=project-moved"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+
+            // A refusal lands back on the page that owns the form, with the code and the existing name.
+            _ => Results.Redirect($"{FolderPathFor(form?.FromFolderId)}{ErrorQuery(result)}"),
         };
     }
 
@@ -644,6 +680,12 @@ public static class ProjectEndpoints
 
             // F-023: the discovery choice is a word, so the refused create/edit keeps it selected.
             ["branchDiscovery"] = form?.BranchDiscovery,
+
+            // F-042: the folder the project was being created in, so a refused create keeps the choice.
+            ["folder"] = form?.FolderId,
+
+            // F-042: the existing project the name collided with, so the message names it (TC-002).
+            ["conflict"] = result.ConflictName,
         });
 
         return Results.Redirect($"{formPath}{query}");
@@ -652,12 +694,31 @@ public static class ProjectEndpoints
     private static string? FindUserId(HttpContext httpContext) =>
         httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
+    /// <summary>The page that lists one folder (or the root listing when the value is blank/not a guid).</summary>
+    private static string FolderPathFor(string? folderId) =>
+        Guid.TryParse(folderId?.Trim(), out var id) ? $"/folders/{id}" : "/projects";
+
+    /// <summary>A refusal's PRG query: the stable code, plus the existing project's name when it collided.</summary>
+    private static string ErrorQuery(ProjectMutationResult result) =>
+        QueryString.Create(new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["error"] = result.FieldErrors?.FirstOrDefault()?.Code ?? ProjectErrorCodes.NameInvalid,
+            ["conflict"] = result.ConflictName,
+        }).ToString();
+
     /// <summary>
     /// The stand-in for a form that bound null (a POST carrying no field the model knows): empty
     /// values, so the service's validation - not a null reference - answers the request (F-019).
     /// </summary>
     private static ProjectInput EmptyInput() =>
-        new(Name: null, Kind: null, RepositoryUrl: null, DefaultBranch: null, PipelinePath: null, BranchDiscovery: null);
+        new(
+            Name: null,
+            Kind: null,
+            RepositoryUrl: null,
+            DefaultBranch: null,
+            PipelinePath: null,
+            BranchDiscovery: null,
+            FolderId: null);
 
     /// <summary>
     /// Card F-028's disable form: the reason is the only field, and it is required - the person whose
@@ -758,6 +819,18 @@ public static class ProjectEndpoints
     }
 
     /// <summary>
+    /// F-042's move form (on a folder page or the root listing): the target folder, plus the folder the
+    /// form was rendered on - purely to choose the PRG target of a refusal. Both are folder ids or blank
+    /// (the root), and the endpoint builds the path itself, so the value can never become an open redirect.
+    /// </summary>
+    public sealed class ProjectMoveForm
+    {
+        public string? FolderId { get; set; }
+
+        public string? FromFolderId { get; set; }
+    }
+
+    /// <summary>
     /// The editable fields plus the pipeline path and (since F-020) the kind. Deliberately no
     /// <c>ProjectId</c>: the route is the only source of the target project. The kind binds from a
     /// radio group; a form that omits it keeps the historical Pipeline default (see
@@ -785,6 +858,9 @@ public static class ProjectEndpoints
         /// keeps the historical one-branch behaviour.</summary>
         public string? BranchDiscovery { get; set; }
 
+        /// <summary>F-042: the create form's parent folder (blank = the organization's root).</summary>
+        public string? FolderId { get; set; }
+
         public ProjectInput ToInput() => new(
             Name,
             Kind,
@@ -793,7 +869,8 @@ public static class ProjectEndpoints
             PipelinePath,
             PipelineSource,
             InlineScript,
-            BranchDiscovery);
+            BranchDiscovery,
+            FolderId);
     }
 
     /// <summary>

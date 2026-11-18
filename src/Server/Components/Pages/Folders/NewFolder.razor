@@ -1,0 +1,120 @@
+@page "/folders/new"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject FolderService Folders
+
+<PageTitle>New folder · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1" tabindex="-1">New folder</BbCardTitle>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+        }
+    </div>
+
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else if (_session is { HasOrganization: true })
+    {
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Folder details</BbCardTitle>
+                <BbCardDescription>
+                    A folder groups projects. Names are unique among siblings, ignoring case, and
+                    folders nest at most @FolderValidation.MaxDepth levels deep.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <form method="post" action="/folders/create" data-zenkins-antiforgery class="bb:space-y-4">
+                    <div class="bb:space-y-2">
+                        <label for="folder-name" class="bb:text-sm bb:font-medium">Name</label>
+                        <input id="folder-name"
+                               name="Name"
+                               value="@Name"
+                               required
+                               maxlength="@FolderValidation.MaxNameLength"
+                               autocomplete="off"
+                               spellcheck="false"
+                               placeholder="payments" />
+                    </div>
+
+                    <div class="bb:space-y-2">
+                        <label for="folder-parent" class="bb:text-sm bb:font-medium">Parent folder</label>
+                        <select id="folder-parent"
+                                name="ParentFolderId"
+                                class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                            <option value="" selected="@(string.IsNullOrEmpty(ParentFolderId))">Root (top level)</option>
+                            @foreach (var option in _options)
+                            {
+                                <option value="@option.Id" selected="@(ParentFolderId == option.Id.ToString())">@option.Path</option>
+                            }
+                        </select>
+                        <p class="bb:text-xs bb:text-muted-foreground">
+                            The parent does not change later; a folder can be moved after it exists.
+                        </p>
+                    </div>
+
+                    <div class="bb:space-y-2">
+                        <label for="folder-description" class="bb:text-sm bb:font-medium">Description (optional)</label>
+                        <textarea id="folder-description"
+                                  name="Description"
+                                  rows="3"
+                                  maxlength="@FolderValidation.MaxDescriptionLength"
+                                  spellcheck="false"
+                                  autocomplete="off"
+                                  class="bb:flex bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:text-sm">@Description</textarea>
+                    </div>
+
+                    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create folder</BbButton>
+                        <BbButton Href="/projects" Variant="ButtonVariant.Outline">Cancel</BbButton>
+                    </div>
+                </form>
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    private UserSessionInfo? _session;
+    private IReadOnlyList<FolderOption> _options = [];
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    // The refused create echoes its values back, so the user fixes one field instead of retyping.
+    [SupplyParameterFromQuery(Name = "name")]
+    private string? Name { get; set; }
+
+    [SupplyParameterFromQuery(Name = "description")]
+    private string? Description { get; set; }
+
+    /// <summary>The parent the form starts on: the folder page's "New subfolder" link passes it.</summary>
+    [SupplyParameterFromQuery(Name = "parent")]
+    private string? ParentFolderId { get; set; }
+
+    private string? Error => FolderErrorCodes.MessageFor(ErrorCode);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Establishes the circuit tenant before any folder is read or written.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _options = await Folders.GetOptionsAsync();
+    }
+}

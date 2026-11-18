@@ -225,7 +225,8 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 
 | 字段 | 说明 |
 |---|---|
-| Name | 项目名称 |
+| Name | 项目名称。**在所属 Folder 内唯一**（忽略大小写），根目录也是一个"Folder"（v1.3 新增，见下） |
+| Folder | 项目所在的 Folder，空表示根目录（v1.3 新增）。只影响列表与创建表单的默认父目录，**不进入项目 URL** |
 | Kind | 项目类型：`pipeline` 或 `freestyle`，创建后不可变更 |
 | Pipeline Source | Pipeline 项目的定义来源：`repository` 或 `inline`，创建后不可变更（仅 Pipeline） |
 | Inline Script | `inline` Pipeline 的 Lua 正文（仅 `inline`；上限 64 KiB） |
@@ -255,6 +256,21 @@ Project 是 Zenkins 的作业单元，分两种 Kind：
 - 支持 Git Webhook 触发构建（仅 `repository` 来源的 Pipeline；Freestyle 与 `inline` 无仓库可推送）。
 - 支持参数化构建（两种 Kind 通用，见 §3.11）。
 - 支持启用/禁用项目：禁用后所有触发路径一律拒绝，历史、Artifact 与设置仍可读。
+
+#### Folder（v1.3 新增）
+
+Folder 是组织内的**分组**，不是第二套授权模型：读权限/写权限仍由组织成员身份决定，不提供 folder 级权限。
+
+- 字段：Name、可选的 Parent Folder、Description。
+- 同级名字唯一，**忽略大小写**；不同父目录下可以同名。根目录算作同级，所以两个根项目也不能同名。
+- 嵌套最多 5 层（根目录的第 1 层算 1 层），超过即拒绝。
+- Folder 不能被移动到自身或其子孙下面（环），移动时整棵子树的层数一起重算。
+- 项目名从"组织内唯一"改为"Folder 内唯一"；升级旧数据不撞名：旧项目全部落在根目录，
+  旧约束 `(OrganizationId, Name)` 严格强于新约束的根级部分，所以旧行迁移后仍然满足新索引。
+- 移动项目到已存在同名项目的 Folder **必须拒绝**并指出已存在的项目名，不允许自动改名。
+- 删除：只有空的 Folder（没有项目、没有子 Folder）可以删除；删除只删除该 Folder 行本身，不级联任何内容。
+- 项目 URL 不因 Folder 改变：仍然是 `/projects/{id}`。
+- 项目列表页支持按名字搜索/过滤，范围是"当前 Folder 子树"或"整个组织"（everywhere）二选一。
 
 #### 启用 / 禁用
 
@@ -1209,12 +1225,23 @@ timeoutMinutes、parameters，校验规则与错误码与表单完全一致。�
 
 项目列表展示：
 
+- 面包屑（根为 Projects），从当前 Folder 一路到根
+- 先列当前层级的子 Folder，再列当前层级的项目；每个 Folder 显示直接项目数、子树项目数、子 Folder 数、层级
 - 项目名称
 - Kind（Pipeline / Freestyle 徽标）
 - Git Repository（Freestyle 显示"无仓库，步骤配置于服务端"）
 - 默认分支（仅 Pipeline）
-- 最近一次构建状态
+- 最近一次构建状态（从未运行的项目显示 never run）
 - 最近构建时间
+- 搜索框 + 范围选择（当前子树 / 整个组织）
+
+#### Folder
+
+Folder 页在同一个列表之上提供：
+
+- 面包屑与"New subfolder"/"New project"（创建时默认父目录就是这个 Folder）
+- 重命名/描述、移动到另一个父目录、删除（非空时拒绝）
+- 每个项目行带"移动到 Folder"选择器（撞名时拒绝并指出已有项目名）
 
 #### Project Detail
 

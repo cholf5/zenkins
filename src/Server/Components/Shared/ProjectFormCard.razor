@@ -21,7 +21,48 @@
         {
             <p id="project-name-error" role="alert" class="bb:text-xs bb:text-destructive">@nameError</p>
         }
+        @if (ConflictName is { Length: > 0 } conflict)
+        {
+            @* F-042 TC-002: the refusal names the project that already holds the name. Nothing was
+               renamed behind the user's back - the existing project and this one both keep their names. *@
+            <p id="project-name-conflict" role="alert" class="bb:text-xs bb:text-destructive">
+                A project named <strong>@conflict</strong> already exists in that folder.
+            </p>
+        }
     </div>
+
+    @if (KindLocked)
+    {
+        @* F-042: moving a project is its own explicit action (the folder page's Move form), so the edit
+           form shows the folder as a badge and posts nothing that could move it as a side effect. *@
+        <div class="bb:space-y-2">
+            <span class="bb:text-sm bb:font-medium">Folder</span>
+            <div>
+                <BbBadge Variant="BadgeVariant.Outline">@(FolderName ?? "Root")</BbBadge>
+            </div>
+        </div>
+    }
+    else if (FolderOptions.Count > 0)
+    {
+        @* F-042 AC-4: the create form's default parent - the only place a folder changes a project. *@
+        <div class="bb:space-y-2">
+            <label for="project-folder" class="bb:text-sm bb:font-medium">Folder</label>
+            <select id="project-folder"
+                    name="FolderId"
+                    aria-invalid="@(FolderError is null ? null : "true")"
+                    class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                <option value="" selected="@(string.IsNullOrEmpty(FolderId))">Root (top level)</option>
+                @foreach (var option in FolderOptions)
+                {
+                    <option value="@option.Id" selected="@(FolderId == option.Id.ToString())">@option.Path</option>
+                }
+            </select>
+            @if (FolderError is { } folderError)
+            {
+                <p id="project-folder-error" role="alert" class="bb:text-xs bb:text-destructive">@folderError</p>
+            }
+        </div>
+    }
 
     @if (KindLocked)
     {
@@ -288,6 +329,22 @@
     [Parameter]
     public string? ErrorCode { get; set; }
 
+    /// <summary>F-042: the parent folder the create form starts on (blank = the root).</summary>
+    [Parameter]
+    public string? FolderId { get; set; }
+
+    /// <summary>F-042: every folder of the organization, for the create form's parent selector.</summary>
+    [Parameter]
+    public IReadOnlyList<FolderOption> FolderOptions { get; set; } = [];
+
+    /// <summary>F-042: the folder the edited project lives in (the edit form's read-only badge).</summary>
+    [Parameter]
+    public string? FolderName { get; set; }
+
+    /// <summary>F-042: the existing project a refused create/edit collided with, if any (TC-002).</summary>
+    [Parameter]
+    public string? ConflictName { get; set; }
+
     /// <summary>F-022: the create form's definition source (ignored by a kind-locked edit).</summary>
     [Parameter]
     public string? PipelineSource { get; set; }
@@ -338,6 +395,8 @@
     private string? DefaultBranchError => ErrorFor(ProjectFields.DefaultBranch);
 
     private string? PipelinePathError => ErrorFor(ProjectFields.PipelinePath);
+
+    private string? FolderError => ErrorFor(ProjectFields.Folder);
 
     private string? ErrorFor(string field) =>
         ProjectErrorCodes.FieldFor(ErrorCode) == field

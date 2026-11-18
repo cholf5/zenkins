@@ -12,6 +12,7 @@ using Zenkins.Server.Secrets;
 using Zenkins.Server.Artifacts;
 using Zenkins.Server.Branches;
 using Zenkins.Server.Environments;
+using Zenkins.Server.Folders;
 using Zenkins.Server.Schedules;
 using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
@@ -94,6 +95,9 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     public DbSet<OrganizationMember> OrganizationMembers => Set<OrganizationMember>();
 
     public DbSet<Project> Projects => Set<Project>();
+
+    /// <summary>Grouping folders (F-042): the organization's tree that projects hang under.</summary>
+    public DbSet<Folder> Folders => Set<Folder>();
 
     public DbSet<Worker> Workers => Set<Worker>();
 
@@ -780,16 +784,72 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             entity.HasQueryFilter(member => member.OrganizationId == CurrentOrganizationId);
         });
 
+        // F-042: grouping folders, the organization's tree that projects hang under. Sibling names are
+        // unique case-insensitively (the NameKey column, because neither provider compares text that way
+        // by default), the nesting cap is a check constraint, and the self-referencing parent never
+        // cascades: a folder delete is refused by FolderService while anything is inside.
+        modelBuilder.Entity<Folder>(entity =>
+        {
+            entity.HasKey(folder => folder.Id);
+            entity.Property(folder => folder.Name).IsRequired().HasMaxLength(FolderValidation.MaxNameLength);
+            entity.Property(folder => folder.NameKey).IsRequired().HasMaxLength(FolderValidation.MaxNameLength);
+            entity.Property(folder => folder.Description).HasMaxLength(FolderValidation.MaxDescriptionLength);
+
+            // The guard, not a pre-flight query: ParentKey encodes "root" as Guid.Empty because both
+            // providers treat NULLs as distinct in a unique index.
+            entity.HasIndex(folder => new { folder.OrganizationId, folder.ParentKey, folder.NameKey }).IsUnique();
+
+            entity.HasOne<Organization>().WithMany().HasForeignKey(folder => folder.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Self-referencing and Restrict: a parent folder cannot be deleted while a child exists, and no
+            // cascade ever walks down the tree.
+            entity.HasOne<Folder>().WithMany().HasForeignKey(folder => folder.ParentFolderId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.ToTable(table =>
+            {
+                // The depth cap (AC-1) as a data rule: an out-of-band writer cannot invent a sixth level.
+                table.HasCheckConstraint(
+                    "CK_Folders_Depth",
+                    $"\"Depth\" BETWEEN 1 AND {FolderValidation.MaxDepth}");
+
+                // The parent's two encodings cannot drift apart (the same shape Project carries).
+                table.HasCheckConstraint(
+                    "CK_Folders_ParentKey",
+                    $"(\"ParentFolderId\" IS NULL AND \"ParentKey\" = '{Guid.Empty}')"
+                    + $" OR (\"ParentFolderId\" IS NOT NULL AND \"ParentKey\" <> '{Guid.Empty}')");
+            });
+
+            entity.HasQueryFilter(folder => folder.OrganizationId == CurrentOrganizationId);
+        });
+
         modelBuilder.Entity<Project>(entity =>
         {
             entity.HasKey(project => project.Id);
             entity.Property(project => project.Name).IsRequired().HasMaxLength(200);
 
-            // F-003: a project name is unique inside an organization (PRD §3.2 / card TC-002). The
-            // index is the guard, not a pre-flight query, so two concurrent creates cannot both
-            // pass a "does it exist" check; ProjectService translates the violation into a
-            // field-level error.
-            entity.HasIndex(project => new { project.OrganizationId, project.Name }).IsUnique();
+            // F-042: the name key is the case-insensitive half of the folder-unique index below. The
+            // empty database default is what lets the migration add the column to a populated table
+            // and backfill it from Name afterwards (no table rebuild, no provider-specific collation).
+            entity.Property(project => project.NameKey).IsRequired()
+                .HasMaxLength(ProjectValidation.MaxNameLength)
+                .HasDefaultValue(string.Empty);
+
+            // F-042 (superseding F-003's organization-wide index): a project name is unique inside its
+            // folder, and the root is just the folder whose key is Guid.Empty. The index is still the
+            // guard, not a pre-flight query: two concurrent creates cannot both pass a "does it exist"
+            // check, and ProjectService translates the violation into a field-level error.
+            entity.HasIndex(project => new { project.OrganizationId, project.FolderKey, project.NameKey })
+                .IsUnique();
+
+            // F-042: the folder is optional and never cascades. A folder that still holds projects is
+            // refused by FolderService before any delete, so Restrict is the database's restatement of
+            // "a folder delete never takes a project with it".
+            entity.HasOne<Folder>()
+                .WithMany()
+                .HasForeignKey(project => project.FolderId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             // F-020: the project's kind. The repository fields were required since F-003; a Freestyle
             // project has none of them, so they became nullable - the validation layer (not the data
@@ -883,6 +943,14 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                     "\"LastProbeOutcome\" IS NULL OR \"LastProbeOutcome\" IN ("
                     + string.Join(", ", GitProbeOutcomes.All.Select(outcome => $"'" + outcome + "'"))
                     + ")");
+
+                // F-042: the folder's two encodings cannot drift apart - a root project has no FolderId and
+                // the empty FolderKey; a nested one has both. A row that disagreed would either escape the
+                // folder-unique index (non-empty key, no folder) or break the folder listing (the reverse).
+                table.HasCheckConstraint(
+                    "CK_Projects_FolderKey",
+                    $"\"FolderId\" IS NULL AND \"FolderKey\" = '{Guid.Empty}'"
+                    + $" OR \"FolderId\" IS NOT NULL AND \"FolderKey\" <> '{Guid.Empty}'");
             });
 
             // F-025: the poll state's words are bounded like every other vocabulary column.
@@ -1320,6 +1388,7 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         foreach (var entry in ChangeTracker.Entries())
         {
             StampTimestamps(entry, now);
+            StampFolderKeys(entry);
 
             if (entry.Entity is Organization organization)
             {
@@ -1413,6 +1482,34 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             throw new TenantIsolationException(
                 $"Cannot change or delete organization '{organization.Id}': the active organization is "
                 + $"'{activeOrganizationId?.ToString() ?? "<none>"}'.");
+        }
+    }
+
+    /// <summary>
+    /// F-042: single owner of the two derived key columns - a folder's case-insensitive name key and its
+    /// root-encoded parent key, and a project's name key and folder key. They are stamped here, next to
+    /// the audit timestamps, so no writer (a service, a future caller, a test seed) can store a row whose
+    /// keys disagree with its name and folder. A raw SQL writer still cannot: the model's check constraints
+    /// restate the parent/folder encoding.
+    /// </summary>
+    private static void StampFolderKeys(EntityEntry entry)
+    {
+        if (entry.State is not (EntityState.Added or EntityState.Modified))
+        {
+            return;
+        }
+
+        switch (entry.Entity)
+        {
+            case Folder folder:
+                folder.NameKey = FolderValidation.NameKeyFor(folder.Name);
+                folder.ParentKey = folder.ParentFolderId ?? Guid.Empty;
+                break;
+
+            case Project project:
+                project.NameKey = FolderValidation.NameKeyFor(project.Name);
+                project.FolderKey = project.FolderId ?? Guid.Empty;
+                break;
         }
     }
 

@@ -1,0 +1,213 @@
+@page "/folders/{FolderId:guid}"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject FolderService Folders
+
+<PageTitle>@(_listing?.CurrentFolder?.Name ?? "Folder") · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
+        <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+            <BbCardTitle As="h1" tabindex="-1">@(_listing?.CurrentFolder?.Name ?? "Folder")</BbCardTitle>
+            @if (_session?.Organization is { } organization)
+            {
+                <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+            }
+        </div>
+        @if (_listing is not null)
+        {
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <BbButton Href="@($"/folders/new?parent={FolderId}")" Variant="ButtonVariant.Outline">New subfolder</BbButton>
+                <BbButton Href="@($"/projects/new?folder={FolderId}")" Variant="ButtonVariant.Default">New project</BbButton>
+            </div>
+        }
+    </div>
+
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else if (_listing is null)
+    {
+        @* A foreign organization's id is indistinguishable from a missing one: the service reads
+           through the tenant-filtered context and this response is a real 404. *@
+        <NotFoundPage />
+    }
+    else
+    {
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Contents</BbCardTitle>
+                <BbCardDescription>
+                    Subfolders first, then this folder's projects with their last run. Counts roll up to
+                    the parent folder.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <FolderListing Listing="@_listing"
+                               FolderOptions="@_options"
+                               SearchPath="@($"/folders/{FolderId}")" />
+            </BbCardContent>
+        </BbCard>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Folder settings</BbCardTitle>
+                <BbCardDescription>
+                    Members and Owners may rename, move and delete a folder. A folder that still holds
+                    projects or subfolders cannot be deleted - move or delete them first.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <div class="bb:space-y-6">
+                    <form method="post" action="@($"/folders/{FolderId}/rename")" data-zenkins-antiforgery class="bb:space-y-3">
+                        <div class="bb:space-y-2">
+                            <label for="folder-rename" class="bb:text-sm bb:font-medium">Name</label>
+                            <input id="folder-rename"
+                                   name="Name"
+                                   value="@EffectiveName"
+                                   required
+                                   maxlength="@FolderValidation.MaxNameLength"
+                                   autocomplete="off"
+                                   spellcheck="false"
+                                   class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
+                        </div>
+                        <div class="bb:space-y-2">
+                            <label for="folder-description" class="bb:text-sm bb:font-medium">Description</label>
+                            <textarea id="folder-description"
+                                      name="Description"
+                                      rows="2"
+                                      maxlength="@FolderValidation.MaxDescriptionLength"
+                                      spellcheck="false"
+                                      autocomplete="off"
+                                      class="bb:flex bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:text-sm">@EffectiveDescription</textarea>
+                        </div>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save folder</BbButton>
+                    </form>
+
+                    <form method="post" action="@($"/folders/{FolderId}/move")" data-zenkins-antiforgery
+                          class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row bb:sm:items-end">
+                        <div class="bb:flex-1 bb:space-y-2">
+                            <label for="folder-move" class="bb:text-sm bb:font-medium">Move under</label>
+                            <select id="folder-move"
+                                    name="ParentFolderId"
+                                    class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                                <option value="" selected="@(_listing.CurrentFolder?.ParentFolderId is null)">Root (top level)</option>
+                                @foreach (var option in _options)
+                                {
+                                    <option value="@option.Id" selected="@(_listing.CurrentFolder?.ParentFolderId == option.Id)">@option.Path</option>
+                                }
+                            </select>
+                            <p class="bb:text-xs bb:text-muted-foreground">
+                                A folder cannot be moved inside itself or one of its subfolders, and the
+                                whole subtree must still fit within @FolderValidation.MaxDepth levels.
+                            </p>
+                        </div>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Move folder</BbButton>
+                    </form>
+
+                    <form method="post" action="@($"/folders/{FolderId}/delete")" data-zenkins-antiforgery>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete folder</BbButton>
+                        <p class="bb:text-xs bb:text-muted-foreground">
+                            Allowed only when nothing is inside; it deletes the folder row and nothing else.
+                        </p>
+                    </form>
+                </div>
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid FolderId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private UserSessionInfo? _session;
+    private ProjectListing? _listing;
+    private IReadOnlyList<FolderOption> _options = [];
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "q")]
+    private string? Query { get; set; }
+
+    /// <summary>F-042 AC-6: <c>all</c> searches the whole organization, anything else this subtree.</summary>
+    [SupplyParameterFromQuery(Name = "scope")]
+    private string? Scope { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    /// <summary>The existing project a refused move collided with (the message names it).</summary>
+    [SupplyParameterFromQuery(Name = "conflict")]
+    private string? ConflictName { get; set; }
+
+    // The refused rename echoes its submitted name back, so the form keeps the user's input.
+    [SupplyParameterFromQuery(Name = "name")]
+    private string? SubmittedName { get; set; }
+
+    private bool Everywhere => string.Equals(Scope, "all", StringComparison.OrdinalIgnoreCase);
+
+    private string? EffectiveName => SubmittedName ?? _listing?.CurrentFolder?.Name;
+
+    private string? EffectiveDescription => _listing?.CurrentFolder?.Description;
+
+    private string? Notice => NoticeCode switch
+    {
+        "created" => "The folder was created.",
+        "renamed" => "The folder was renamed.",
+        "moved" => "The folder was moved.",
+        "project-moved" => "The project was moved into this folder.",
+        _ => null,
+    };
+
+    private string? Error =>
+        (FolderErrorCodes.MessageFor(ErrorCode) ?? ProjectErrorCodes.MessageFor(ErrorCode)) is { } message
+            ? ConflictName is { Length: > 0 } conflict
+                ? $"{message} The project already in that folder is '{conflict}' - nothing was renamed."
+                : message
+            : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read.
+        _session = await UserSession.GetAsync();
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _listing = await Folders.GetListingAsync(FolderId, Query, Everywhere);
+        _options = await Folders.GetOptionsAsync(excludedFolderId: FolderId);
+
+        if (_listing is null && HttpContext is not null)
+        {
+            // A real 404 for a foreign or missing id; the status-code-pages middleware must not
+            // re-execute /not-found in this same request (the renderer already owns NavigationManager).
+            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+            {
+                statusCodePages.Enabled = false;
+            }
+        }
+    }
+}

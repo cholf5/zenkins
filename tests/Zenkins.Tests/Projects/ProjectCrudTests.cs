@@ -134,7 +134,9 @@ public sealed class ProjectCrudTests
         // Field-level error: rendered against the Name input, with the submitted value preserved.
         var page = await AuthTestHost.GetStringAsync(client, location);
         Assert.Contains("id=\"project-name-error\"", page, StringComparison.Ordinal);
-        Assert.Contains("A project with this name already exists in this organization.", page, StringComparison.Ordinal);
+        // F-042 changed what "unique" means: the name is unique inside its folder (the root is a folder
+        // too), so the message names the folder's rule rather than the organization's.
+        Assert.Contains("A project with this name already exists in this folder", page, StringComparison.Ordinal);
         Assert.Contains("value=\"game-client\"", page, StringComparison.Ordinal);
 
         var projects = await host.ReadProjectsAsync(organizationId);

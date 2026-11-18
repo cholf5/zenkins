@@ -16,6 +16,7 @@ using Zenkins.Server.Components;
 using Zenkins.Server.Data;
 using Zenkins.Server.Dashboard;
 using Zenkins.Server.Environments;
+using Zenkins.Server.Folders;
 using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Organizations;
@@ -58,6 +59,9 @@ builder.Services.AddZenkinsData(builder.Configuration);
 builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
 builder.Services.AddZenkinsProjects();
+
+// F-042: the organization's folder tree - the projects page's grouping and its breadcrumbs.
+builder.Services.AddZenkinsFolders();
 
 // F-023: the branch registry of a multibranch project - the branch jobs, their evidence-backed
 // pipeline state and the read the Branches tab and the runs filter use.
@@ -247,6 +251,10 @@ app.MapOrganizationEndpoints();
 // Project create/edit/delete (F-003). Same form-bound, antiforgery-validated shape; the service
 // enforces membership (create/edit) and Owner-only deletion.
 app.MapProjectEndpoints();
+
+// F-042: folder create/rename/move/delete. Same form-bound, antiforgery-validated shape; membership
+// is the permission (a folder is grouping, not a second authorization model).
+app.MapFolderEndpoints();
 
 // F-024: the settings tab's schedule forms (create/preview, toggle, delete).
 app.MapScheduleEndpoints();

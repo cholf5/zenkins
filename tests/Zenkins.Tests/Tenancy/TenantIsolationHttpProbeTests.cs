@@ -273,6 +273,15 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
             new Dictionary<string, string> { ["MaxConcurrentRuns"] = "1" });
         Assert.Equal(HttpStatusCode.NotFound, limits.StatusCode);
 
+        // F-042: the explicit move into another folder resolves the project through the tenant filter
+        // too, so a foreign id is the same 404 - and B's project keeps its root placement.
+        var move = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/move",
+            new Dictionary<string, string> { ["FolderId"] = TwoOrgsFixture.FolderAId.ToString() });
+        Assert.Equal(HttpStatusCode.NotFound, move.StatusCode);
+
         var beta = (await _host.Data.ReadAcrossTenantsAsync<Project>(
             project => project.Id == TwoOrgsFixture.ProjectBId,
             CancellationToken)).Single();
@@ -282,6 +291,7 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
         Assert.Null(beta.MaxConcurrentRuns);
         Assert.Null(beta.MaxQueuedRuns);
         Assert.Equal(0, beta.QuietPeriodSeconds);
+        Assert.Null(beta.FolderId);
     }
 
     [Fact]

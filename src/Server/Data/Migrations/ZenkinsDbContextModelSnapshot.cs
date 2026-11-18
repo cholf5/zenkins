@@ -700,6 +700,59 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("ChangeTriggers");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.Folder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Depth")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("NameKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ParentFolderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ParentKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentFolderId");
+
+                    b.HasIndex("OrganizationId", "ParentKey", "NameKey")
+                        .IsUnique();
+
+                    b.ToTable("Folders", t =>
+                        {
+                            t.HasCheckConstraint("CK_Folders_Depth", "\"Depth\" BETWEEN 1 AND 5");
+
+                            t.HasCheckConstraint("CK_Folders_ParentKey", "(\"ParentFolderId\" IS NULL AND \"ParentKey\" = '00000000-0000-0000-0000-000000000000') OR (\"ParentFolderId\" IS NOT NULL AND \"ParentKey\" <> '00000000-0000-0000-0000-000000000000')");
+                        });
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.GitCredential", b =>
                 {
                     b.Property<Guid>("Id")
@@ -942,6 +995,12 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<Guid?>("FolderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("FolderKey")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("FreestyleSpecJson")
                         .HasColumnType("text");
 
@@ -996,6 +1055,13 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<string>("NameKey")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasDefaultValue("");
+
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
@@ -1043,14 +1109,18 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("FolderId");
+
                     b.HasIndex("GitCredentialId");
 
-                    b.HasIndex("OrganizationId", "Name")
+                    b.HasIndex("OrganizationId", "FolderKey", "NameKey")
                         .IsUnique();
 
                     b.ToTable("Projects", t =>
                         {
                             t.HasCheckConstraint("CK_Projects_BranchDiscovery", "\"BranchDiscovery\" IN ('single', 'branches')");
+
+                            t.HasCheckConstraint("CK_Projects_FolderKey", "\"FolderId\" IS NULL AND \"FolderKey\" = '00000000-0000-0000-0000-000000000000' OR \"FolderId\" IS NOT NULL AND \"FolderKey\" <> '00000000-0000-0000-0000-000000000000'");
 
                             t.HasCheckConstraint("CK_Projects_Kind", "\"Kind\" IN ('pipeline', 'freestyle')");
 
@@ -1750,6 +1820,20 @@ namespace Zenkins.Server.Data.Migrations
                     b.Navigation("Project");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.Folder", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.Folder", null)
+                        .WithMany()
+                        .HasForeignKey("ParentFolderId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.GitCredential", b =>
                 {
                     b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
@@ -1796,6 +1880,11 @@ namespace Zenkins.Server.Data.Migrations
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Project", b =>
                 {
+                    b.HasOne("Zenkins.Server.Data.Entities.Folder", null)
+                        .WithMany()
+                        .HasForeignKey("FolderId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Zenkins.Server.Data.Entities.GitCredential", null)
                         .WithMany()
                         .HasForeignKey("GitCredentialId")

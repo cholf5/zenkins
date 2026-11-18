@@ -1,8 +1,7 @@
 @page "/projects"
 @attribute [Authorize]
-@using Zenkins.Shared.Projects
 @inject UserSession UserSession
-@inject ProjectService ProjectsService
+@inject FolderService Folders
 
 <PageTitle>Projects · Zenkins</PageTitle>
 
@@ -17,7 +16,10 @@
         </div>
         @if (_session is { HasOrganization: true })
         {
-            <BbButton Href="/projects/new" Variant="ButtonVariant.Default">New project</BbButton>
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <BbButton Href="/folders/new" Variant="ButtonVariant.Outline">New folder</BbButton>
+                <BbButton Href="/projects/new" Variant="ButtonVariant.Default">New project</BbButton>
+            </div>
         }
     </div>
 
@@ -25,7 +27,7 @@
     {
         <NoOrganizationNotice />
     }
-    else
+    else if (_listing is not null)
     {
         @if (Notice is { } notice)
         {
@@ -34,70 +36,24 @@
             </div>
         }
 
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Repositories</BbCardTitle>
+                <BbCardTitle As="h2">This organization's projects</BbCardTitle>
                 <BbCardDescription>
-                    Projects of the active organization. Members may create and edit; deleting a project
-                    is reserved to Owners (PRD §3.1.2).
+                    Folders group projects; a project's name is unique inside its folder, and its URL
+                    stays <code>/projects/{id}</code> wherever it sits. Members may create and edit;
+                    deleting a project is reserved to Owners (PRD §3.1.2).
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
-                @if (_projects.Count == 0)
-                {
-                    <BbEmpty Title="No projects in this organization"
-                             Description="Create a project to point Zenkins at a Git repository and its pipeline.lua.">
-                        <Icon>
-                            <LucideIcon Name="folder-git-2" Class="bb:h-12 bb:w-12" />
-                        </Icon>
-                    </BbEmpty>
-                }
-                else
-                {
-                    <ul class="bb:divide-y">
-                        @foreach (var project in _projects)
-                        {
-                            <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
-                                <div class="bb:min-w-0">
-                                    <p class="bb:font-medium">
-                                        <a href="/projects/@project.Id" class="bb:underline bb:underline-offset-4">@project.Name</a>
-                                    </p>
-                                    @* F-020/F-022: a project with no repository says so instead of
-                                       rendering an empty string. *@
-                                    <p class="bb:truncate bb:text-xs bb:text-muted-foreground">
-                                        @(project.RepositoryUrl
-                                            ?? (project.Kind == ProjectKinds.Freestyle
-                                                ? "Freestyle project - steps configured on the server"
-                                                : "Inline pipeline - script stored on the server"))
-                                    </p>
-                                </div>
-                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
-                                    @* F-028: a disabled project is visible here too - the list is where an
-                                       operator looks for "why did nothing build today?". *@
-                                    @if (project.Disabled)
-                                    {
-                                        <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
-                                    }
-                                    @if (project.Kind == ProjectKinds.Freestyle)
-                                    {
-                                        <BbBadge Variant="BadgeVariant.Secondary">Freestyle</BbBadge>
-                                    }
-                                    else if (project.PipelineSource == ProjectSources.Inline)
-                                    {
-                                        <BbBadge Variant="BadgeVariant.Secondary">Inline</BbBadge>
-                                        <span>pipeline.lua</span>
-                                    }
-                                    else
-                                    {
-                                        <BbBadge Variant="BadgeVariant.Outline">@project.DefaultBranch</BbBadge>
-                                        <span>@project.PipelinePath</span>
-                                    }
-                                    <span>Updated @project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
-                                </div>
-                            </li>
-                        }
-                    </ul>
-                }
+                <FolderListing Listing="@_listing" FolderOptions="@_options" SearchPath="/projects" />
             </BbCardContent>
         </BbCard>
     }
@@ -105,18 +61,47 @@
 
 @code {
     private UserSessionInfo? _session;
-    private IReadOnlyList<ProjectView> _projects = [];
+    private ProjectListing? _listing;
+    private IReadOnlyList<FolderOption> _options = [];
 
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "q")]
+    private string? Query { get; set; }
+
+    /// <summary>F-042 AC-6: <c>all</c> searches the whole organization, anything else this subtree.</summary>
+    [SupplyParameterFromQuery(Name = "scope")]
+    private string? Scope { get; set; }
+
+    /// <summary>
+    /// The root listing also carries a project-move refusal: the move form lives on the listing, and the
+    /// endpoint redirects back here with the stable code (and the existing project's name).
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "conflict")]
+    private string? ConflictName { get; set; }
+
+    private bool Everywhere => string.Equals(Scope, "all", StringComparison.OrdinalIgnoreCase);
 
     private string? Notice => NoticeCode switch
     {
         "created" => "The project was created.",
         "updated" => "The project was updated.",
         "deleted" => "The project was deleted.",
+        "folder-deleted" => "The folder was deleted.",
+        "project-moved" => "The project was moved. Open its folder to see it in place.",
         _ => null,
     };
+
+    private string? Error =>
+        (FolderErrorCodes.MessageFor(ErrorCode) ?? ProjectErrorCodes.MessageFor(ErrorCode)) is { } message
+            ? ConflictName is { Length: > 0 } conflict
+                ? $"{message} The project already in that folder is '{conflict}' - nothing was renamed."
+                : message
+            : null;
 
     protected override async Task OnInitializedAsync()
     {
@@ -128,6 +113,7 @@
             return;
         }
 
-        _projects = await ProjectsService.GetProjectsAsync();
+        _listing = await Folders.GetListingAsync(folderId: null, Query, Everywhere);
+        _options = await Folders.GetOptionsAsync();
     }
 }

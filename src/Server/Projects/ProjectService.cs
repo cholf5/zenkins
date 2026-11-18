@@ -3,6 +3,7 @@ using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Folders;
 using Zenkins.Shared.Projects;
 using Zenkins.Shared.RunCancellation;
 using Zenkins.Shared.Tenancy;
@@ -125,7 +126,13 @@ public sealed record ProjectView(
     /// and the historical behaviour of every project; the claim hands this value to the worker that executes
     /// the post phase.
     /// </summary>
-    bool PostFailureFailsRun = false);
+    bool PostFailureFailsRun = false,
+
+    /// <summary>F-042: the folder the project sits in, or <see langword="null"/> at the organization's root.</summary>
+    Guid? FolderId = null,
+
+    /// <summary>F-042: that folder's display name; <see langword="null"/> at the root.</summary>
+    string? FolderName = null);
 
 /// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
 /// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
@@ -151,7 +158,15 @@ public sealed record ProjectInput(
     /// historical default - and an edit honours it (the setting is mutable; switching to discovery never
     /// rewrites history). A Freestyle or inline project can only be <c>single</c>.
     /// </summary>
-    string? BranchDiscovery = null);
+    string? BranchDiscovery = null,
+
+    /// <summary>
+    /// F-042: the folder the project is created in - blank means the organization's root. Honoured on
+    /// create only, like <see cref="Kind"/>: moving a project is its own explicit action
+    /// (<see cref="ProjectService.MoveToFolderAsync"/>) whose collision refusal the card requires, so an
+    /// edit form can never move a project as a side effect of saving.
+    /// </summary>
+    string? FolderId = null);
 
 /// <summary>
 /// The queue-controls form's raw values (card F-029), before trimming and validation. Blank means "the
@@ -180,7 +195,14 @@ public sealed record ProjectMutationResult(
     ProjectMutationStatus Status,
     Guid? ProjectId = null,
     string? Message = null,
-    IReadOnlyList<ProjectFieldError>? FieldErrors = null)
+    IReadOnlyList<ProjectFieldError>? FieldErrors = null,
+
+    /// <summary>
+    /// F-042: the existing project's name when the refusal was a name collision inside a folder. The
+    /// endpoint echoes it to the form, so the error names the project instead of only saying "taken"
+    /// (TC-002) - and nothing is renamed behind the user's back.
+    /// </summary>
+    string? ConflictName = null)
 {
     public static ProjectMutationResult Success(Guid projectId) => new(ProjectMutationStatus.Success, projectId);
 
@@ -232,10 +254,14 @@ public sealed class ProjectService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
         var projects = await context.Projects.ToListAsync(cancellationToken);
+        var folderNames = await context.Folders
+            .Select(folder => new { folder.Id, folder.Name })
+            .ToDictionaryAsync(row => row.Id, row => row.Name, cancellationToken);
+
         return projects
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(project => project.Id)
-            .Select(project => ToView(project))
+            .Select(project => ToView(project, folderName: FolderNameFor(project.FolderId, folderNames)))
             .ToArray();
     }
 
@@ -268,7 +294,14 @@ public sealed class ProjectService(
                 .SingleOrDefaultAsync(cancellationToken);
         }
 
-        return ToView(project, disabledByEmail);
+        var folderName = project.FolderId is { } folderId
+            ? await context.Folders
+                .Where(folder => folder.Id == folderId)
+                .Select(folder => folder.Name)
+                .SingleOrDefaultAsync(cancellationToken)
+            : null;
+
+        return ToView(project, disabledByEmail, folderName);
     }
 
     /// <summary>Creates a project in the active organization. Members and Owners may both do this.</summary>
@@ -335,9 +368,30 @@ public sealed class ProjectService(
             out var branch,
             out var pipelinePath,
             out var inlineScript));
+
+        // F-042: the parent folder is a create-time decision. A malformed id is refused rather than
+        // read as "the root", and an id of another organization resolves to nothing (the context's
+        // query filter), so it is the same parent-not-found refusal as a nonexistent one.
+        var folderError = await ResolveFolderAsync(context, input.FolderId, cancellationToken);
+        if (folderError.Error is { } code)
+        {
+            errors.Add(new ProjectFieldError(ProjectFields.Folder, code));
+        }
+
         if (errors.Count > 0)
         {
             return ProjectMutationResult.Invalid([.. errors]);
+        }
+
+        var folder = folderError.Folder;
+        var nameKey = FolderValidation.NameKeyFor(name);
+
+        // The collision is reported by name, but the index below - not this lookup - is the guarantee:
+        // a create that loses the race is caught by the unique violation and refused the same way.
+        if (await FindNameCollisionAsync(context, folder?.Id, nameKey, excludeProjectId: null, cancellationToken)
+            is { } existingName)
+        {
+            return DuplicateName(existingName);
         }
 
         var project = new Project
@@ -345,6 +399,7 @@ public sealed class ProjectService(
             // The tenant comes from the active request; the data layer rejects anything else.
             OrganizationId = activeOrganizationId.Value,
             Name = name,
+            FolderId = folder?.Id,
             Kind = kind,
             PipelineSource = source,
             InlineScript = inlineScript,
@@ -361,7 +416,7 @@ public sealed class ProjectService(
         }
         catch (DbUpdateException exception) when (DatabaseErrors.IsUniqueViolation(exception, "Projects"))
         {
-            return DuplicateName();
+            return DuplicateName(null);
         }
 
         logger.LogInformation(
@@ -450,6 +505,16 @@ public sealed class ProjectService(
             return ProjectMutationResult.Invalid([.. errors]);
         }
 
+        // F-042: the folder is not part of the edit form. A posted FolderId is ignored on purpose: moving
+        // is MoveToFolderAsync, whose collision refusal TC-002/AC-5 require - an edit must never move a
+        // project (and quietly rename around a clash) as a side effect of saving.
+        var nameKey = FolderValidation.NameKeyFor(name);
+        if (await FindNameCollisionAsync(context, project.FolderId, nameKey, project.Id, cancellationToken)
+            is { } existingName)
+        {
+            return DuplicateName(existingName);
+        }
+
         project.Name = name;
         project.BranchDiscovery = branchDiscovery;
         if (project.Kind == ProjectKinds.Pipeline)
@@ -475,13 +540,95 @@ public sealed class ProjectService(
         }
         catch (DbUpdateException exception) when (DatabaseErrors.IsUniqueViolation(exception, "Projects"))
         {
-            return DuplicateName();
+            return DuplicateName(null);
         }
 
         logger.LogInformation(
             "Project updated. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId}",
             activeOrganizationId,
             project.Id,
+            actingUserId);
+        return ProjectMutationResult.Success(project.Id);
+    }
+
+    /// <summary>
+    /// Moves one project into another folder (or to the root when <paramref name="folderId"/> is blank),
+    /// card F-042 AC-5.
+    /// <para>
+    /// <b>A collision is refused, never renamed around.</b> The target folder's names are unique among
+    /// themselves, so a project called <c>build</c> moving into a folder that already holds
+    /// <c>build</c> is refused with the existing name, and the project keeps both its name and its
+    /// folder. The unique index is still the guarantee; this lookup only lets the refusal name the row.
+    /// </para>
+    /// <para>
+    /// Members and Owners may both move (it is grouping, like an edit); the project and the target folder
+    /// are both resolved through the tenant filter, so a foreign id is one bare 404.
+    /// </para>
+    /// </summary>
+    public async Task<ProjectMutationResult> MoveToFolderAsync(
+        string actingUserId,
+        Guid projectId,
+        string? folderId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to move.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return ProjectMutationResult.NotFound();
+        }
+
+        var folderError = await ResolveFolderAsync(context, folderId, cancellationToken);
+        if (folderError.Error is { } code)
+        {
+            return ProjectMutationResult.Invalid(new ProjectFieldError(ProjectFields.Folder, code));
+        }
+
+        var folder = folderError.Folder;
+        if (project.FolderId == folder?.Id)
+        {
+            // Already there: a no-op rather than a refusal, so a double submit is harmless.
+            return ProjectMutationResult.Success(project.Id);
+        }
+
+        if (await FindNameCollisionAsync(context, folder?.Id, project.NameKey, project.Id, cancellationToken)
+            is { } existingName)
+        {
+            return DuplicateName(existingName);
+        }
+
+        project.FolderId = folder?.Id;
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (DatabaseErrors.IsUniqueViolation(exception, "Projects"))
+        {
+            return DuplicateName(null);
+        }
+
+        logger.LogInformation(
+            "Project moved. OrganizationId={OrganizationId} ProjectId={ProjectId} FolderId={FolderId} ByUserId={UserId}",
+            activeOrganizationId,
+            project.Id,
+            project.FolderId,
             actingUserId);
         return ProjectMutationResult.Success(project.Id);
     }
@@ -1067,8 +1214,67 @@ public sealed class ProjectService(
         return errors;
     }
 
-    private static ProjectMutationResult DuplicateName() =>
-        ProjectMutationResult.Invalid(new ProjectFieldError(ProjectFields.Name, ProjectErrorCodes.NameDuplicate));
+    /// <summary>
+    /// The refusal for a name that is taken in the target folder. <paramref name="existingName"/> is the
+    /// project already holding the name, when the caller could read it before the write: the form then
+    /// names it instead of saying only "taken" (TC-002). A create that lost a race passes
+    /// <see langword="null"/> - the unique index refused it and there is nothing safe to read back.
+    /// </summary>
+    private static ProjectMutationResult DuplicateName(string? existingName) =>
+        ProjectMutationResult.Invalid(
+            new ProjectFieldError(ProjectFields.Name, ProjectErrorCodes.NameDuplicate))
+        with
+        { ConflictName = existingName };
+
+    /// <summary>
+    /// The existing project (if any) whose name - case-insensitively - collides inside
+    /// <paramref name="folderId"/>. Read only to name the refusal; the unique index is the guarantee.
+    /// </summary>
+    private static async Task<string?> FindNameCollisionAsync(
+        ZenkinsDbContext context,
+        Guid? folderId,
+        string nameKey,
+        Guid? excludeProjectId,
+        CancellationToken cancellationToken)
+    {
+        var folderKey = folderId ?? Guid.Empty;
+        return await context.Projects
+            .Where(project => project.FolderKey == folderKey
+                && project.NameKey == nameKey
+                && (excludeProjectId == null || project.Id != excludeProjectId))
+            .OrderBy(project => project.Name)
+            .Select(project => project.Name)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The folder a blank-or-id form value names. Blank is the organization's root; a malformed value is
+    /// refused (never coerced to the root), and an id the tenant filter cannot see is "not found" - the
+    /// same answer as a nonexistent one, so there is no existence oracle.
+    /// </summary>
+    private static async Task<(Folder? Folder, string? Error)> ResolveFolderAsync(
+        ZenkinsDbContext context,
+        string? folderId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(folderId))
+        {
+            return (null, null);
+        }
+
+        if (!Guid.TryParse(folderId.Trim(), out var id))
+        {
+            return (null, ProjectErrorCodes.FolderInvalid);
+        }
+
+        var folder = await context.Folders.SingleOrDefaultAsync(
+            candidate => candidate.Id == id,
+            cancellationToken);
+        return folder is null ? (null, ProjectErrorCodes.FolderNotFound) : (folder, null);
+    }
+
+    private static string? FolderNameFor(Guid? folderId, IReadOnlyDictionary<Guid, string> folderNames) =>
+        folderId is { } id && folderNames.TryGetValue(id, out var name) ? name : null;
 
     /// <summary>Any membership (Owner or Member) of the active organization may create and edit.</summary>
     private static Task<bool> IsMemberAsync(
@@ -1088,7 +1294,10 @@ public sealed class ProjectService(
             member => member.UserId == actingUserId && member.Role == OrganizationRole.Owner,
             cancellationToken);
 
-    private static ProjectView ToView(Project project, string? disabledByEmail = null) => new(
+    private static ProjectView ToView(
+        Project project,
+        string? disabledByEmail = null,
+        string? folderName = null) => new(
         project.Id,
         project.Name,
         project.Kind,
@@ -1119,5 +1328,7 @@ public sealed class ProjectService(
         project.LastPollOutcome,
         project.LastPollMessage,
         project.PollFailureStreak,
-        project.PostFailureFailsRun);
+        project.PostFailureFailsRun,
+        project.FolderId,
+        folderName);
 }

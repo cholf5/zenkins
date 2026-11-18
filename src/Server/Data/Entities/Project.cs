@@ -20,6 +20,30 @@ public sealed class Project : ITenantOwned
     public required string Name { get; set; }
 
     /// <summary>
+    /// The case-insensitive identity of <see cref="Name"/> (card F-042), lowercased invariantly by
+    /// <see cref="Zenkins.Server.Projects.ProjectService"/>. The folder-unique index is built on this
+    /// column: neither SQLite's default <c>BINARY</c> collation nor PostgreSQL's default collation
+    /// compares text case-insensitively, and a per-provider collation would make one migration mean two
+    /// things. The column's database default is the empty string so the migration can add it to a
+    /// populated table and then backfill it from <see cref="Name"/>.
+    /// </summary>
+    public string NameKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The folder this project sits in (card F-042), or <see langword="null"/> for the organization's
+    /// root. The real foreign key a reader and the delete guard use.
+    /// </summary>
+    public Guid? FolderId { get; set; }
+
+    /// <summary>
+    /// <see cref="FolderId"/> encoded for the name-unique index: <see cref="Guid.Empty"/> at the root.
+    /// Both SQLite and PostgreSQL treat <c>NULL</c> as distinct in a unique index, so a nullable folder
+    /// column could never make root names unique - the sentinel is what does. The model's check
+    /// constraint keeps this column and <see cref="FolderId"/> from drifting apart.
+    /// </summary>
+    public Guid FolderKey { get; set; }
+
+    /// <summary>
     /// The project's kind (card F-020): <see cref="ProjectKinds.Pipeline"/> or
     /// <see cref="ProjectKinds.Freestyle"/>. Data, not a type hierarchy - the frozen spec stays the one
     /// execution contract for both.

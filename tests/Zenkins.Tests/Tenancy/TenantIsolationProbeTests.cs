@@ -598,6 +598,34 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             TwoOrgsFixture.ScheduleOccurrenceBId,
             CancellationToken);
 
+    // ---- F-042: grouping folders -------------------------------------------------------------
+
+    [Fact]
+    public Task Folders_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<Folder>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_folder_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<Folder>(
+            _fixture,
+            () => new Folder
+            {
+                // Only the tenant field is wrong; the name is fresh, so the rejection is the tenant
+                // guard's rather than the sibling-unique index's.
+                Name = "smuggled-group",
+                NameKey = Zenkins.Server.Folders.FolderValidation.NameKeyFor("smuggled-group"),
+                Depth = 1,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_folders() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<Folder>(
+            _fixture,
+            TwoOrgsFixture.FolderAId,
+            TwoOrgsFixture.FolderBId,
+            CancellationToken);
+
     [Fact]
     public void Every_tenant_owned_entity_is_covered_by_the_harness()
     {

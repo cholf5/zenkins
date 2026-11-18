@@ -65,7 +65,9 @@ public static class TenantIsolationProbes
             // TenantIsolationLinkProbeTests (a foreign project id in the route, in the body or in the link id is
             // one bare 404 and nothing is written, and the settings page renders no foreign edge); the rows
             // themselves get the generic write probe in TenantIsolationProbeTests, like every other entity here.
-            typeof(ProjectLink), typeof(OutboxMessage),
+            // F-042: grouping folders, probed the same way and through TenantIsolationHttpSurfaceProbeTests for
+            // the route (a foreign folder page is a bare 404 and no mutation can reach another tenant's folder).
+            typeof(ProjectLink), typeof(OutboxMessage), typeof(Folder),
         ];
 
     /// <summary>

@@ -30,6 +30,9 @@ public static class ProjectFields
     /// <summary>F-028: the disable form's reason (the only field of that POST).</summary>
     public const string DisabledReason = "Reason";
 
+    /// <summary>F-042: the create form's parent-folder selector (and the move form's target).</summary>
+    public const string Folder = "FolderId";
+
     /// <summary>F-029: the three queue controls of the limits form.</summary>
     public const string MaxConcurrentRuns = "MaxConcurrentRuns";
     public const string QuietPeriodSeconds = "QuietPeriodSeconds";
@@ -47,6 +50,12 @@ public static class ProjectErrorCodes
     public const string NameTooLong = "name-too-long";
     public const string NameInvalid = "name-invalid";
     public const string NameDuplicate = "name-duplicate";
+
+    /// <summary>F-042: the posted folder id is not a folder id (never coerced to the root).</summary>
+    public const string FolderInvalid = "folder-invalid";
+
+    /// <summary>F-042: the posted folder id is not a folder of the active organization.</summary>
+    public const string FolderNotFound = "folder-not-found";
 
     /// <summary>F-020: the kind selector's value is not one of the known kinds.</summary>
     public const string KindInvalid = "kind-invalid";
@@ -113,6 +122,7 @@ public static class ProjectErrorCodes
     public static string? FieldFor(string? code) => code switch
     {
         NameRequired or NameTooLong or NameInvalid or NameDuplicate => ProjectFields.Name,
+        FolderInvalid or FolderNotFound => ProjectFields.Folder,
         KindInvalid => ProjectFields.Kind,
         PipelineSourceInvalid => ProjectFields.PipelineSource,
         InlineScriptRequired or InlineScriptTooLong => ProjectFields.InlineScript,
@@ -135,7 +145,11 @@ public static class ProjectErrorCodes
         NameRequired => "Enter a project name.",
         NameTooLong => $"The project name must be at most {ProjectValidation.MaxNameLength} characters.",
         NameInvalid => "The project name contains characters that are not allowed.",
-        NameDuplicate => "A project with this name already exists in this organization.",
+        NameDuplicate =>
+            "A project with this name already exists in this folder (names are compared ignoring case). "
+            + "Rename it, or choose another folder.",
+        FolderInvalid => "That is not a folder id.",
+        FolderNotFound => "That folder does not exist in this organization.",
         KindInvalid => "The project kind is not one of the known kinds.",
         PipelineSourceInvalid => "The pipeline definition source is not one of the known sources.",
         BranchDiscoveryInvalid => "The branch discovery mode is not one of the known modes.",
