@@ -68,6 +68,12 @@ public static class TenantIsolationProbes
             // F-042: grouping folders, probed the same way and through TenantIsolationHttpSurfaceProbeTests for
             // the route (a foreign folder page is a bare 404 and no mutation can reach another tenant's folder).
             typeof(ProjectLink), typeof(OutboxMessage), typeof(Folder),
+
+            // F-039: the outbound notification endpoints. The HTTP half is probed by
+            // Notification_endpoints_cannot_reach_another_tenants_project (a foreign project or endpoint id is one bare
+            // 404 on every form, and the settings card renders no foreign receiver); the row itself gets the generic
+            // write probe below, like every other entity here.
+            typeof(NotificationEndpoint),
         ];
 
     /// <summary>

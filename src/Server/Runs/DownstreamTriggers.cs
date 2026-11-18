@@ -154,11 +154,17 @@ public sealed class DownstreamTriggerService(
         // compare or order DateTimeOffset columns in SQL (the same constraint the claim loop documents). A pending
         // set is small - an organization's unfinished obligations at one instant - so the read is bounded by that,
         // and the batch below caps the work a single pass does.
-        var pending = await context.OutboxMessages
-            .AsNoTracking()
-            .Where(message => message.Status == OutboxStatuses.Pending)
-            .Select(message => new { message.Id, message.OrganizationId, message.CreatedAt, message.NextAttemptAt })
-            .ToListAsync(cancellationToken);
+        // Card F-039 added a second kind to this table; each consumer reads only its own rows, which is why the
+        // kind column exists. Without this filter a notification row would be dispatched as a chain link and settle
+        // as "the link no longer exists".
+        //
+        // Deliberately SystemQueryAsync: a background pass has no request tenant, so the ordinary query filter would
+        // answer the empty set (`CurrentOrganizationId` is Guid.Empty here) and the hosted dispatcher would never
+        // settle anything. The rows' own OrganizationId is what authorizes each pass below.
+        var pending = await context.SystemQueryAsync<OutboxMessage>(
+            message => message.Kind == OutboxKinds.DownstreamTrigger
+                && message.Status == OutboxStatuses.Pending,
+            cancellationToken);
 
         return
         [
@@ -177,9 +183,14 @@ public sealed class DownstreamTriggerService(
         tenantContext.OrganizationId = organizationId;
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var message = await context.OutboxMessages.SingleOrDefaultAsync(
-            candidate => candidate.Id == outboxId,
-            cancellationToken);
+
+        // The row lookup names the organization itself rather than trusting the tenant write above to have reached
+        // this context: a background pass must work a row it already selected.
+        var message = await context.OutboxMessages
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == outboxId && candidate.OrganizationId == organizationId,
+                cancellationToken);
         if (message is null || !string.Equals(message.Status, OutboxStatuses.Pending, StringComparison.Ordinal))
         {
             // Another pass settled it, or it is gone. Nothing to do, and nothing to undo.

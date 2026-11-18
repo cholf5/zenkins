@@ -32,8 +32,32 @@ public sealed class OutboxMessage : ITenantOwned
     /// <summary>The upstream run whose terminal state owes the trigger. Cascade-deleted with it.</summary>
     public Guid UpstreamRunId { get; set; }
 
-    /// <summary>The link that produced the obligation (its policy and target are re-read at dispatch time).</summary>
-    public Guid LinkId { get; set; }
+    /// <summary>
+    /// Card F-026: the chain link that produced the obligation (its policy and target are re-read at dispatch time).
+    /// Null for a <see cref="OutboxKinds.CompletionNotification"/> row, which names an endpoint instead - exactly one
+    /// of the two is set, by kind.
+    /// </summary>
+    public Guid? LinkId { get; set; }
+
+    /// <summary>
+    /// Card F-039: the notification endpoint this obligation is owed to. Cascade-deleted with it (an endpoint that
+    /// was removed owes nothing), and null for a chain row.
+    /// </summary>
+    public Guid? NotificationEndpointId { get; set; }
+
+    /// <summary>
+    /// Card F-039: the event this delivery carries (<see cref="NotificationEvents.Derived"/>), decided where the
+    /// terminal state was, not at dispatch time - the previous run can be trimmed by retention (F-038) in between,
+    /// and a recovery decision that changes after the fact would be a different notification.
+    /// </summary>
+    public string? NotificationEvent { get; set; }
+
+    /// <summary>
+    /// Card F-039: the ciphertext of the secret in force when this obligation was created. A pending delivery is
+    /// signed with <b>this</b>, so rotating the endpoint's secret never makes an already-owed delivery unverifiable
+    /// by the receiver that still holds the old one.
+    /// </summary>
+    public string? NotificationSecretCiphertext { get; set; }
 
     /// <summary>One of <see cref="OutboxStatuses"/>.</summary>
     public string Status { get; set; } = OutboxStatuses.Pending;
@@ -74,13 +98,20 @@ public static class OutboxStatuses
 }
 
 /// <summary>
-/// The kinds of obligation the outbox carries (card F-026). A closed set: a dispatcher that met an unknown kind
-/// would have to guess what to do with it.
+/// The kinds of obligation the outbox carries (cards F-026 and F-039). A closed set: a dispatcher that met an
+/// unknown kind would have to guess what to do with it.
+/// <para>
+/// <b>One table, two dispatchers.</b> Each kind has its own consumer, and each consumer reads only its own kind -
+/// which is why the column exists at all (F-026's doc said so, and F-039 is the card it was waiting for).
+/// </para>
 /// </summary>
 public static class OutboxKinds
 {
     /// <summary>An upstream run's terminal state owes one downstream trigger.</summary>
     public const string DownstreamTrigger = "downstream-trigger";
+
+    /// <summary>A run's terminal state owes one signed notification to one endpoint (card F-039).</summary>
+    public const string CompletionNotification = "completion-notification";
 }
 
 /// <summary>

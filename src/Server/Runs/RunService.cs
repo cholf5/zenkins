@@ -6,6 +6,7 @@ using Zenkins.Server.Branches;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Notifications;
 using Zenkins.Server.Environments;
 using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
@@ -3556,6 +3557,11 @@ public sealed class RunService(
             // the dispatcher settles it after commit (or on the next start).
             await DownstreamTriggers.StageAsync(context, run, target, now, cancellationToken);
 
+            // Card F-039: the completion notifications this terminal state owes ride the same outbox and the same
+            // unit of work - the event (success/recovered/failed) is decided here, where the previous run is still
+            // the previous run.
+            await CompletionNotifications.StageAsync(context, run, target, cancellationToken);
+
             await context.SaveChangesAsync(cancellationToken);
 
             // F-023: `pipeline-missing` is the worker's proof that this branch's checkout has no
@@ -3932,6 +3938,13 @@ public sealed class RunService(
                 : (BuildRunStatus.Canceled, run.CancelReason ?? RunCancelReasons.CanceledByUser);
 
             var now = DateTimeOffset.UtcNow;
+
+            // Card F-039: a timeout is a failure, so it owes a notification - and it owes it with the same guarantee
+            // as a completed run. The CAS below writes through ExecuteUpdate, so the staging needs an explicit
+            // transaction to share: the terminal status and its obligation commit together or not at all.
+            await using var terminalTransaction =
+                await context.Database.BeginTransactionAsync(cancellationToken);
+
             var reported = await context.TryReportCanceledBuildRunAsync(
                 runId,
                 worker.Id,
@@ -3942,8 +3955,13 @@ public sealed class RunService(
             if (reported != 1)
             {
                 // The run left Running between the read and the CAS (a Lost transition won).
+                await terminalTransaction.RollbackAsync(cancellationToken);
                 return RunReportResult.Conflict(RunErrorCodes.InvalidTransition);
             }
+
+            await CompletionNotifications.StageAsync(context, run, target, cancellationToken);
+            await context.SaveChangesAsync(cancellationToken);
+            await terminalTransaction.CommitAsync(cancellationToken);
 
             // Terminal: flush the ingest tail and evict the run's buffer (the same completed-path
             // discipline F-008 established; closes the Canceled-run gap its log recorded).

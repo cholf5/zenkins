@@ -805,6 +805,70 @@ namespace Zenkins.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.NotificationEndpoint", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("AllowInsecureHttp")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Events")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("LastDeliveryAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("LastOutcome")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SecretCiphertext")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("SecretRotatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId");
+
+                    b.ToTable("NotificationEndpoints");
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Organization", b =>
                 {
                     b.Property<Guid>("Id")
@@ -924,11 +988,21 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
-                    b.Property<Guid>("LinkId")
+                    b.Property<Guid?>("LinkId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("NextAttemptAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("NotificationEndpointId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("NotificationEvent")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("NotificationSecretCiphertext")
+                        .HasColumnType("text");
 
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
@@ -954,7 +1028,11 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("NotificationEndpointId");
+
                     b.HasIndex("UpstreamRunId");
+
+                    b.HasIndex("Kind", "Status");
 
                     b.HasIndex("Status", "NextAttemptAt");
 
@@ -1843,6 +1921,17 @@ namespace Zenkins.Server.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.NotificationEndpoint", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.OrganizationEnvironmentVariable", b =>
                 {
                     b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
@@ -1871,6 +1960,11 @@ namespace Zenkins.Server.Data.Migrations
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.OutboxMessage", b =>
                 {
+                    b.HasOne("Zenkins.Server.Data.Entities.NotificationEndpoint", null)
+                        .WithMany()
+                        .HasForeignKey("NotificationEndpointId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
                     b.HasOne("Zenkins.Server.Data.Entities.BuildRun", null)
                         .WithMany()
                         .HasForeignKey("UpstreamRunId")

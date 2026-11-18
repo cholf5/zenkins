@@ -5,6 +5,8 @@
 @using Zenkins.Server.Secrets
 @using Zenkins.Shared.Projects
 @using Zenkins.Server.Webhooks
+@using Zenkins.Server.Notifications
+@using Zenkins.Shared.Notifications
 @using Zenkins.Server.Schedules
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
@@ -15,6 +17,7 @@
 @inject GitCredentialService CredentialService
 @inject ProjectLinkService LinkService
 @inject RetentionService RetentionGate
+@inject NotificationService Notifications
 @inject NavigationManager Navigation
 
 @* D-003: the Settings tab - everything that configures the project. The webhook cards moved here
@@ -1115,6 +1118,230 @@
             </BbCardContent>
         </BbCard>
 
+        @* Card F-039: the outbound completion notifications. The card states the one thing an operator has to
+           trust - a notification is owed the moment the run ends, and the run never waits for the receiver - and then
+           the per-endpoint facts: what it subscribes to, whether it is on, and what happened to the last delivery. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Notifications</BbCardTitle>
+                <BbCardDescription>
+                    When a run ends, this project can POST a signed JSON body to one or more endpoints - on
+                    <code>failed</code>, on <code>success</code>, and on <code>recovered</code> (a success whose previous
+                    run on the same branch failed). The obligation is written in the same transaction as the run's
+                    terminal status and delivered afterwards, so a receiver that is down never delays a build and a
+                    Server restart never loses a notification. Every request carries
+                    <code>X-Zenkins-Signature: sha256=…</code> (HMAC-SHA256 over the body, the same scheme inbound
+                    webhooks use) and a stable <code>X-Zenkins-Delivery</code> id for deduplication.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <div id="project-notifications" class="bb:space-y-4">
+                    @if (NotificationMessage is { } notificationError)
+                    {
+                        <div id="notification-error" role="alert"
+                             class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                            <p>@notificationError</p>
+                        </div>
+                    }
+
+                    @if (NotificationTestFailure is { } testFailure)
+                    {
+                        <div id="notification-test-failure" role="alert"
+                             class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                            <p class="bb:font-medium">The test delivery did not arrive.</p>
+                            <p class="bb:break-all">@testFailure</p>
+                        </div>
+                    }
+
+                    @if (_notificationEndpoints.Count == 0)
+                    {
+                        <p id="project-notifications-empty" class="bb:text-sm bb:text-muted-foreground">
+                            No endpoints yet: this project tells nobody when a run ends.
+                        </p>
+                    }
+                    else
+                    {
+                        <div class="bb:overflow-x-auto">
+                            <table class="bb:w-full bb:text-sm">
+                                <thead>
+                                    <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Receiver</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Events</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">State</th>
+                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">Last delivery</th>
+                                        <th class="bb:py-2 bb:font-medium">Manage</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var endpoint in _notificationEndpoints)
+                                    {
+                                        <tr class="bb:border-b bb:align-top" data-notification-endpoint="@endpoint.Id">
+                                            <td class="bb:max-w-xs bb:py-3 bb:pr-4">
+                                                <span class="bb:break-all">@endpoint.Url</span>
+                                                @if (endpoint.AllowInsecureHttp)
+                                                {
+                                                    <p class="bb:mt-1 bb:text-xs bb:text-destructive">
+                                                        Plain http: the body and the signature travel in the clear.
+                                                    </p>
+                                                }
+                                            </td>
+                                            <td class="bb:py-3 bb:pr-4" data-notification-events="@endpoint.Events">@endpoint.Events</td>
+                                            <td class="bb:py-3 bb:pr-4" data-notification-state="@(endpoint.Enabled ? "enabled" : "disabled")">
+                                                @(endpoint.Enabled ? "Enabled" : "Disabled")
+                                            </td>
+                                            <td class="bb:py-3 bb:pr-4" data-notification-last="@endpoint.LastOutcome">
+                                                @if (endpoint.LastDeliveryAt is { } deliveredAt)
+                                                {
+                                                    <p>@deliveredAt.ToString("yyyy-MM-dd HH:mm") UTC · @(endpoint.LastOutcome ?? "-")</p>
+                                                    @if (!string.IsNullOrWhiteSpace(endpoint.LastError))
+                                                    {
+                                                        <p class="bb:mt-1 bb:max-w-xs bb:break-all bb:text-xs bb:text-destructive">@endpoint.LastError</p>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <span class="bb:text-muted-foreground">Never delivered</span>
+                                                }
+                                            </td>
+                                            <td class="bb:py-3">
+                                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                                    <form method="post"
+                                                          action="@($"/projects/{_project.Id}/notifications/{endpoint.Id}/{(endpoint.Enabled ? "disable" : "enable")}")"
+                                                          data-zenkins-antiforgery>
+                                                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">
+                                                            @(endpoint.Enabled ? "Disable" : "Enable")
+                                                        </BbButton>
+                                                    </form>
+                                                    <form method="post"
+                                                          action="@($"/projects/{_project.Id}/notifications/{endpoint.Id}/test")"
+                                                          data-zenkins-antiforgery>
+                                                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Send test</BbButton>
+                                                    </form>
+                                                    <form method="post"
+                                                          action="@($"/projects/{_project.Id}/notifications/{endpoint.Id}/delete")"
+                                                          data-zenkins-antiforgery>
+                                                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete</BbButton>
+                                                    </form>
+                                                </div>
+                                                @* Rotation replaces the secret future deliveries are signed with. A delivery
+                                                   already owed keeps the one it was created under, so a receiver that has
+                                                   not been updated yet can still verify what is in flight. *@
+                                                <form method="post"
+                                                      action="@($"/projects/{_project.Id}/notifications/{endpoint.Id}/rotate")"
+                                                      data-zenkins-antiforgery
+                                                      class="bb:mt-2 bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                                    <label for="notification-rotate-@endpoint.Id" class="bb:sr-only">New secret for @endpoint.Url</label>
+                                                    <input id="notification-rotate-@endpoint.Id"
+                                                           name="Secret"
+                                                           type="password"
+                                                           required
+                                                           minlength="@NotificationLimits.MinSecretLength"
+                                                           maxlength="@NotificationLimits.MaxSecretLength"
+                                                           autocomplete="new-password"
+                                                           spellcheck="false"
+                                                           class="bb:h-8 bb:w-40 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-xs"
+                                                           placeholder="New secret" />
+                                                    <button type="submit"
+                                                            class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs bb:hover:bg-accent">
+                                                        Rotate secret
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+
+                    @if (!_canManageCredentials)
+                    {
+                        @* The URL is a place the Server will POST to, so pointing it somewhere is an Owner's decision
+                           (the same stance as git credentials). A Member can read the list. *@
+                        <p class="bb:text-sm bb:text-muted-foreground">
+                            Notification endpoints are configured by organization Owners; a Member can read the list.
+                        </p>
+                    }
+                    else
+                    {
+                        <form id="notification-create-form" method="post"
+                              action="@($"/projects/{_project.Id}/notifications/create")" data-zenkins-antiforgery>
+                            <div class="bb:space-y-4">
+                                <div>
+                                    <label for="notification-url" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Receiver URL</label>
+                                    <input id="notification-url"
+                                           name="Url"
+                                           type="url"
+                                           required
+                                           maxlength="@NotificationLimits.MaxUrlLength"
+                                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
+                                           placeholder="https://chat.example.test/zenkins" />
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        <code>https</code> unless this deployment uses a plain-<code>http</code>
+                                        receiver and the opt-in below says so. Redirects are never followed.
+                                    </p>
+                                </div>
+                                <div>
+                                    <label for="notification-secret" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Shared secret</label>
+                                    <input id="notification-secret"
+                                           name="Secret"
+                                           type="password"
+                                           required
+                                           minlength="@NotificationLimits.MinSecretLength"
+                                           maxlength="@NotificationLimits.MaxSecretLength"
+                                           autocomplete="new-password"
+                                           spellcheck="false"
+                                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                           placeholder="the receiver verifies the HMAC with this" />
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        Stored encrypted and never shown again. The receiver computes
+                                        <code>sha256=HMAC-SHA256(secret, body)</code> and compares it with the
+                                        <code>X-Zenkins-Signature</code> header.
+                                    </p>
+                                </div>
+                                <div class="bb:space-y-2">
+                                    <p class="bb:text-sm bb:font-medium">Events</p>
+                                    @foreach (var notificationEvent in NotificationEvents.Subscribable)
+                                    {
+                                        <label for="notification-event-@notificationEvent" class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                                            <input id="notification-event-@notificationEvent"
+                                                   type="checkbox"
+                                                   name="Events"
+                                                   value="@notificationEvent"
+                                                   checked="@(notificationEvent != NotificationEvents.All)" />
+                                            <span>
+                                                @notificationEvent@(notificationEvent == NotificationEvents.Success
+                                                    ? " (includes recovered: a recovery is a success)"
+                                                    : notificationEvent == NotificationEvents.All
+                                                        ? " (every event)"
+                                                        : string.Empty)
+                                            </span>
+                                        </label>
+                                    }
+                                </div>
+                                <div class="bb:space-y-2">
+                                    <label for="notification-enabled" class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                                        <input id="notification-enabled" type="checkbox" name="Enabled" value="true" checked />
+                                        <input type="hidden" name="Enabled" value="false" />
+                                        <span>Enabled: notify this endpoint about new terminal states.</span>
+                                    </label>
+                                    <label for="notification-allow-http" class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                                        <input id="notification-allow-http" type="checkbox" name="AllowInsecureHttp" value="true" />
+                                        <input type="hidden" name="AllowInsecureHttp" value="false" />
+                                        <span class="bb:text-destructive">
+                                            Allow plain http: the payload (branch, commit) and the signature travel
+                                            unencrypted.
+                                        </span>
+                                    </label>
+                                </div>
+                                <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Add endpoint</BbButton>
+                            </div>
+                        </form>
+                    }
+                </div>
+            </BbCardContent>
+        </BbCard>
+
         @if (!_canManageCredentials)
         {
             @* Git credentials are managed like secrets (card D-003): Owner-only writes, and a Member
@@ -1469,6 +1696,9 @@
     private IReadOnlyList<WebhookView> _webhooks = [];
     private IReadOnlyList<GitCredentialListItem> _credentials = [];
 
+    /// <summary>Card F-039: the project's notification endpoints, as the card lists them (never the secret).</summary>
+    private IReadOnlyList<NotificationEndpointView> _notificationEndpoints = [];
+
     /// <summary>
     /// Card F-038: the saved policy evaluated against the project's current history - the card's counts, and the
     /// number the next sweep would delete. Null only when the project could not be read.
@@ -1528,6 +1758,17 @@
 
     private string? SubmittedTimeZone => PreviewZone;
 
+    /// <summary>Card F-039: the stable code a refused notification form redirected back with.</summary>
+    [SupplyParameterFromQuery(Name = "notifyError")]
+    private string? NotificationErrorCode { get; set; }
+
+    /// <summary>Card F-039: <c>failed</c> when a test delivery did not arrive, with the receiver's words beside it.</summary>
+    [SupplyParameterFromQuery(Name = "notifyTest")]
+    private string? NotificationTestOutcome { get; set; }
+
+    [SupplyParameterFromQuery(Name = "notifyDetail")]
+    private string? NotificationTestDetail { get; set; }
+
     /// <summary>Card F-038: the stable code a refused retention save redirected back with.</summary>
     [SupplyParameterFromQuery(Name = "retentionError")]
     private string? RetentionErrorCode { get; set; }
@@ -1553,6 +1794,15 @@
 
     [SupplyParameterFromQuery(Name = "credentialKind")]
     private string? SubmittedCredentialKind { get; set; }
+
+    /// <summary>Card F-039: the refusal a notification form redirected back with, in words.</summary>
+    private string? NotificationMessage => NotificationErrorCodes.MessageFor(NotificationErrorCode);
+
+    /// <summary>Card F-039: why the last test delivery failed, as the receiver (or the transport) said it.</summary>
+    private string? NotificationTestFailure =>
+        string.Equals(NotificationTestOutcome, "failed", StringComparison.Ordinal)
+            ? NotificationTestDetail ?? "the receiver did not accept it"
+            : null;
 
     /// <summary>Card F-038: the refusal a retention save redirected back with, in words.</summary>
     private string? RetentionMessage => RetentionErrorCodes.MessageFor(RetentionErrorCode);
@@ -1633,6 +1883,17 @@
         "project-enabled" =>
             "The project is enabled. Triggers queue runs again; canceled runs stay canceled and nothing was replayed.",
         "limits-saved" => "The project's limits were saved.",
+        // F-039's notification endpoints.
+        "notification-added" => "The endpoint was added. The next terminal state notifies it.",
+        "notification-deleted" => "The endpoint was removed, together with any delivery it still owed.",
+        "notification-enabled" => "The endpoint is enabled: new terminal states notify it.",
+        "notification-disabled" =>
+            "The endpoint is disabled. A delivery it already owed is still attempted; nothing new is created.",
+        "notification-rotated" =>
+            "The secret was rotated. Deliveries already owed are signed with the secret they were created under, so a "
+            + "receiver that has not been updated yet can still verify them.",
+        "notification-test-delivered" =>
+            "The test delivery was accepted by the receiver. The endpoint's last-delivery column now says so.",
         // F-038's retention policy.
         "retention-saved" =>
             "The retention policy was saved. The next sweep applies it; nothing was deleted now.",
@@ -1743,6 +2004,9 @@
                 new RetentionPolicy(ParseOptionalCount(PreviewKeep), ParseOptionalCount(PreviewDays)),
                 Clock.GetUtcNow());
         }
+
+        // F-039: the notification endpoints (read for every member; writes are Owner-only in the service).
+        _notificationEndpoints = await Notifications.ListForProjectAsync(ProjectId) ?? [];
 
         // F-017: the project's webhooks (any member of the organization may manage them). The
         // service re-checks membership; a failure here just leaves the list empty.

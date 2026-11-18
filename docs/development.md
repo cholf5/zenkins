@@ -343,7 +343,7 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1628 fast / 1661 everything.** The fast figure is a counted
+**The current baseline is counted, and it is 1655 fast / 1688 everything.** The fast figure is a counted
 run of the tree that carries Q-023, measured with `--list-tests` on the filter in the table below (which now
 also excludes `Category=Load`); everything is that count plus the five slow categories (23), `Category=Load`
 (1) and Postgres (9), all counted in the same pass. Every per-card note in this file quotes the counts of
@@ -466,7 +466,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1628 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1655 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -476,7 +476,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **everything** (1661 on the tree that carries F-031, by the arithmetic above) but
+filter runs **everything** (1688 on the tree that carries F-039, by the arithmetic above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only
@@ -764,6 +764,26 @@ fail early; a worker's console app reads them as `Artifacts__MaxFileBytes`). An 
 is deleted, and card F-038's per-project retention policy (PRD §3.5's "构建保留策略与固定") is what deletes
 runs: the rows first, then this store directory, with `Artifacts:SweepIntervalSeconds`' sweeper closing the gap
 when a delete was interrupted between the two.
+
+### Completion notifications (card F-039)
+
+A terminal run stages one outbox row per subscribed endpoint, in the same transaction as the terminal status; a
+background dispatcher settles them. The knobs are in [`src/Server/appsettings.json`](../src/Server/appsettings.json)
+and the receiver contract is [`docs/notifications.md`](notifications.md):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Notifications:TimeoutSeconds` | `10` | One HTTP request's budget. |
+| `Notifications:MaxAttempts` | `5` | Attempts before a delivery settles as `failed`. |
+| `Notifications:BackoffSeconds` | `5` | Linear backoff base (`0` retries immediately). |
+| `Notifications:MaxResponseBytes` | `4096` | How much of the receiver's answer is read. |
+| `Notifications:PublicBaseUrl` | unset | Absolute links in the payload; unset means the relative path. |
+| `Notifications:PollIntervalSeconds` | `2` | How often the dispatcher looks. |
+
+**Two kinds, one outbox.** `OutboxMessages.Kind` is a closed vocabulary (`downstream-trigger`,
+`completion-notification`) and each consumer reads only its own kind. A background pass has no request tenant, so
+both consumers read their due rows through `SystemQueryAsync` (the tenant filter would answer the empty set) and
+each row's own `OrganizationId` authorizes the rest of the pass.
 
 ### Build retention (the sweeper's knob)
 

@@ -431,6 +431,24 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     // ---------------------------------------------------------------------------------------------
+    // F-039: the outbound notification endpoints
+
+    [Fact]
+    public Task A_cross_tenant_notification_endpoint_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<NotificationEndpoint>(
+            _fixture,
+            () => new NotificationEndpoint
+            {
+                // Only the tenant field is wrong: the project, the URL and the subscriptions are legal.
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                Url = "https://receiver.example.test/hook",
+                SecretCiphertext = "not-a-real-ciphertext",
+                Events = "all",
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            },
+            CancellationToken);
+
+    // ---------------------------------------------------------------------------------------------
     // F-026: the chain edges and the outbox obligation they are delivered through
 
     [Fact]

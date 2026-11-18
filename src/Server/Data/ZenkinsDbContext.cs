@@ -13,6 +13,7 @@ using Zenkins.Server.Artifacts;
 using Zenkins.Server.Branches;
 using Zenkins.Server.Environments;
 using Zenkins.Server.Folders;
+using Zenkins.Server.Notifications;
 using Zenkins.Server.Schedules;
 using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
@@ -120,8 +121,12 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Card F-026's upstream/downstream edges (tenant-owned).</summary>
     public DbSet<ProjectLink> ProjectLinks => Set<ProjectLink>();
 
-    /// <summary>Card F-026's outbox: the downstream triggers a terminal run owes, settled by the dispatcher.</summary>
+    /// <summary>Card F-026's outbox: the downstream triggers (and, since F-039, the completion notifications) a
+    /// terminal run owes, settled by their own dispatcher.</summary>
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+
+    /// <summary>Card F-039: the outbound completion-notification endpoints of a project.</summary>
+    public DbSet<NotificationEndpoint> NotificationEndpoints => Set<NotificationEndpoint>();
 
     /// <summary>Plain (unencrypted) organization environment variables (F-034): the layer every
     /// project's steps receive, snapshotted onto each run at trigger time.</summary>
@@ -1332,6 +1337,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // F-038: the two nullable retention rules on Project and BuildRun.Pinned. Three columns, no table,
         // and the rules live next to the feature that reads them (src/Server/Runs).
         modelBuilder.ConfigureRetention();
+
+        // F-039: the notification endpoints and the three nullable columns that let the F-026 outbox carry a second
+        // kind of obligation. Configured next to the feature, like every other card above.
+        modelBuilder.ConfigureNotifications(this);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

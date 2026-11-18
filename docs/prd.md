@@ -1190,6 +1190,33 @@ timeoutMinutes、parameters，校验规则与错误码与表单完全一致。�
   `UPSTREAM_BRANCH`、`UPSTREAM_COMMIT`（在上游 Run 的终态上读取，不落到下游行里——上游被删就没有这些变量，
   而不是编造值）。
 
+### 3.16 完成通知（Outbound Notifications）
+
+项目可以在一台 Run 结束时，向一个或多个端点 POST 一份**签名 JSON**。它是「构建挂了只有打开网页才知道」的反面：
+聊天桥、审计日志、值班机器人都是消费方（邮件不在范围内——那需要 SMTP 可投递性与滥用治理，邮件桥可以消费这个
+webhook）。
+
+- **事件只有三个**：`failed`（Run 终态为 Failed）、`success`（Success 且同一项目同一分支的上一次终态不是失败）、
+  `recovered`（Success，且上一次终态是 `Failed`/`Lost`）。取消与丢失的 Run 不发通知；`Lost` 仍然算“红”，参与
+  下一次 recovered 的判定。**`recovered` 不是 `success` 上的一个字段**——“回到绿”正是人们真正盯着的那个事件。
+- **订阅**：每个端点声明 `failed` / `success` / `recovered` / `all`。`success` 订阅同时匹配 `recovered`
+  （恢复就是一次成功，静默丢掉它会在最关键的时刻讲错故事）；`recovered` 只匹配恢复；`all` 全匹配。
+- **投递保证与 §3.14 同一条 outbox**：终态与“欠一次通知”的那一行在**同一个事务**里提交，提交后由派发器结算。
+  因此第三方掉线不影响构建，Server 在“Run 结束”与“通知发出”之间崩掉也不会丢——行在被真正发出前一直是
+  `pending`。至少一次投递；重复时 `X-Zenkins-Delivery` 不变，接收方按它去重。
+- **签名**：沿用 §3.9 入站 webhook 的同一套方案——`X-Zenkins-Signature: sha256=<hex>`，对**原始 body 字节**做
+  HMAC-SHA256（密钥是端点自己的共享密钥）。一次序列化、签名与发送用同一份字节，绝不重新序列化后再签。
+- **边界与退避**：`Notifications:MaxAttempts`（默认 5）次，线性退避 `Notifications:BackoffSeconds`（默认 5 秒
+  × 次数）；超时 `Notifications:TimeoutSeconds`（默认 10 秒）；重定向**不跟随**（3xx 即失败）；响应体只读 4 KiB
+  并只用于记录错误。用尽后结算为 `failed` 并在端点上留下最后错误——**不无限重试，也不会卡住**。
+- **密钥轮换**：轮换只影响**之后**创建的通知；已欠的投递带着它创建时的密钥快照发出，所以还没更新密钥的接收方
+  仍能验证在途的那几条。
+- **可见性**：设置页的 Notifications 卡片逐个端点显示启用状态、订阅的事件、最后一次投递时间、最后结果
+  （`delivered` / `retrying` / `failed`）与截断后的最后错误，并有「发送测试」动作（立即发送、回写结果）。
+  端点 URL 是 Owner 配置的可信值，但仍然禁跟随重定向、限读响应体：配置错误不能变成 SSRF 跳板。
+- **禁用项目照常通知**：§3.5 的刹车只停“新触发”，它已有的 Run 仍然是历史，仍然欠通知。
+- 契约细节（payload 字段、头部、验签示例、重试策略）见 [`docs/notifications.md`](../docs/notifications.md)。
+
 ## 4. UI 设计
 
 ### 4.1 设计原则

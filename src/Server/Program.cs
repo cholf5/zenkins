@@ -19,6 +19,7 @@ using Zenkins.Server.Environments;
 using Zenkins.Server.Folders;
 using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
+using Zenkins.Server.Notifications;
 using Zenkins.Server.Organizations;
 using Zenkins.Server.Probes;
 using Zenkins.Server.Projects;
@@ -96,6 +97,10 @@ builder.Services.AddZenkinsWebhooks();
 // F-027: the organization API (bearer tokens with scopes), its per-token budget, and the Owner-only
 // token-management forms.
 builder.Services.AddZenkinsApi();
+
+// F-039: the completion-notification endpoints, the signed sender and the outbox consumer that works a run's
+// terminal state off after commit.
+builder.Services.AddZenkinsNotifications();
 
 // F-012: the Data Protection key ring is data, not a machine default. It encrypts every stored
 // secret and mints the F-008 log-subscription tickets, so it is persisted next to the database and
@@ -287,6 +292,9 @@ app.MapDefinitionValidationEndpoints();
 
 // F-016: the worker artifact API (create/files/finalize) and the per-artifact download.
 app.MapArtifactEndpoints();
+
+// F-039: the settings tab's notification forms (create, toggle, rotate, delete, send test).
+app.MapNotificationEndpoints();
 
 // F-017: the anonymous, signature-authenticated delivery endpoint (POST /webhooks/{webhookId}) and the
 // cookie+antiforgery settings forms. The delivery route is deliberately outside the cookie-auth fallback,

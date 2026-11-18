@@ -529,6 +529,28 @@ public sealed class DownstreamTriggerTests
         Assert.DoesNotContain("data-chain-affected-downstream", noChainPage, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_hosted_dispatcher_settles_a_row_from_a_scope_with_no_tenant()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var upstreamProject = await host.SeedProjectAsync("hosted-upstream", "https://example.test/up.git");
+        var downstreamProject = await host.SeedProjectAsync("hosted-downstream", "https://example.test/down.git");
+        await LinkAsync(host, upstreamProject, downstreamProject);
+        var upstreamRun = await SeedRunAsync(host, upstreamProject, BuildRunStatus.Success, "hhh1111");
+        await StageAsync(host, upstreamRun, BuildRunStatus.Success);
+
+        // The production shape of the background pass: its own DI scope with NO request tenant. The candidate read
+        // has to go through the system scope (the ordinary query filter answers the empty set there), which is what
+        // makes the hosted dispatcher work at all - the fact exists because it silently settled nothing without it.
+        var settled = await host.Host.InScopeAsync(services => services
+            .GetRequiredService<DownstreamTriggerService>()
+            .DispatchPendingAsync(CancellationToken));
+
+        Assert.Equal(1, settled);
+        Assert.Equal(OutboxStatuses.Settled, Assert.Single(await ReadOutboxAsync(host)).Status);
+        Assert.Single(await ReadProjectRunsAsync(host, downstreamProject));
+    }
+
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
@@ -583,7 +605,11 @@ public sealed class DownstreamTriggerTests
                 [
                     .. entries
                         .Where(entry => entry.State == EntityState.Added && entry.Entity is OutboxMessage)
-                        .Select(entry => ((OutboxMessage)entry.Entity).LinkId),
+                        // F-039 generalised the outbox to carry notification messages too, so a link is optional;
+                        // this assertion is about the obligations a chain stages, which always name their edge.
+                        .Select(entry => ((OutboxMessage)entry.Entity).LinkId)
+                        .Where(linkId => linkId is not null)
+                        .Select(linkId => linkId!.Value),
                 ]));
         }
 
