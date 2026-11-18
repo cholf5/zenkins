@@ -30,10 +30,16 @@ function to_ms(v,   total, parts, n, i, p) {
     }
     return total
 }
-/^[ \t]*(passed|failed|skipped)[ \t]+/ {
+# The verdict word is localised by Microsoft.Testing.Platform (zh-CN prints 已通过/失败/已跳过), so the
+# pattern accepts both spellings; anything else that ends in a duration is still timed, and classified as
+# passed unless it says otherwise, so a third language degrades to "timed" rather than to "no data".
+/^[ \t]*([A-Za-z]+|已通过|失败|已跳过|跳过)[ \t]+.*\([0-9]+(ms|s|m)( [0-9]+(ms|s|m))*\)$/ {
     status = $1
+    if (status == "failed" || status == "失败") status = "failed"
+    else if (status == "skipped" || status == "已跳过" || status == "跳过") status = "skipped"
+    else status = "passed"
     line = $0
-    sub(/^[ \t]*(passed|failed|skipped)[ \t]+/, "", line)
+    sub(/^[ \t]*[^ \t]+[ \t]+/, "", line)
     if (match(line, / \([0-9]+(ms|s|m)( [0-9]+(ms|s|m))*\)$/)) {
         dur  = substr(line, RSTART + 2, RLENGTH - 3)
         name = substr(line, 1, RSTART - 1)
@@ -59,8 +65,14 @@ failed=$(awk -F'\t' '$2 == "failed"' "$work" | wc -l | tr -d ' ')
 
 echo "SUMMARY"
 echo "  tests with timings : $tests (failed $failed)"
-grep -E '^ +(total|succeeded|failed|skipped|duration):' "$log" |
-    sed 's/^ */  run summary        : /' || true
+summary_lines=$(grep -E '^[ \t]*(total|succeeded|failed|skipped|duration|总计|通过|失败|已跳过|跳过|持续时间):' "$log" || true)
+if [[ -n $summary_lines ]]; then
+    # Keep the runner's own wording (it may be English or the host's locale); the parsed counts below are
+    # authoritative because they come from the per-test lines this script actually understood.
+    sed 's/^[ \t]*/  run summary        : /' <<<"$summary_lines"
+else
+    echo "  run summary        : the runner did not print a summary block this script recognises"
+fi
 awk -v ms="$total_ms" 'BEGIN { printf "  summed test time   : %.1f s (the denominator for the shares below)\n", ms / 1000 }'
 
 if (( failed > 0 )); then
