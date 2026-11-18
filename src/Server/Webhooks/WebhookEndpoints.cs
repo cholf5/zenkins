@@ -119,8 +119,9 @@ public static class WebhookEndpoints
                 // remembered subset: `queued`, `ignored:branch`, `ignored:not-branch`, `ignored:delete`,
                 // `ignored:no-repository`, `ignored:branch-too-long`, `ignored:duplicate` (card F-025: a
                 // trigger already queued a run for this commit), `awaiting-observation`,
-                // `no-pipeline`, `project-disabled` and `queue-full` (cards F-028/F-029: the project's
-                // own gate refused the push - recorded, and still a 2xx) are the members of
+                // `no-pipeline`, `refused:requirement` (card F-033: the push's stored requirement can never
+                // hold, so nothing was queued), `project-disabled` and `queue-full` (cards F-028/F-029: the
+                // project's own gate refused the push - recorded, and still a 2xx) are the members of
                 // `WebhookOutcomes.All`; `duplicate` is the status a replay answers with, and the record
                 // still carries the original outcome and, when it queued one, the original run id. A fact
                 // holds this list equal to the set, so the sentence cannot fall behind it.

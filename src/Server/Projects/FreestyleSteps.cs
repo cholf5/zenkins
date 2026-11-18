@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Zenkins.Shared.Pipelines;
+using Zenkins.Shared.Workers;
 
 namespace Zenkins.Server.Projects;
 
@@ -32,7 +33,8 @@ public sealed record FreestyleStepDraft(
     bool ContinueOnError,
     string? ArtifactsText,
     string? TimeoutSeconds = null,
-    string? Retry = null);
+    string? Retry = null,
+    string? RunsOn = null);
 
 /// <summary>The steps editor's form payload: the drafts, serialized as JSON by the page.</summary>
 public sealed record FreestyleStepsInput(string? StepsJson);
@@ -107,6 +109,28 @@ public static class FreestyleSteps
                 return null;
             }
 
+            // Card F-033: one parser for the requirement, whatever the editor's field holds - the same
+            // WorkerRequirement the Lua reader and the claim loop use, never a second splitter here. A
+            // blank field means "no requirement", which is not the empty expression.
+            var runsOn = draft.RunsOn?.Trim();
+            WorkerRequirement? requirement = null;
+            if (!string.IsNullOrWhiteSpace(runsOn))
+            {
+                if (!WorkerRequirement.TryParse(runsOn, out var parsed, out var parseError))
+                {
+                    error = $"{path}.runsOn {parseError}";
+                    return null;
+                }
+
+                if (parsed.IsContradiction)
+                {
+                    error = $"{path}.runsOn can never be satisfied: '{runsOn}'.";
+                    return null;
+                }
+
+                requirement = parsed;
+            }
+
             steps[i] = new PipelineStep(
                 draft.Name?.Trim() ?? string.Empty,
                 Script: draft.Script ?? string.Empty,
@@ -114,7 +138,9 @@ public static class FreestyleSteps
                 ContinueOnError: draft.ContinueOnError,
                 Artifacts: artifacts,
                 TimeoutSeconds: timeoutSeconds,
-                Retry: retry);
+                Retry: retry,
+                RunsOn: string.IsNullOrWhiteSpace(runsOn) ? null : runsOn,
+                Requirement: requirement?.StorageForm);
 
             // The Server-side capture (D-006's semantics): names only, never values - scanned from the
             // same fields the Worker will substitute (the script text and the step's env values).
@@ -126,6 +152,16 @@ public static class FreestyleSteps
                     secretNames.AddRange(StepReference.SecretNamesIn(value));
                 }
             }
+        }
+
+        // Card F-033: the same cross-step rule the Lua reader applies, at the one place a Freestyle definition
+        // is built - a run executes on one Worker, so two steps whose requirements can never hold together are
+        // refused here, by step path, instead of becoming a run that waits for a machine that cannot exist.
+        var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(steps);
+        if (requirementError is not null)
+        {
+            error = requirementError;
+            return null;
         }
 
         var spec = new PipelineSpec(

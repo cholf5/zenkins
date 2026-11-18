@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using Zenkins.Shared.Workers;
+
 namespace Zenkins.Shared.Pipelines;
 
 /// <summary>
@@ -72,8 +74,18 @@ public sealed record PipelineStep(
     PipelineCondition? When = null,
     string[]? Artifacts = null,
     int? TimeoutSeconds = null,
-    int? Retry = null)
+    int? Retry = null,
+    string? RunsOn = null,
+    string? Requirement = null)
 {
+    /// <summary>
+    /// Card F-033: what this step needs from the Worker, as the author wrote it (<c>"linux &amp;&amp; arm64"</c> or
+    /// <c>"linux,arm64"</c>), kept for the page. <see cref="Requirement"/> is the same thing normalized to DNF,
+    /// which is what the run's union and the claim loop read; both are null when the step asks for nothing.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasWorkerRequirement => !string.IsNullOrWhiteSpace(Requirement);
+
     /// <summary>
     /// Whether this step declares its own execution-time limit (card F-032). The limit itself is
     /// <see cref="TimeoutSeconds"/>; an absent value means the step has none of its own and is bounded only
@@ -223,6 +235,77 @@ public static class PipelineSpecSchema
     /// loop, and the executor's attempt loop must stay bounded.
     /// </summary>
     public const int MaxStepRetry = 5;
+
+    /// <summary>
+    /// Card F-033: the requirement a run needs is the union of its steps' <c>runs_on</c>. Two steps that cannot
+    /// share one Worker are a definition mistake - a run would wait for a machine that does not exist - so this
+    /// is checked where the definition is read, and the message names <b>both steps and the atoms that clash</b>
+    /// (<c>pipeline.steps[1] asks for windows, pipeline.steps[2] asks for linux</c>).
+    /// <para>
+    /// "Cannot share one Worker" is judged by the requirement algebra, not by a list of exclusive labels: it is
+    /// the case where the union of two steps' requirements is a contradiction (<c>linux</c> and <c>!linux</c>, or
+    /// the same atom both ways). Whether a real machine carries two labels at once is the tag catalogue's
+    /// question, asked at claim time; a definition is refused only for what can never hold.
+    /// </para>
+    /// </summary>
+    public static string? ValidateWorkerRequirements(IReadOnlyList<PipelineStep> steps)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+
+        var resolved = new List<(string Path, WorkerRequirement Requirement)>();
+        for (var index = 0; index < steps.Count; index++)
+        {
+            var step = steps[index];
+            var path = $"pipeline.steps[{index + 1}]";
+
+            WorkerRequirement requirement;
+            if (!string.IsNullOrWhiteSpace(step.Requirement))
+            {
+                // A frozen spec carries the normalized form; if it does not parse, the row is corrupt and says so
+                // rather than being silently read as "no requirement".
+                if (!WorkerRequirement.TryParse(step.Requirement, out requirement, out var parseError))
+                {
+                    return $"{path}.runs_on {parseError}";
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(step.RunsOn))
+            {
+                if (!WorkerRequirement.TryParse(step.RunsOn, out requirement, out var parseError))
+                {
+                    return $"{path}.runs_on {parseError}";
+                }
+            }
+            else
+            {
+                continue;
+            }
+
+            // Pairwise: only the pair that actually clashes is named, which is what an author needs to fix.
+            foreach (var (earlierPath, earlier) in resolved)
+            {
+                var union = earlier.And(requirement);
+                if (union is null)
+                {
+                    return $"{earlierPath} and {path} need more than {WorkerRequirement.MaxDisjuncts} "
+                        + "alternatives together; simplify one of them.";
+                }
+
+                if (union.IsContradiction)
+                {
+                    // The reason, not just the verdict: the union has no alternative left that one Worker
+                    // could satisfy, and the atoms both steps name are what an author looks at first.
+                    return $"{earlierPath} asks for '{earlier.Expression}' and {path} asks for "
+                        + $"'{requirement.Expression}'; no single Worker can satisfy both - every combination "
+                        + "of their alternatives contradicts itself "
+                        + $"({string.Join(", ", earlier.Atoms.Intersect(requirement.Atoms, StringComparer.OrdinalIgnoreCase))}).";
+                }
+            }
+
+            resolved.Add((path, requirement));
+        }
+
+        return null;
+    }
 
     /// <summary>An upper bound on the argv length of one step.</summary>
     public const int MaxArguments = 64;
@@ -400,6 +483,13 @@ public static class PipelineSpecJson
         if (parsed.Steps.Length is 0 or > PipelineSpecSchema.MaxSteps)
         {
             error = $"pipeline.steps must hold 1..{PipelineSpecSchema.MaxSteps} steps.";
+            return false;
+        }
+
+        var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(parsed.Steps);
+        if (requirementError is not null)
+        {
+            error = requirementError;
             return false;
         }
 

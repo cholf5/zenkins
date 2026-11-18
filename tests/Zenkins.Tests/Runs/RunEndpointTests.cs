@@ -607,20 +607,31 @@ public sealed class RunEndpointTests
     }
 
     [Fact]
-    public async Task A_required_tag_no_worker_has_is_a_field_error_and_creates_no_run()
+    public async Task A_required_tag_no_worker_has_yet_is_queued_and_records_what_it_waits_on()
     {
+        // Card F-033 revised this contract (it used to refuse with tag-unknown). A tag nobody carries is
+        // ordinary operation - the matching Worker may register in ten minutes - and a refusal here would
+        // turn every poll/webhook/schedule trigger into a silent drop, because their caller has nobody to
+        // read an error. The run is created, keeps `windows` as its normalized requirement, and stays
+        // Queued until a worker carrying it claims it.
         using var host = await RunTestHost.CreateAsync();
         var (projectId, owner) = await host.CreateProjectAsync();
         var organizationId = await host.OrganizationIdAsync();
-        await host.RegisterWorkerAsync(name: "agent", tags: "linux");
+        var (workerToken, _) = await host.RegisterWorkerAsync(name: "agent", tags: "linux");
 
         var response = await RunTestHost.StartRunAsync(owner, projectId, requiredTags: "windows");
 
-        var location = response.Headers.Location!.OriginalString;
-        Assert.Contains("runError=tag-unknown", location, StringComparison.Ordinal);
-        var page = await AuthTestHost.GetStringAsync(owner, location);
-        Assert.Contains("id=\"run-required-tags-error\"", page, StringComparison.Ordinal);
-        Assert.Empty(await host.ReadRunsAsync(organizationId));
+        var run = Assert.Single(await host.ReadRunsAsync(organizationId));
+        Assert.Equal(BuildRunStatus.Queued, run.Status);
+        Assert.Equal("windows", run.RequiredTags);
+        Assert.Equal("windows", run.RequiredRequirement);
+
+        // ...and the linux-only worker cannot claim it, which is the point of keeping it queued rather than
+        // building on the wrong machine.
+        using var workerClient = host.Host.CreateClient();
+        using var claimed = await RunTestHost.ClaimAsync(workerClient, workerToken);
+        Assert.Equal(HttpStatusCode.NoContent, claimed.StatusCode);
+        Assert.Contains("/runs/", response.Headers.Location!.OriginalString, StringComparison.Ordinal);
     }
 
     [Fact]

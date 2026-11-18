@@ -518,6 +518,12 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<Guid?>("RebuiltFromRunId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("RequiredRequirement")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("");
+
                     b.Property<string>("RequiredTags")
                         .IsRequired()
                         .HasMaxLength(400)

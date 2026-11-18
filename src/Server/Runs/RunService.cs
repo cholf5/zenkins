@@ -17,6 +17,7 @@ using Zenkins.Shared.Projects;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.RunCancellation;
 using Zenkins.Shared.Tenancy;
+using Zenkins.Shared.Workers;
 
 namespace Zenkins.Server.Runs;
 
@@ -243,7 +244,10 @@ public sealed record RunView(
     /// Pipeline) rather than from a repository. A re-run of such a run carries the same script, so the
     /// definition phase runs again instead of falling back to a frozen-spec-only Freestyle path.
     /// </summary>
-    bool InlineDefinition = false)
+    bool InlineDefinition = false,
+    string? RequiredRequirementText = null,
+    IReadOnlyList<string>? MissingWorkerLabels = null,
+    bool WaitingForWorker = false)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -881,15 +885,16 @@ public sealed class RunService(
 
         if (requiredTags.Length > 0)
         {
-            var knownTags = (await context.Workers.ToListAsync(cancellationToken))
-                .SelectMany(worker => RunValidation.ParseTags(worker.Tags))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var missing = RunValidation.ParseTags(requiredTags)
-                .FirstOrDefault(tag => !knownTags.Contains(tag));
-            if (missing is not null)
+            // Card F-033: only a requirement that can *never* hold is refused here (`linux,!linux`). A
+            // requirement nobody satisfies right now is queued: a Worker that registers later is ordinary
+            // operation, and refusing it would turn every poll/webhook/schedule trigger into a silent drop.
+            // The run records what it waits on, the page says which label is missing, and the claim loop
+            // asks the same predicate - no "tag exists somewhere" check remains (Q-010's asymmetry).
+            var requirement = WorkerRequirement.FromTags(requiredTags);
+            if (requirement.IsContradiction)
             {
                 return RunTriggerResult.Invalid(
-                    new RunFieldError(RunFields.RequiredTags, RunErrorCodes.TagUnknown));
+                    new RunFieldError(RunFields.RequiredTags, RunErrorCodes.TagInvalid));
             }
         }
 
@@ -1542,6 +1547,16 @@ public sealed class RunService(
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(requiredTags);
 
+        // Card F-033: this is the funnel every non-form trigger uses - a webhook delivery, a schedule, a poll,
+        // and the branch observation that queues a run after a tree read. A requirement that can never hold
+        // (`linux,!linux`, arriving from a webhook's stored tags or an observation entry) is refused here,
+        // because the alternative is a run waiting for a machine that cannot exist. A requirement nobody
+        // satisfies *yet* is not refused: that is ordinary operation and the run waits, visibly.
+        if (WorkerRequirement.FromTags(string.Join(',', requiredTags)).IsContradiction)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.RequiredTags, RunErrorCodes.TagInvalid));
+        }
+
         var activeOrganizationId = tenantContext.OrganizationId;
         if (activeOrganizationId is null)
         {
@@ -1749,6 +1764,11 @@ public sealed class RunService(
             TriggerType = triggerType,
             TriggerUserId = triggerUserId,
             RequiredTags = requiredTags,
+
+            // F-033: the meaning those tags had when the run was created, normalized once. An empty string is
+            // "no requirement" - the claim loop reads that as "any Worker", the same answer the legacy
+            // comma-list rule gives an empty list.
+            RequiredRequirement = WorkerRequirement.FromTags(requiredTags).StorageForm,
 
             // F-014 snapshots: the branch the trigger chose and the project's pipeline path. Both are
             // copies, so editing the project later never moves this run. A Freestyle run (F-020) has
@@ -2131,7 +2151,7 @@ public sealed class RunService(
         var candidates = queued
             .OrderBy(run => run.CreatedAt)
             .ThenBy(run => run.Id)
-            .Where(run => RunValidation.WorkerTagsCover(run.RequiredTags, worker.Tags))
+            .Where(run => RunValidation.WorkerSatisfies(run.RequiredRequirement, run.RequiredTags, worker.Tags))
             .Take(MaxClaimCandidates)
             .ToArray();
 
@@ -3632,6 +3652,28 @@ public sealed class RunService(
                 .Select(run => new { run.Id, run.Number })
                 .ToDictionaryAsync(row => row.Id, row => row.Number, cancellationToken);
 
+        // F-033: one read of the tag catalogues for the whole page, then the same SatisfiedBy the claim loop
+        // uses decides which queued runs are waiting and which labels nobody carries.
+        var workerTagLists = await WorkerTagCatalogue.TagsByWorkerAsync(context, cancellationToken);
+        var requirementFacts = runs.ToDictionary(
+            run => run.Id,
+            run =>
+            {
+                var requirement = RunValidation.RequirementFor(run.RequiredRequirement, run.RequiredTags);
+                if (requirement.IsNone)
+                {
+                    return ((string?)null, (IReadOnlyList<string>?)null, false);
+                }
+
+                var satisfied = workerTagLists.Any(tags => requirement.SatisfiedBy(tags));
+                var waiting = !satisfied && string.Equals(run.Status, BuildRunStatus.Queued, StringComparison.Ordinal);
+                IReadOnlyList<string>? missing = waiting
+                    ? [.. requirement.Atoms.Where(atom => !workerTagLists.Any(tags =>
+                        tags.Contains(atom, StringComparer.OrdinalIgnoreCase)))]
+                    : null;
+                return (requirement.ReadableForm, missing, waiting);
+            });
+
         var projectIds = runs.Select(run => run.ProjectId).Distinct().ToArray();
         var credentialAssigned = await context.Projects
             .Where(project => projectIds.Contains(project.Id))
@@ -3703,7 +3745,13 @@ public sealed class RunService(
 
                 // F-022: the run's definition came from its snapshotted script (inline), so a re-run
                 // knows to carry the script instead of guessing a Freestyle shape from the empty branch.
-                run.PipelineScriptText is not null);
+                run.PipelineScriptText is not null,
+
+                // F-033: the requirement in readable form, and - for a queued run nobody can claim - the
+                // labels no Worker carries. Computed from the same predicate the claim loop uses.
+                requirementFacts[run.Id].Item1,
+                requirementFacts[run.Id].Item2,
+                requirementFacts[run.Id].Item3);
         }).ToList();
     }
 

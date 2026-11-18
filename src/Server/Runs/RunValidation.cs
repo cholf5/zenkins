@@ -1,5 +1,6 @@
 using System.Globalization;
 using Zenkins.Server.Projects;
+using Zenkins.Shared.Workers;
 
 namespace Zenkins.Server.Runs;
 
@@ -188,16 +189,28 @@ public static class RunValidation
     /// Whether the worker's comma-separated tags cover every required tag (case-insensitive). A
     /// run without required tags is satisfiable by any worker, including a tagless one.
     /// </summary>
-    public static bool WorkerTagsCover(string requiredTags, string workerTags)
+    public static bool WorkerTagsCover(string requiredTags, string workerTags) =>
+        WorkerSatisfies(requiredRequirement: null, requiredTags, workerTags);
+
+    /// <summary>
+    /// Card F-033: the requirement a run carries. The normalized column wins when it holds text; a row
+    /// written before that column existed (or by a caller that only has tags) falls back to the legacy comma
+    /// list, which this type reads as the conjunction of its atoms - so an old run keeps being claimed by
+    /// exactly the Workers it was claimable by, and a new one is claimed by the Workers the same predicate
+    /// would pick.
+    /// </summary>
+    public static WorkerRequirement RequirementFor(string? requiredRequirement, string? requiredTags)
     {
-        var required = ParseTags(requiredTags);
-        if (required.Length == 0)
+        if (!string.IsNullOrWhiteSpace(requiredRequirement)
+            && WorkerRequirement.TryParse(requiredRequirement, out var parsed, out _))
         {
-            return true;
+            return parsed;
         }
 
-        var available = ParseTags(workerTags)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return required.All(available.Contains);
+        return WorkerRequirement.FromTags(requiredTags);
     }
+
+    /// <summary>Whether <paramref name="workerTags"/> satisfies the run's requirement (see <see cref="RequirementFor"/>).</summary>
+    public static bool WorkerSatisfies(string? requiredRequirement, string? requiredTags, string? workerTags) =>
+        RequirementFor(requiredRequirement, requiredTags).SatisfiedBy(ParseTags(workerTags));
 }

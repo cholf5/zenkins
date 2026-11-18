@@ -173,6 +173,13 @@ public static class WebhookOutcomes
     /// </summary>
     public const string IgnoredDuplicate = "ignored:duplicate";
 
+    /// <summary>
+    /// Card F-033: the delivery was seen and recorded, but its requirement can never hold (`linux,!linux`),
+    /// so nothing was queued. Recorded rather than answered with an error: a push has nobody reading the
+    /// response, so the delivery history is where its sender finds out what happened.
+    /// </summary>
+    public const string RefusedRequirement = "refused:requirement";
+
     /// <summary>Longest stored outcome.</summary>
     public const int MaxLength = 32;
 
@@ -194,6 +201,7 @@ public static class WebhookOutcomes
         AwaitingObservation,
         NoPipeline,
         BranchTooLong,
+        RefusedRequirement,
     };
 
     /// <summary>Whether <paramref name="outcome"/> is a member of <see cref="All"/>.</summary>

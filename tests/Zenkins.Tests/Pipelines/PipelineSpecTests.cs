@@ -465,6 +465,117 @@ public sealed class PipelineSpecTests
           "steps": [ {{steps}} ]
         }
         """;
+    // ------------------------------------------------------------------
+    // Card F-033: per-step `runs_on`
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void A_runs_on_table_is_the_conjunction_of_its_entries()
+    {
+        using var run = new LuaRuntimeTestDefinition(
+            "pipeline { name = \"x\", steps = { { name = \"Build\", run = { \"x\" }, "
+            + "runs_on = { \"linux\", \"arm64\" } } } }");
+
+        var spec = run.Run().Spec;
+
+        var step = Assert.Single(spec.Steps);
+        Assert.Equal("linux,arm64", step.RunsOn);
+        Assert.Equal("arm64&&linux", step.Requirement);
+
+        var requirement = Parse(step.Requirement!);
+        Assert.True(requirement.SatisfiedBy(["linux", "arm64"]));
+        Assert.False(requirement.SatisfiedBy(["linux"]));
+        Assert.False(requirement.SatisfiedBy([]));
+    }
+
+    [Fact]
+    public void A_runs_on_expression_is_normalized_for_the_machine_and_kept_as_written_for_people()
+    {
+        using var run = new LuaRuntimeTestDefinition(
+            "pipeline { name = \"x\", steps = { { name = \"Build\", run = { \"x\" }, "
+            + "runs_on = \"linux && (arm64 || x64)\" } } }");
+
+        var step = Assert.Single(run.Run().Spec.Steps);
+
+        // The page shows what the author wrote; the claim loop reads the DNF.
+        Assert.Equal("linux && (arm64 || x64)", step.RunsOn);
+        Assert.NotEqual(step.RunsOn, step.Requirement);
+
+        var requirement = Parse(step.Requirement!);
+        Assert.True(requirement.SatisfiedBy(["linux", "x64"]));
+        Assert.True(requirement.SatisfiedBy(["linux", "arm64"]));
+        Assert.False(requirement.SatisfiedBy(["arm64"]));
+    }
+
+    [Fact]
+    public void Two_steps_that_cannot_share_one_worker_are_refused_by_path_naming_both()
+    {
+        using var run = new LuaRuntimeTestDefinition(
+            "pipeline { name = \"x\", steps = { { name = \"Build\", run = { \"x\" }, runs_on = { \"linux\" } }, "
+            + "{ name = \"Test\", run = { \"y\" }, runs_on = \"!linux\" } } }");
+
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
+
+        Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
+        Assert.Contains("pipeline.steps[1]", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("pipeline.steps[2]", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("linux", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Steps_whose_alternatives_clash_without_sharing_a_clash_are_refused_too()
+    {
+        // No single literal is asserted and denied by one clause: step 1 offers a or b, step 2 needs neither.
+        // A literal-level check passes this definition; the union's cross product has no satisfiable
+        // alternative left, which is the question that decides whether one Worker can run both steps.
+        using var run = new LuaRuntimeTestDefinition(
+            "pipeline { name = \"x\", steps = { { name = \"Build\", run = { \"x\" }, runs_on = \"a || b\" }, "
+            + "{ name = \"Test\", run = { \"y\" }, runs_on = \"!a && !b\" } } }");
+
+        var failure = Assert.Throws<PipelineDefinitionException>(() => run.Run());
+
+        Assert.Equal(PipelineFailureReasons.PipelineInvalid, failure.FailureReason);
+        Assert.Contains("pipeline.steps[1]", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("pipeline.steps[2]", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("no single Worker can satisfy both", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Steps_that_merely_share_a_label_are_not_refused()
+    {
+        // The other half of the same rule: `a && b` and `a` share the atom a and are perfectly compatible -
+        // a Worker carrying both runs either step. A "do they mention the same label" check would refuse this
+        // definition, which is why the question is satisfiability rather than overlap.
+        using var run = new LuaRuntimeTestDefinition(
+            "pipeline { name = \"x\", steps = { { name = \"Build\", run = { \"x\" }, runs_on = \"a && b\" }, "
+            + "{ name = \"Test\", run = { \"y\" }, runs_on = \"a\" } } }");
+
+        var spec = run.Run().Spec;
+
+        Assert.Equal(2, spec.Steps.Length);
+    }
+
+    [Fact]
+    public void A_step_without_runs_on_asks_for_nothing_rather_than_for_the_empty_expression()
+    {
+        using var run = new LuaRuntimeTestDefinition(
+            "pipeline { name = \"x\", steps = { { name = \"Build\", run = { \"x\" } } } }");
+
+        var step = Assert.Single(run.Run().Spec.Steps);
+
+        // "No requirement" is not an expression: an empty expression would be a contradiction nobody could
+        // satisfy, and the claim loop treats a missing requirement as "any Worker".
+        Assert.Null(step.RunsOn);
+        Assert.Null(step.Requirement);
+        Assert.False(step.HasWorkerRequirement);
+    }
+
+    private static Zenkins.Shared.Workers.WorkerRequirement Parse(string value)
+    {
+        Assert.True(Zenkins.Shared.Workers.WorkerRequirement.TryParse(value, out var requirement, out var error), error);
+        return requirement;
+    }
+
 }
 
 /// <summary>

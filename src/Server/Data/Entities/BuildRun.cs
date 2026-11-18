@@ -145,6 +145,18 @@ public sealed class BuildRun : ITenantOwned
     public required string RequiredTags { get; set; } = string.Empty;
 
     /// <summary>
+    /// Card F-033: the requirement this run waits on, normalized to DNF at trigger time - the trigger's own
+    /// tags combined with the requirements its steps declare, in the one form the claim loop compares.
+    /// <para>
+    /// <b>A snapshot, not a re-derivation.</b> <see cref="RequiredTags"/> keeps holding what a person typed;
+    /// this holds the meaning those tags plus the definition's steps had when the run was created, so a later
+    /// grammar change (or a re-read of <c>pipeline.lua</c>) cannot retell an old run what it was waiting for.
+    /// Empty means "no requirement" - an old row whose tags are empty, or a run that asked for nothing.
+    /// </para>
+    /// </summary>
+    public string RequiredRequirement { get; set; } = string.Empty;
+
+    /// <summary>
     /// The project's pipeline file, relative to the repository root, snapshotted when the run was
     /// triggered (card F-014). A snapshot, not a join: editing the project later must not change where
     /// an existing run looked for its definition - and a historical run must stay readable after the

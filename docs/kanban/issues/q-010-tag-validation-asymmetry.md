@@ -280,3 +280,19 @@ attribution standard, steps uncorrupted. No behaviour change.
   the pin). PostgreSQL contract gate not required: **model unchanged / claim query unchanged** —
   the diff contains no C# product code at all (verified from the diff; no migration added). No
   commit made; the tree is left for review.
+
+## Closed by F-033 (2026-11-18)
+
+The asymmetry this card recorded is gone, and this paragraph exists so nobody re-learns it the hard way.
+
+- **Then.** The form asked "does *some* Worker declare this tag" (a union, per tag); the claim asked
+  "does *one* Worker carry the whole set". Two Workers with one tag each passed the form and left the run
+  unclaimable - and the webhook never asked at all.
+- **Now.** Both questions are answered by one predicate, `WorkerRequirement.SatisfiedBy`, applied per
+  Worker (`WorkerTagCatalogue.AnyWorkerSatisfiesAsync` / `RunValidation.WorkerSatisfies`) - a union check
+  cannot answer `linux && !windows`, which is why it is per Worker and not per union.
+- **Refusals are narrower, on purpose.** A requirement that can never hold (`linux,!linux`, or two steps
+  whose requirements contradict) is refused where the definition is read (`pipeline-invalid`) or by the
+  queue (`tag-invalid`). A requirement nobody satisfies *yet* is **not** refused: the run is queued and
+  says which label is missing, because a Worker that registers later is ordinary operation and a refusal
+  would silently drop a poll's or a webhook's trigger.

@@ -33,6 +33,9 @@
                 // them (a "" is "not declared"), exactly like envLines and artifactsText above.
                 timeoutSeconds: fieldValue(row, "timeout-seconds"),
                 retry: fieldValue(row, "retry"),
+                // F-033: the step's Worker requirement, as the editor's own text. Without this line the value
+                // is silently dropped on save - the field would render, look saved, and never reach the server.
+                runsOn: fieldValue(row, "runs-on"),
             };
         });
 

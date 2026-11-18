@@ -515,6 +515,21 @@ public sealed class WebhookDeliveryService(
                     run.TriggeredBy,
                     runId);
             }
+            else if (string.Equals(run.Outcome, RunErrorCodes.TagInvalid, StringComparison.Ordinal))
+            {
+                // Card F-033: the requirement can never hold. Recorded instead of rolled back - unlike a
+                // malformed branch or commit (which a retry could fix), a stored tag list is not something the
+                // sender can see, and "nothing happened" is the one answer a push must never get silently.
+                outcome = WebhookOutcomes.RefusedRequirement;
+                row.Outcome = outcome;
+                logger.LogInformation(
+                    "Webhook delivery refused an impossible worker requirement. OrganizationId={OrganizationId} ProjectId={ProjectId} WebhookId={WebhookId} Branch={Branch} Commit={Commit}",
+                    webhook.OrganizationId,
+                    webhook.ProjectId,
+                    webhook.Id,
+                    branch,
+                    commit);
+            }
             else if (run.Status is RunOperationStatus.NotFound or RunOperationStatus.InvalidInput)
             {
                 // Nothing was queued for a reason that is not the project's gate (the project vanished, or

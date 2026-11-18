@@ -210,6 +210,61 @@ public sealed class FreestyleStepsTests
         }
     }
 
+    // ------------------------------------------------------------------
+    // Card F-033: a Freestyle step's `runs_on`
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void A_freestyle_steps_runs_on_is_normalized_by_the_shared_parser()
+    {
+        var json = Build("requirement", drafts:
+        [
+            new FreestyleStepDraft("Build", "echo build", EnvLines: null, ContinueOnError: false,
+                ArtifactsText: null, RunsOn: "linux && (arm64 || x64)"),
+        ]);
+        Assert.NotNull(json);
+
+        var spec = Read(json!);
+        var step = Assert.Single(spec.Steps);
+
+        // The author's text is kept for the page; the DNF is what the run's union and the claim loop read.
+        Assert.Equal("linux && (arm64 || x64)", step.RunsOn);
+        Assert.NotEqual(step.RunsOn, step.Requirement);
+        Assert.True(Zenkins.Shared.Workers.WorkerRequirement.TryParse(step.Requirement!, out var requirement, out _));
+        Assert.True(requirement.SatisfiedBy(["linux", "arm64"]));
+        Assert.False(requirement.SatisfiedBy(["linux"]));
+    }
+
+    [Fact]
+    public void A_freestyle_step_without_runs_on_asks_for_nothing()
+    {
+        var json = Build("no-requirement", drafts:
+        [
+            new FreestyleStepDraft("Build", "echo build", null, false, null),
+        ]);
+        Assert.NotNull(json);
+
+        var step = Assert.Single(Read(json!).Steps);
+        Assert.Null(step.RunsOn);
+        Assert.Null(step.Requirement);
+    }
+
+    [Fact]
+    public void A_freestyle_runs_on_that_can_never_hold_is_refused_at_save_time_naming_the_step()
+    {
+        var json = Build("impossible", drafts:
+        [
+            new FreestyleStepDraft("Build", "echo build", null, false, null, RunsOn: "linux"),
+            new FreestyleStepDraft("Test", "echo test", null, false, null, RunsOn: "!linux"),
+        ]);
+
+        Assert.Null(json);
+        Assert.NotNull(Error);
+        Assert.Contains("steps[1]", Error!, StringComparison.Ordinal);
+        Assert.Contains("steps[2]", Error!, StringComparison.Ordinal);
+        Assert.Contains("no single Worker can satisfy both", Error!, StringComparison.Ordinal);
+    }
+
     private static FreestyleStepDraft Step(string name, string script) =>
         new(Name: name, Script: script, EnvLines: null, ContinueOnError: false, ArtifactsText: null);
 
@@ -229,4 +284,10 @@ public sealed class FreestyleStepsTests
     }
 
     private static string? Error { get; set; }
+
+    private static PipelineSpec Read(string json)
+    {
+        Assert.True(PipelineSpecJson.TryRead(json, out var spec, out var error), error);
+        return spec!;
+    }
 }

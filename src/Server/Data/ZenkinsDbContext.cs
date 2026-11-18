@@ -955,6 +955,17 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             entity.Property(run => run.TriggerUserId).HasMaxLength(450);
             entity.Property(run => run.RequiredTags).IsRequired().HasMaxLength(400);
 
+            // F-033: the normalized requirement (DNF text). Longer than the typed tag list because an
+            // expression expands into alternatives; the parser refuses anything above its own bound, so this
+            // is a backstop rather than the rule.
+            // Unbounded `text`: the parser's own MaxStorageFormLength is the rule (it can say "simplify this
+            // requirement"), and a column limit here would only turn that into a database error. A narrower
+            // column would also silently truncate nothing but reject writes at a length no author can see.
+            // The database default is the compatibility rule, not a convenience: a row written before this
+            // column existed - or by an out-of-band insert that does not know about it - reads "no
+            // requirement", which is exactly what an empty tag list meant.
+            entity.Property(run => run.RequiredRequirement).IsRequired().HasDefaultValue(string.Empty);
+
             // F-014: every run is a pipeline run. The pipeline path and branch are snapshots taken at
             // trigger time (a later project edit must not move an existing run's target), bounded like
             // the project fields they were copied from.

@@ -351,6 +351,23 @@
                 {
                     <p class="bb:mt-3 bb:text-sm bb:text-muted-foreground">No required tags.</p>
                 }
+
+                @* Card F-033: the requirement in the form a person reads (`linux and arm64`), never the stored
+                   DNF - and for a queued run nobody can claim, what no known Worker carries. Atom-level
+                   wording on purpose: a boolean requirement has no single "missing label". *@
+                @if (_run.RequiredRequirementText is { Length: > 0 } requirementText)
+                {
+                    <p id="run-requirement" class="bb:mt-2 bb:text-sm">
+                        Needs a Worker with: @requirementText
+                    </p>
+                }
+
+                @if (_run.MissingWorkerLabels is { Count: > 0 } missing)
+                {
+                    <p id="run-requirement-waiting" class="bb:mt-2 bb:text-sm bb:text-muted-foreground">
+                        Queued - no known Worker has: @string.Join(", ", missing)
+                    </p>
+                }
             </BbCardContent>
         </BbCard>
 

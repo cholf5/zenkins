@@ -67,17 +67,26 @@ public sealed class ConcurrencyTagAssignmentTests
         await host.AssertRunExecutedByExactlyOneWorkerAsync(heldDone, linux, [windows]);
         await host.AssertRunStepsAreOneUncorruptedSequenceAsync(heldRunId, ConcurrencyPipelines.HeldSteps);
 
-        // ----- Trigger-side validation matches claim-side filtering: -----
-        // a tag no worker row at all declares is refused at the real trigger form, and nothing is queued.
-        var refused = await host.PostTriggerFormAsync(starvedProject, requiredTags: "gpu");
+        // ----- Trigger-side and claim-side now speak the same predicate (cards F-033 + Q-010): -----
+        // A tag no worker row at all declares is **queued**, not refused. The intent this test has always
+        // had - "a worker that does not fit is never sent to do the work" - is unchanged and is asserted
+        // just as strictly: the run exists, says what it waits on, and no live worker can claim it.
+        var queued = await host.PostTriggerFormAsync(starvedProject, requiredTags: "gpu");
         Assert.True(
-            (int)refused.StatusCode is 302 or 303,
-            $"the trigger form answered {(int)refused.StatusCode} for an unknown tag.");
-        Assert.Contains(
-            "runError=tag-unknown",
-            refused.Headers.Location!.OriginalString,
+            (int)queued.StatusCode is 302 or 303,
+            $"the trigger form answered {(int)queued.StatusCode} for a tag nobody carries.");
+        Assert.DoesNotContain(
+            "runError=",
+            queued.Headers.Location!.OriginalString,
             StringComparison.Ordinal);
-        Assert.Empty(await host.ReadProjectRunsAsync(starvedProject));
+
+        var waiting = Assert.Single(await host.ReadProjectRunsAsync(starvedProject));
+        Assert.Equal("Queued", waiting.Status);
+
+        // The row's own requirement and the page's wording are asserted where those surfaces live
+        // (WorkerRequirementClaimTests / WorkerRequirementObservationTests); what matters here is the part
+        // this test has always been about - a worker that does not fit never gets dispatched to it.
+        Assert.Null(waiting.WorkerId);
 
         // ----- A run whose tags match no live worker is starved honestly. -----
         // The gpu tag becomes declarable only by registering a gpu worker, which is then killed and

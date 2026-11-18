@@ -1,6 +1,7 @@
 using System.Globalization;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Worker.Lua;
+using Zenkins.Shared.Workers;
 
 namespace Zenkins.Worker.Pipelines;
 
@@ -47,7 +48,7 @@ public static class PipelineSpecReader
 
     private static readonly string[] PipelineKeys = ["name", "env", "steps", "triggers"];
     private static readonly string[] StepKeys =
-        ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts", "timeout", "retry"];
+        ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts", "timeout", "retry", "runs_on"];
     private static readonly string[] WhenKeys = ["branch", "platform", "env"];
     private static readonly string[] TriggerKeys = ["branches"];
 
@@ -156,6 +157,7 @@ public static class PipelineSpecReader
                 path,
                 PipelineSpecSchema.MinStepRetry,
                 PipelineSpecSchema.MaxStepRetry);
+            var runsOn = ReadRunsOn(table, path);
 
             steps[i] = new PipelineStep(
                 stepName,
@@ -166,10 +168,73 @@ public static class PipelineSpecReader
                 When: when,
                 Artifacts: artifactPaths,
                 TimeoutSeconds: stepTimeout,
-                Retry: stepRetry);
+                Retry: stepRetry,
+                RunsOn: runsOn.Raw,
+                Requirement: runsOn.Normalized);
+        }
+
+        // Card F-033: a run executes on one Worker, so the union of the steps' requirements must be one Worker's
+        // worth. A contradiction is a definition mistake and is refused here, by path, naming both steps.
+        var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(steps);
+        if (requirementError is not null)
+        {
+            throw Invalid(requirementError);
         }
 
         return steps;
+    }
+
+    /// <summary>
+    /// Reads a step's Worker requirement (card F-033): <c>runs_on = { "linux", "arm64" }</c> (all must match),
+    /// <c>runs_on = "linux &amp;&amp; (arm64 || x64)"</c>, or absent for "any Worker". The raw text is kept for the
+    /// page and the normalized DNF is what the run's union and the claim loop read.
+    /// </summary>
+    private static (string? Raw, string? Normalized) ReadRunsOn(LuaHostTable table, string path)
+    {
+        if (!TryGet(table, "runs_on", out var value) || value.IsNil)
+        {
+            return (null, null);
+        }
+
+        string text;
+        if (value.Kind == LuaHostValueKind.String)
+        {
+            text = value.Text;
+        }
+        else if (value.Kind == LuaHostValueKind.Table && value.Table.IsSequence)
+        {
+            // The table form is the conjunction its entries spell out, in the same comma syntax the trigger's
+            // tag field already uses - one spelling, one parser.
+            var entries = new List<string>();
+            foreach (var entry in value.Table.Items)
+            {
+                if (entry.Kind != LuaHostValueKind.String)
+                {
+                    throw Invalid($"{path}.runs_on must be a string or a list of strings, got a list holding "
+                        + Describe(entry) + ".");
+                }
+
+                entries.Add(entry.Text);
+            }
+
+            text = string.Join(',', entries);
+        }
+        else
+        {
+            throw Invalid($"{path}.runs_on must be a string or a list of strings, got {Describe(value)}.");
+        }
+
+        if (!WorkerRequirement.TryParse(text, out var requirement, out var error))
+        {
+            throw Invalid($"{path}.runs_on {error}");
+        }
+
+        if (requirement.IsContradiction)
+        {
+            throw Invalid($"{path}.runs_on can never be satisfied: '{text}'.");
+        }
+
+        return (text, requirement.StorageForm);
     }
 
     private static string[]? ReadArgv(LuaHostTable table, string path, string key)

@@ -360,19 +360,28 @@ public sealed class ApiV1RunApiTests
             Assert.False(changedTags.Headers.Contains("Idempotency-Replayed"));
         }
 
-        // The control: the added tag really is legal-but-unclaimable, so a fresh key sending the same body
-        // reads the field refusal - which is what makes the 409 above a statement about the key rather
-        // than about a body that is refused either way.
+        // The control, under the contract card F-033 established: a tag nobody carries is no longer a field
+        // refusal, it is a queued run waiting for a Worker - so a fresh key sending that body is **accepted**.
+        // That is what makes the 409 above purely the key's decision: the body would have been taken.
+        Guid queuedRunId;
         using (var freshKey = await ApiV1TestHost.TriggerAsync(
             api, projectId, new { branch = "main", requiredTags = "linux,docker" }, idempotencyKey: "tagset-2"))
         {
-            Assert.Equal(HttpStatusCode.BadRequest, freshKey.StatusCode);
+            Assert.Equal(HttpStatusCode.Created, freshKey.StatusCode);
             using var body = await ApiV1TestHost.ReadJsonAsync(freshKey);
-            Assert.Equal("tag-unknown", body.RootElement.GetProperty("error").GetString());
+            queuedRunId = body.RootElement.GetProperty("id").GetGuid();
         }
 
-        var run = Assert.Single(await host.ReadProjectRunsAsync(projectId));
-        Assert.Equal(firstRunId, run.Id);
+        // ...and the run waiting for `docker` is there, queued, with the requirement it waits on.
+        var waiting = Assert.Single(
+            await host.ReadProjectRunsAsync(projectId),
+            run => run.Id == queuedRunId);
+        Assert.Equal("Queued", waiting.Status);
+        Assert.Equal("linux,docker", waiting.RequiredTags);
+        Assert.Equal("docker&&linux", waiting.RequiredRequirement);
+
+        var replayedRun = Assert.Single(await host.ReadProjectRunsAsync(projectId), run => run.Id == firstRunId);
+        Assert.Equal(firstRunId, replayedRun.Id);
     }
 
     [Fact]

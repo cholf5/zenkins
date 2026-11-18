@@ -256,6 +256,48 @@ public sealed class FreestyleRunTests
         Assert.Contains("data-freestyle-field=\"retry\"", template, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_steps_editor_renders_the_worker_requirement_and_its_script_carries_it()
+    {
+        // Card F-033, the last mile: the field has to reach the browser (both halves of the editor) and come
+        // back in the payload the endpoint parses. A rendered input whose serializer drops it looks saved and
+        // is not, which is the failure this fact exists to make impossible.
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner, "freestyle-requirement");
+        var steps = JsonSerializer.Serialize(new object[]
+        {
+            new
+            {
+                name = "Build",
+                script = "echo hello",
+                envLines = string.Empty,
+                continueOnError = false,
+                artifactsText = string.Empty,
+                runsOn = "linux && arm64",
+            },
+        });
+        Assert.True(await SaveStepsAsync(owner, projectId, steps));
+
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/pipelines");
+        var templateStart = page.IndexOf("id=\"freestyle-step-template\"", StringComparison.Ordinal);
+        Assert.True(templateStart > 0, "the editor's row template is not on the page.");
+        var savedRows = page[..templateStart];
+        var template = page[templateStart..];
+
+        // The saved row renders the field with the stored text (HTML-escaped: `&&` reads as `&amp;&amp;`).
+        Assert.Contains("data-freestyle-field=\"runs-on\"", savedRows, StringComparison.Ordinal);
+        Assert.Contains("value=\"linux &amp;&amp; arm64\"", savedRows, StringComparison.Ordinal);
+
+        // ...and so does the row template, or "add step" would produce a step that cannot declare one.
+        Assert.Contains("data-freestyle-field=\"runs-on\"", template, StringComparison.Ordinal);
+
+        // The serializer is what turns that input into the `runsOn` the endpoint reads. Asserted from the
+        // asset the browser actually loads, not from a remembered snippet.
+        var script = await AuthTestHost.GetStringAsync(owner, "/js/freestyle-steps.js");
+        Assert.Contains("runsOn: fieldValue(row, \"runs-on\")", script, StringComparison.Ordinal);
+    }
+
     private static async Task<Guid> CreateFreestyleProjectAsync(HttpClient owner, string name = "freestyle-e2e")
     {
         var response = await OrganizationTestHost.PostFormAsync(

@@ -609,6 +609,7 @@ public sealed class DefinitionValidationService(
                 now,
                 cancellationToken);
 
+            var queuedForBranch = false;
             if (hasPipeline)
             {
                 var queued = await runs.QueueWebhookRunAsync(
@@ -618,6 +619,7 @@ public sealed class DefinitionValidationService(
                     commit,
                     RunValidation.ParseTags(entry.RequiredTags),
                     cancellationToken);
+                queuedForBranch = queued.Status == RunOperationStatus.Success;
                 if (queued.Status != RunOperationStatus.Success)
                 {
                     logger.LogInformation(
@@ -630,8 +632,14 @@ public sealed class DefinitionValidationService(
                 }
             }
 
-            await BranchService.ClearPendingObservationAsync(
-                context, entry.ProjectId, branch, commit, now, cancellationToken);
+            // Card F-033: a refused queue leaves the pending marker in place. Clearing it would erase the only
+            // durable record of "this branch has a pipeline here and no run was queued" - the marker carries the
+            // requirement the run was waiting on.
+            if (queuedForBranch)
+            {
+                await BranchService.ClearPendingObservationAsync(
+                    context, entry.ProjectId, branch, commit, now, cancellationToken);
+            }
             await transaction.CommitAsync(cancellationToken);
 
             logger.LogInformation(

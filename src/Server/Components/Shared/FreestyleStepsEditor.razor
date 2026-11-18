@@ -100,6 +100,18 @@
                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                         </div>
                         <div>
+                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-runs-on-@(stepIndex)">
+                                Needs a Worker with (blank = any)
+                            </label>
+                            <input data-freestyle-field="runs-on"
+                                   id="step-runs-on-@(stepIndex)"
+                                   type="text"
+                                   value="@step.RunsOn"
+                                   placeholder="linux &amp;&amp; (arm64 || x64)"
+                                   autocomplete="off"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                        </div>
+                        <div>
                             <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-retry-@(stepIndex)">
                                 Attempts (blank = 1)
                             </label>
@@ -187,6 +199,16 @@
                                type="number"
                                min="@MinStepTimeoutSeconds"
                                max="@MaxStepTimeoutSeconds"
+                               autocomplete="off"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                    </div>
+                    <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="runs-on">
+                            Needs a Worker with (blank = any)
+                        </label>
+                        <input data-freestyle-field="runs-on"
+                               type="text"
+                               placeholder="linux &amp;&amp; (arm64 || x64)"
                                autocomplete="off"
                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                     </div>
