@@ -306,15 +306,15 @@ public sealed class OrganizationEnvironmentTests
     }
 
     // ---------------------------------------------------------------------------------------------
-    // C1a: the adjacent edges of the documented order, proven by value
+    // TC-002a: the adjacent edges of the documented order, proven by value
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task C1a_the_four_adjacent_edges_resolve_low_to_high()
+    public async Task TC_002a_the_four_adjacent_edges_resolve_low_to_high()
     {
         // The chain, lowest first: inherited < ZENKINS_* metadata < organization < parameters <
         // pipeline env < step env. The metadata edge cannot be shown by value (its namespace is refused
-        // at save time, so no collision is representable) - C1b proves it by refusal and filtering.
+        // at save time, so no collision is representable) - TC-002b proves it by refusal and filtering.
         // These four edges are shown by value, and each one is a different layer winning one name:
         //     organization → parameters      (run 2)
         //     parameters → pipeline env      (run 1, the step that declares no env)
@@ -392,7 +392,7 @@ public sealed class OrganizationEnvironmentTests
     }
 
     [Fact]
-    public async Task C1b_the_metadata_edge_is_proven_by_refusal_and_filtering()
+    public async Task TC_002b_the_metadata_edge_is_proven_by_refusal_and_filtering()
     {
         // The organization and parameter layers are refused at save (see the two facts above). A pipeline
         // or step env cannot be refused - Lua has no save step - so the composition drops a reserved name
@@ -451,17 +451,119 @@ public sealed class OrganizationEnvironmentTests
             line.Message.Contains("ZENKINS_RUN_ID", StringComparison.Ordinal)
             && line.Message.Contains("reserved", StringComparison.Ordinal));
 
+        // ...exactly once, with one location prefix: the composition's sentence carries no `zenkins: `
+        // of its own (the runner writes the step's location), so the line a person reads is
+        // `zenkins: step 1/1 "StepSpoofsTheRun": the step env sets 'ZENKINS_RUN_ID', …`.
+        var dropped = Assert.Single(run.Lines, line =>
+            line.Message.Contains("the step env sets 'ZENKINS_RUN_ID'", StringComparison.Ordinal));
+        Assert.StartsWith(
+            "zenkins: step 1/1 \"StepSpoofsTheRun\": the step env sets 'ZENKINS_RUN_ID'",
+            dropped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(1, dropped.Message.Split("zenkins: ").Length - 1);
+
         // The project's own parameter list cannot smuggle a reserved name either (fact above); the
         // project is untouched by this run.
         Assert.Null((await host.ReadProjectAsync(projectId)).ParametersJson);
     }
 
     // ---------------------------------------------------------------------------------------------
-    // TC-002: the snapshot is frozen at trigger time
+    // The secret boundary: an environment variable and a secret are two storages, not two layers
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task TC_002_the_layer_is_frozen_when_the_run_is_queued_and_editing_it_later_does_not_move_it()
+    public async Task A_variable_that_shares_a_secret_s_name_stays_configuration_and_the_secret_stays_masked()
+    {
+        // An organization variable and a secret may carry the same name without becoming the same thing.
+        // They live in two storages and are read by two mechanisms (the claim's resolved environment map
+        // vs the run's decrypted secret cache), and only the decrypted secret values are registered with
+        // the redactor. Nothing asserted this boundary before, so nothing stopped a later change from
+        // folding the two into "one environment" - which would either leak a secret into a plaintext
+        // page or mask a value that is configuration.
+        const string name = "SHARED_SETTING";
+        const string configValue = "config-visible-4e19";
+        const string secretValue = "secret-masked-8b2c";
+
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.Inner.SignInAsync(OrganizationTestHost.OwnerEmail);
+        using var _ = owner;
+        await CreateVariableAsync(owner, name, configValue);
+
+        // Two steps, one per reader: the organization layer is read from the step's *environment*, the
+        // secret from `secret(name)` - Lua's two different sources.
+        using var repository = PipelineRepository.Create($$"""
+            pipeline {
+              name = "secret-boundary",
+              steps = {
+                {
+                  name = "FromEnvironment",
+                  run = { "{{PipelineTestData.DotNet}}", "{{PipelineTestData.ArgvEcho}}", "env", "{{name}}" },
+                },
+                {
+                  name = "FromSecret",
+                  run = { "{{PipelineTestData.DotNet}}", "{{PipelineTestData.ArgvEcho}}", "echo", secret("{{name}}") },
+                },
+              },
+            }
+            """);
+
+        using var run = await StepsRun.StartAsync(host, repository);
+        await run.CreateSecretAsync(name, secretValue);
+
+        var outcome = await run.ExecuteAsync();
+        Assert.True(outcome.ExitCode == 0, Describe(run, outcome));
+
+        var steps = await run.ReadStepsAsync();
+
+        // 1. The environment reader got the organization's value: configuration, printed verbatim and
+        //    never masked, because it is not a secret.
+        Assert.Equal(configValue, ChildOutput(run, steps[0].Id));
+
+        // 2. The secret reader got the *secret's* value - the one registered with the redactor - so the
+        //    child's line is the replacement token. Had the two storages been conflated, this line would
+        //    show the configuration value instead.
+        Assert.Equal("***", ChildOutput(run, steps[1].Id));
+
+        // 3. The secret value reaches no surface this run renders (log, persisted rows, page, download),
+        //    while the configuration value is visible on the log and the run page - the two opposite
+        //    rules, held apart on the same name.
+        Assert.DoesNotContain(run.Lines, line => line.Message.Contains(secretValue, StringComparison.Ordinal));
+        var rows = await run.ReadLogRowsAsync();
+        Assert.DoesNotContain(rows, row => row.Message.Contains(secretValue, StringComparison.Ordinal));
+        var page = await run.ReadRunPageAsync();
+        Assert.DoesNotContain(secretValue, page, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretValue, await run.DownloadLogAsync(), StringComparison.Ordinal);
+        Assert.Contains(run.Lines, line => line.Message.Contains(configValue, StringComparison.Ordinal));
+        Assert.Contains(configValue, page, StringComparison.Ordinal);
+
+        // 4. The claim's one resolved map carries the configuration value under that name; the secret is
+        //    not a layer, so nothing about it reaches the composed environment.
+        Assert.NotNull(run.Claim);
+        Assert.Equal(configValue, run.Claim!.Parameters![name]);
+        var environment = StepEnvironment.Compose(
+            new Dictionary<string, string?>(),
+            pipelineEnvironment: null,
+            stepEnvironment: null,
+            WorkerRunLoop.BuildRunEnvironment(run.Claim, run.WorkerName));
+        Assert.Equal(configValue, environment[name]);
+        Assert.DoesNotContain(secretValue, environment.Values);
+
+        // 5. Each page keeps its own rule: the environment page shows the value, the secrets page shows
+        //    the name only (F-012's write-only rule is unchanged by the organization layer).
+        var environmentPage = await Zenkins.Tests.Auth.AuthTestHost.GetStringAsync(
+            owner, OrganizationEnvironmentEndpoints.ListPath);
+        Assert.Contains(configValue, environmentPage, StringComparison.Ordinal);
+        var secretsPage = await Zenkins.Tests.Auth.AuthTestHost.GetStringAsync(owner, "/secrets");
+        Assert.Contains(name, secretsPage, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretValue, secretsPage, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // TC-003: the snapshot is frozen at trigger time
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task TC_003_the_layer_is_frozen_when_the_run_is_queued_and_editing_it_later_does_not_move_it()
     {
         using var host = await RunTestHost.CreateAsync();
         var (projectId, owner) = await host.CreateProjectAsync("frozen-project");

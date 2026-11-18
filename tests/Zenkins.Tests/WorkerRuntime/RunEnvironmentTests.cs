@@ -87,6 +87,40 @@ public sealed class RunEnvironmentTests
     }
 
     [Fact]
+    public void A_lower_case_reserved_name_is_dropped_too_because_a_windows_environment_is_case_insensitive()
+    {
+        // The same rule, in the spelling a Lua author is most likely to type. This is a *fact*, not a
+        // spelling nicety: on Windows an environment block is case-insensitive, so a step env's
+        // `zenkins_run_id` and the server's `ZENKINS_RUN_ID` are the same name to the child, and the
+        // last writer wins (ProcessStartInfo.Environment, then CreateProcess). Composing with an
+        // Ordinal comparison would consider them different, keep both, and let the declared value
+        // overwrite the run's own id in the child - the exact spoof the filter exists to stop, and on
+        // the one platform where it would be reachable.
+        var reported = new List<string>();
+        var environment = StepEnvironment.Compose(
+            new Dictionary<string, string?>(),
+            pipelineEnvironment: new Dictionary<string, string> { ["zenkins_run_id"] = "spoofed-by-pipeline" },
+            stepEnvironment: new Dictionary<string, string> { ["Zenkins_Build_Number"] = "999" },
+            WorkerRunLoop.BuildRunEnvironment(Claim(number: 5), "windows-agent-1"),
+            reported.Add);
+
+        // Both spellings were dropped, and both were named - a silent drop would leave the author
+        // wondering why the value never arrived.
+        Assert.Equal(2, reported.Count);
+        Assert.Contains(reported, message => message.Contains("zenkins_run_id", StringComparison.Ordinal));
+        Assert.Contains(reported, message => message.Contains("Zenkins_Build_Number", StringComparison.Ordinal));
+
+        // The metadata's value is what the step sees, and no second spelling of the name is in the map
+        // at all: nothing can reach a case-insensitive child environment under another casing.
+        Assert.Equal(RunId.ToString(), environment["ZENKINS_RUN_ID"]);
+        Assert.Equal("5", environment["ZENKINS_BUILD_NUMBER"]);
+        Assert.False(environment.ContainsKey("zenkins_run_id"));
+        Assert.False(environment.ContainsKey("Zenkins_Build_Number"));
+        Assert.DoesNotContain("spoofed-by-pipeline", environment.Values);
+        Assert.DoesNotContain("999", environment.Values);
+    }
+
+    [Fact]
     public void The_inherited_environment_is_the_lowest_layer_and_the_server_map_is_next()
     {
         // The bottom two edges of the documented chain, in isolation: the worker's own process environment

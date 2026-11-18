@@ -137,11 +137,11 @@ parameter snapshot against today's definitions.
 Facts (deliberately split, per the review: a same-name collision between `ZENKINS_*` and the
 organization layer is **not representable** after AC3, so it cannot be part of a five-value chain):
 
-- **C1a** `C1a_the_four_adjacent_edges_resolve_low_to_high` - the four value edges, one fact, three
-  real runs, child stdout compared to *distinctive* values (`value-from-step`,
+- **TC-002a** `TC_002a_the_four_adjacent_edges_resolve_low_to_high` - the four value edges, one
+  fact, three real runs, child stdout compared to *distinctive* values (`value-from-step`,
   `value-from-pipeline`, `value-from-param`, `value-from-org`): organization→parameters,
   parameters→pipeline env, pipeline env→step env, and the inherited environment losing every edge.
-- **C1b** `C1b_the_metadata_edge_is_proven_by_refusal_and_filtering` - the metadata edge by
+- **TC-002b** `TC_002b_the_metadata_edge_is_proven_by_refusal_and_filtering` - the metadata edge by
   refusal + filtering (below).
 - `The_inherited_environment_is_the_lowest_layer_and_the_server_map_is_next` (WorkerRuntime) - the
   bottom two edges in isolation.
@@ -159,8 +159,16 @@ organization layer is **not representable** after AC3, so it cannot be part of a
    (`… the step env sets 'ZENKINS_RUN_ID', which is reserved for the run's own metadata; the declared
    value was ignored`). Not silently dropped, not silently winning.
 
-`ServerEnvironmentNames.IsReserved` compares case-insensitively (an env name is case-insensitive on
-Windows); `RunEnvironment.IsReserved` is the worker-side twin used by the composition.
+**One rule, two callers.** The predicate and the prefix list are
+`Zenkins.Shared.Pipelines.ServerEnvironmentNames` - the server refuses with them at save time and the
+worker's `RunEnvironment.IsReserved` / `StepEnvironment.Compose` delegate to them, so the two sides of
+the wire cannot answer "is this name reserved?" differently. (Before the F-034 review fix the worker
+carried its own copy compared with `StringComparison.Ordinal` while the server's compared
+`OrdinalIgnoreCase`; on Windows that let a step env's `zenkins_run_id` overwrite the run's own
+`ZENKINS_RUN_ID` in the child's case-insensitive environment block - the spoof this card exists to
+close. The shared predicate is the fix, and
+`A_lower_case_reserved_name_is_dropped_too_because_a_windows_environment_is_case_insensitive` is the
+fact that pins it.)
 
 **Mechanism change, recorded as the review asked.** F-036's
 `A_parameter_or_organization_variable_cannot_overwrite_the_build_metadata` and F-015's
@@ -185,7 +193,7 @@ RunEnvironmentTests fact also asserts the diagnostic fires once per dropped name
 Deleting or editing a variable never touches a run: `BuildRuns.EnvironmentJson` is that run's own
 copy. The run page renders an "Organization environment" card (`#run-environment`,
 `#run-environment-{NAME}`) from that column only - values included, because they are configuration,
-not secrets. Facts: TC_002 (frozen + page shows the old value and not the new one), `Deleting_a_
+not secrets. Facts: TC-003 (frozen + page shows the old value and not the new one), `Deleting_a_
 variable_leaves_the_runs_snapshot_and_its_page_intact`.
 
 ### 6. Caps
@@ -196,14 +204,15 @@ the cap and the way out). Facts: `The_value_length_and_the_variable_count_are_ca
 (the boundary value is accepted, one character more is refused; the 100th row is accepted, the 101st
 is refused with the list unchanged).
 
-### 7. Facts added (25)
+### 7. Facts added (27)
 
-- `OrganizationEnvironmentTests` (19, `Category=Runs`): the store/name/role/cap facts (Owner view,
+- `OrganizationEnvironmentTests` (20, `Category=Runs`): the store/name/role/cap facts (Owner view,
   Member read-only + 403, name-rule theory ×5, organization reserved prefix ×4, parameter reserved
-  prefix, caps), TC_001 (two projects, real steps), C1a, C1b, TC_002 (frozen + page), delete-keeps-
-  snapshot, headless webhook trigger.
-- `RunEnvironmentTests` (+1 net): the reserved-name drop + diagnostic, and the inherited-metadata-
-  server-map order.
+  prefix, caps), TC_001 (two projects, real steps), TC-002a, TC-002b, TC-003 (frozen + page),
+  delete-keeps-snapshot, headless webhook trigger, and the secret boundary
+  (`A_variable_that_shares_a_secret_s_name_stays_configuration_and_the_secret_stays_masked`).
+- `RunEnvironmentTests` (+2): the reserved-name drop + diagnostic, the lower-case reserved name
+  (the case-insensitivity fact), and the inherited-metadata-server-map order.
 - Tenancy (+5): organization variables in the entity probe registry (read isolation, cross-tenant
   write refusal, Find-after-switch), `The_run_snapshot_reader_reads_only_the_run_s_own_organization_
   and_needs_no_request_tenant` (both directions + no request tenant), and
@@ -217,21 +226,21 @@ verified identical afterwards (`artifacts/f-034/mutations.log`).
 
 | # | Mutation | Fact | Result |
 |---|---|---|---|
-| M1 | parameters and pipeline env swapped in `Compose` | C1a | red (`value-from-pipeline` → `value-from-param`) |
-| M2 | pipeline env and step env swapped in `Compose` | C1a | red (`value-from-step` → `value-from-pipeline`) |
-| M3 | claim merge lets the organization layer win a shared name | C1a | red (`value-from-param` → `value-from-org`) |
-| M4 | declared reserved names are no longer dropped | C1b + RunEnvironmentTests | red |
+| M1 | parameters and pipeline env swapped in `Compose` | TC-002a | red (`value-from-pipeline` → `value-from-param`) |
+| M2 | pipeline env and step env swapped in `Compose` | TC-002a | red (`value-from-step` → `value-from-pipeline`) |
+| M3 | claim merge lets the organization layer win a shared name | TC-002a | red (`value-from-param` → `value-from-org`) |
+| M4 | declared reserved names are no longer dropped | TC-002b + RunEnvironmentTests | red |
 | M5 | organization name prefix no longer refused | `An_organization_name_inside_the_server_prefix…` | red |
 | M6 | parameter name prefix no longer refused | `A_parameter_name_inside_the_server_prefix…` | red |
 | M7 | snapshot read goes back to the request tenant | tenancy snapshot fact | red |
 | M8 | snapshot read loses its organization predicate | tenancy snapshot fact | red |
-| M9 | no snapshot frozen onto the run | TC_002 + delete fact | red |
+| M9 | no snapshot frozen onto the run | TC-003 + delete fact | red |
 | M10 | run page hides the frozen environment | TC_001 | red |
 | M11 | the count cap disappears | caps fact | red |
 | M12 | the list becomes Owner-only (copying the Secrets guard) | Member fact | red |
 
 12/12 (M2 and M7 were re-targeted once: the first M2 attempt matched a value that appeared in the
-worker's own log lines, which is why C1a now compares the child's stdout against distinctive values;
+worker's own log lines, which is why TC-002a now compares the child's stdout against distinctive values;
 the first M7 attempt used the webhook path, which does set a tenant, so the no-request-tenant tenancy
 fact is the mutation's target).
 
@@ -240,7 +249,8 @@ fact is the mutation's target).
 | Command | Result |
 |---|---|
 | `dotnet build -c Release` | **PASS** - `Build succeeded`, 0 warnings, 0 errors (warnings are errors) |
-| fast suite (sextuple filter, unchanged) | count **1341 → 1366** discovered (`--list-tests`, before/after). Full-run status: **not green on this machine at HEAD either** - see the environment note below. The 184 tests of every class this card touches pass in one run: `Total: 184, Failed: 0, Skipped: 0, Time: 158s` |
+| fast suite (sextuple filter, unchanged) | count **1341 → 1368** discovered (`--list-tests`, before/after; the review fix added two facts: the case-insensitivity fact and the secret-boundary fact). Full-run status: **not green on this machine at HEAD either** - see the environment note below. The 184 tests of every class this card touches passed in one run before the review fix: `Total: 184, Failed: 0, Skipped: 0, Time: 158s` |
+| review-fix classes (one filtered run each) | **PASS** - `OrganizationEnvironmentTests` 20/20, `RunEnvironmentTests` 5/5, `StepConditionTests` 7/7, `ProjectParametersTests` 20/20, `WorkerAotGuardTests` 4/4, and the F-022 inline fact (`An_inline_definition_carries_its_triggers_pipeline_env_and_secret_references`) 1/1 |
 | `Category=Postgres` | **PASS** - `Total: 6, Failed: 0, Skipped: 0, Time: 10.4s` against a disposable PostgreSQL **16.15** (`initdb --locale=C.UTF-8`, random loopback port, `pg_ctl`; every fact drops and recreates `public`, so the whole migration chain - including this card's new table and column - runs on a real PostgreSQL) |
 | mutation | **12/12** - every new fact proven red under one mutation, files restored and SHA-256 verified (`artifacts/f-034/mutations.log`) |
 
@@ -253,10 +263,68 @@ harness) and **no functional failure in any surface this card changes**. Every c
 passes together (184 tests, above), and each new fact passes in isolation. Nothing here pretends the
 whole suite is green on this machine; the claim is that the change is not what is red.
 
-### 10. Known doc discrepancy (outside this card's file boundary)
+### 10. Doc discrepancy (resolved)
 
-`docs/lua-runtime.md` §6.0.1 still describes the pre-F-034 chain ("… step `env` < the server-provided
-run environment", and "build parameters join this same server-provided layer"). One sentence there is
-now wrong. It was not in the allowed file list, so it is left for a follow-up (or the Lead's go-ahead):
-replace "inherited < pipeline < step < run environment" with "inherited < `ZENKINS_*` < organization <
-parameters < pipeline < step", noting the metadata edge is protected by refusal/filtering.
+`docs/lua-runtime.md` §6.0.1 used to describe the pre-F-034 chain ("… step `env` < the
+server-provided run environment", "build parameters join this same server-provided layer"). It now
+states the documented chain (inherited < `ZENKINS_*` < organization < parameters < pipeline < step),
+says the metadata edge is protected by refusal/filtering rather than by ordering, and keeps the
+organization and parameter snapshots separate - so no follow-up is outstanding.
+
+### 11. Known limitations (recorded, deliberately not fixed)
+
+- **The count cap is a `COUNT(*)` pre-check, not a constraint.** Two concurrent creates can both read
+  99 and both insert, so an organization can briefly hold more than 100 variables. AC-7 asks for a cap
+  and a clear error, which is what the pre-check gives (a single user's 101st save is refused, and the
+  message names the cap and the way out); closing the window needs a constraint or a serializable
+  transaction. F-029's precedent records the same shape - a check-then-act cap with a `Category=Postgres`
+  race fact - and this card deliberately does not claim more than it does.
+- **The value cap counts UTF-16 code units; the column stores `varchar(4096)` characters.**
+  `OrganizationEnvironmentValidation.MaxValueLength` measures `string.Length`, the column counts code
+  points. `Length >= code-point count` always holds, so a value that passes validation can never be
+  truncated or refused by the column: the check is at least as strict as storage. A value rejected at
+  4096 code units of astral-plane text is a stricter answer than a data-loss one, which is the safe
+  direction.
+
+### 12. Review fixes (terminal review, 2026-11-17)
+
+Five findings, all applied; nothing else in the card's substance changed.
+
+1. **Reserved-name rule was written twice, with two comparers (Major).** The server's predicate compared
+   `OrdinalIgnoreCase`, the worker's own copy `Ordinal`. On Windows (case-insensitive environment block)
+   a step `env`'s `zenkins_run_id` was therefore not recognised as reserved, survived `Compose`, and
+   overwrote the run's own `ZENKINS_RUN_ID` when the child was started - a spoof this card exists to
+   close. Fix: the rule and its prefix list moved to
+   `src/Shared/Pipelines/ServerEnvironmentNames.cs` (the one implementation both sides use);
+   `RunEnvironment.IsReserved` delegates to it and `RunEnvironment.ReservedPrefix` was deleted rather
+   than kept as a second copy of the literal. New fact
+   `A_lower_case_reserved_name_is_dropped_too_because_a_windows_environment_is_case_insensitive`
+   (WorkerRuntime): a lower-case reserved name from the pipeline env and a mixed-case one from the step
+   env are both dropped, both are named in the diagnostics, and no second spelling of either name is in
+   the composed map. Proven red before the fix (`Expected: 2, Actual: 0` - nothing was dropped) and
+   green after.
+2. **TC ids and test names disagreed.** `TC-002a`/`TC-002b` now carry the precedence facts (formerly
+   `C1a`/`C1b`) and `TC_003_the_layer_is_frozen_…` carries TC-003 (formerly named `TC_002…`, which left
+   TC-002 unused and TC-003 dangling). The card's own references were updated with them.
+3. **The secret boundary was asserted nowhere.** New fact
+   `A_variable_that_shares_a_secret_s_name_stays_configuration_and_the_secret_stays_masked`: with one
+   name in both storages, `secret(name)` yields the secret's value (the child's line is `***`, and the
+   value reaches no log row, page or download), the environment reader yields the organization's value
+   in plaintext (log and run page included), the claim's resolved map carries the configuration value,
+   the composed environment contains no secret value, and the Secrets page still shows the name only.
+4. **The doc-discrepancy note was stale.** §10 is resolved (see above).
+5. **The dropped-name diagnostic carried two prefixes.** `CollisionDiagnostic` no longer starts with
+   `zenkins: `; `PipelineRunner` already prefixes the line with its own location, so the run log reads
+   `zenkins: step 1/2 "X": the step env sets 'ZENKINS_RUN_ID', …` once. `TC-002b` now pins the rendered
+   line's shape and asserts the `zenkins: ` prefix appears exactly once.
+
+- **The composed environment is an `Ordinal` dictionary; a name-collision on Windows is decided by
+  enumeration order.** `StepEnvironment.Compose` keeps names Ordinal, so if the *worker host's own*
+  process environment happened to define `zenkins_run_id`, the composed map would hold both spellings
+  and `ProcessStartInfo.Environment` — a case-insensitive dictionary on Windows — would let whichever is
+  written last win. Every declared layer (organization, parameters, pipeline `env`, step `env`) now
+  refuses or drops a reserved name regardless of case, so the only remaining source is the operating
+  system's own environment on the build machine — the operator's own configuration, not a tenant's.
+  Making the map itself `OrdinalIgnoreCase` would collapse two differently-cased Lua keys into one and
+  change merge semantics for every layer, which is a larger question than this card; recorded here
+  rather than fixed.

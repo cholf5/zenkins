@@ -1,45 +1,7 @@
 using Zenkins.Server.Secrets;
+using Zenkins.Shared.Pipelines;
 
 namespace Zenkins.Server.Environments;
-
-/// <summary>
-/// The names the server itself owns in a step's environment (cards F-007/F-015/F-021/F-034).
-/// <para>
-/// <b>One set, one owner.</b> The worker writes this namespace into every step's environment after the
-/// run's own layers, and it is the record of <em>this</em> run: a variable that shadows
-/// <c>ZENKINS_RUN_ID</c> would make a step read a different run than the one it executes. The prefix is
-/// therefore refused when an organization variable is saved - the author gets an error naming the
-/// collision instead of discovering at run time that the value silently lost.
-/// </para>
-/// <para>
-/// The comparison is case-insensitive because an environment variable name is case-insensitive on
-/// Windows; refusing <c>zenkins_run_id</c> there would be the same shadowing under a different spelling.
-/// </para>
-/// </summary>
-public static class ServerEnvironmentNames
-{
-    /// <summary>The prefixes the server-provided metadata occupies; any name starting with one is reserved.</summary>
-    public static readonly string[] ReservedPrefixes = ["ZENKINS_"];
-
-    /// <summary>Whether <paramref name="name"/> is inside a reserved prefix.</summary>
-    public static bool IsReserved(string? name)
-    {
-        if (string.IsNullOrEmpty(name))
-        {
-            return false;
-        }
-
-        foreach (var prefix in ReservedPrefixes)
-        {
-            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-}
 
 /// <summary>
 /// Field names of the organization environment form, constants so the page, the endpoint and the

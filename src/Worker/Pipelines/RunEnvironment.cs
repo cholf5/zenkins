@@ -1,3 +1,5 @@
+using Zenkins.Shared.Pipelines;
+
 namespace Zenkins.Worker.Pipelines;
 
 /// <summary>
@@ -30,9 +32,6 @@ public sealed class RunEnvironment
     /// <summary>The per-step metadata every step sees (it is the run's environment plus the step's name).</summary>
     public const string StepNameVariable = "ZENKINS_STEP_NAME";
 
-    /// <summary>The namespace the server owns; no declared layer may shadow a name inside it.</summary>
-    public const string ReservedPrefix = "ZENKINS_";
-
     /// <summary>
     /// The server's own record of this run: <c>ZENKINS_RUN_ID</c>, <c>ZENKINS_PROJECT_ID</c>,
     /// <c>ZENKINS_WORKER_NAME</c>, <c>ZENKINS_BUILD_ID</c>, <c>ZENKINS_BUILD_NUMBER</c> (when the run has
@@ -64,15 +63,24 @@ public sealed class RunEnvironment
         return new RunEnvironment { Metadata = metadata, Values = Values };
     }
 
-    /// <summary>Whether <paramref name="name"/> is inside the server's reserved namespace.</summary>
-    public static bool IsReserved(string name) =>
-        name.StartsWith(ReservedPrefix, StringComparison.Ordinal);
+    /// <summary>
+    /// Whether <paramref name="name"/> is inside the server's reserved namespace. The rule itself is
+    /// <see cref="ServerEnvironmentNames.IsReserved"/> - the server's, shared rather than twinned: two
+    /// copies of this predicate disagreed about casing once, and on Windows that was a reachable spoof
+    /// (<c>zenkins_run_id</c> overwriting <c>ZENKINS_RUN_ID</c> in the child's case-insensitive block).
+    /// </summary>
+    public static bool IsReserved(string name) => ServerEnvironmentNames.IsReserved(name);
 
     /// <summary>
     /// The diagnostic for a declared value that was dropped because its name belongs to the server's
     /// metadata. One sentence, naming the variable and saying what happened - never a silent drop.
+    /// <para>
+    /// It carries no <c>zenkins: </c> prefix: the caller knows where in the run it belongs and writes the
+    /// line's own location prefix (<c>zenkins: step 1/2 "Build": …</c>), so a prefix here would render
+    /// twice in the run log.
+    /// </para>
     /// </summary>
     public static string CollisionDiagnostic(string name, string layer) =>
-        $"zenkins: the {layer} sets '{name}', which is reserved for the run's own metadata; "
+        $"the {layer} sets '{name}', which is reserved for the run's own metadata; "
         + "the declared value was ignored (ZENKINS_* is written by the server, not by a pipeline).";
 }

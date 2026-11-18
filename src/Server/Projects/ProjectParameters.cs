@@ -112,10 +112,10 @@ public static class ProjectParameters
             // server's own record of the run. Refusing the name at save time is what keeps the metadata
             // unspoofable now that it is the *lowest* layer (PRD §3.11.3): before the reorder the value
             // merely lost by sort order, which was correct by accident and silent either way.
-            if (Zenkins.Server.Environments.ServerEnvironmentNames.IsReserved(name))
+            if (ServerEnvironmentNames.IsReserved(name))
             {
                 error = $"{path}.name '{name}' is reserved: "
-                    + $"{string.Join(", ", Zenkins.Server.Environments.ServerEnvironmentNames.ReservedPrefixes)} "
+                    + $"{string.Join(", ", ServerEnvironmentNames.ReservedPrefixes)} "
                     + "is the namespace of Zenkins' own run metadata (ZENKINS_RUN_ID, ZENKINS_BUILD_NUMBER, …). "
                     + "Choose another name.";
                 return [];
