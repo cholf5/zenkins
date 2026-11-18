@@ -24,7 +24,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | M | | F-021 |
 | [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
-| [Q-022](issues/q-022-branch-discovery-evidence-gaps.md) | The F-023 review proved four branch-discovery properties by reading code, and the suite does not carry them | P2 | S | | none |
 
 ## Done
 
@@ -105,3 +104,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | 2026-11-17 |
 | [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | 2026-11-17 |
 | [F-034](issues/f-034-organization-environment.md) | Organization environment variables: one shared env layer for every project | P2 | 2026-11-17 |
+| [Q-022](issues/q-022-branch-discovery-evidence-gaps.md) | The F-023 review proved four branch-discovery properties by reading code, and the suite does not carry them | P2 | 2026-11-17 |

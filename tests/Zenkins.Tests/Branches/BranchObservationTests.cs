@@ -11,7 +11,9 @@ using Zenkins.Shared.Probes;
 using Zenkins.Shared.Projects;
 using Zenkins.Tests.Organizations;
 using Zenkins.Tests.Probes;
+using Zenkins.Tests.Runs;
 using Zenkins.Tests.Webhooks;
+using Zenkins.Tests.Workers;
 
 namespace Zenkins.Tests.Branches;
 
@@ -187,14 +189,208 @@ public sealed class BranchObservationTests
     private static Task<HttpResponseMessage> FetchDefinitionCredentialAsync(
         HttpClient client,
         string workerToken,
-        Guid validationId)
+        Guid validationId) =>
+        FetchCredentialAsync(client, workerToken, $"/api/workers/definitions/{validationId}/git-credential");
+
+    /// <summary>One worker-authenticated GET of a material route (run, probe or definition).</summary>
+    private static Task<HttpResponseMessage> FetchCredentialAsync(
+        HttpClient client,
+        string workerToken,
+        string path)
     {
-        var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"/api/workers/definitions/{validationId}/git-credential");
+        var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer", workerToken);
         return client.SendAsync(request, CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_definition_lease_opens_no_run_or_probe_credential_and_neither_opens_the_definitions()
+    {
+        // Card Q-022 / Q-006: the surface inventory's row for the definition material route claims a
+        // definition id cannot fetch a run's or a probe's credential and neither can fetch this one. That
+        // holds by construction - the three id spaces are three stores (the run table, the probe registry,
+        // the definition registry) - but it had no fact. Here all three leases are live at once, so each id
+        // is proven to open exactly its own door: a 200 where it belongs, a bodyless 404 everywhere else.
+        using var host = await WebhooksTestHost.CreateAsync();
+        await host.SetBranchDiscoveryAsync(host.ProjectId, BranchDiscoveryModes.Branches);
+        var webhookId = await host.SeedWebhookAsync("cross-type", branchFilter: string.Empty);
+        using var push = await host.DeliverSignedAsync(
+            webhookId,
+            WebhookPayloads.GitHub("feature/cross-type", WebhookPayloads.Commit('7')),
+            host.SecretFor("cross-type"),
+            deliveryId: "cross-type-1");
+        Assert.Equal(HttpStatusCode.Accepted, push.StatusCode);
+
+        var owner = await host.SignInOwnerAsync();
+        var created = await OrganizationTestHost.PostFormAsync(
+            owner,
+            "/",
+            "/git-credentials/create",
+            new Dictionary<string, string>
+            {
+                ["Name"] = "CROSS_TYPE_CREDENTIAL",
+                ["Kind"] = "HttpsToken",
+                ["Value"] = "zkpat_0123456789abcdef0123456789abcdef",
+                ["UserName"] = "x-access-token",
+            });
+        Assert.Equal(HttpStatusCode.OK, created.StatusCode);
+        var credentialId = System.Text.Json.JsonDocument.Parse(
+            await created.Content.ReadAsStringAsync(CancellationToken))
+            .RootElement.GetProperty("id").GetGuid();
+
+        await host.Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<Zenkins.Server.Data.Tenancy.ISystemDataScope>();
+            await using var context = await services
+                .GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<Zenkins.Server.Data.ZenkinsDbContext>>()
+                .CreateDbContextAsync(CancellationToken);
+            using var scope = systemDataScope.BeginScope();
+            var project = (await context.SystemQueryAsync<Zenkins.Server.Data.Entities.Project>(
+                candidate => candidate.Id == host.ProjectId)).Single();
+            project.GitCredentialId = credentialId;
+            await context.SaveChangesAsync(CancellationToken);
+            return true;
+        });
+
+        // The run half: a real run of this project, leased by the worker that will hold the other two.
+        var runId = await RunTestHost.TriggerRunAsync(owner, host.ProjectId, branch: "feature/cross-type");
+        var workerToken = await host.CreateWorkerAsync("cross-type-agent", canProbe: true);
+        using var client = host.CreateDeliveryClient();
+
+        using (var claimed = await host.ClaimAsync(workerToken))
+        {
+            Assert.Equal(runId, await RunTestHost.ReadClaimedRunIdAsync(claimed));
+        }
+
+        using (var accepted = await WorkerTestHost.SendWorkerJsonAsync(
+            client, workerToken, $"/api/workers/runs/{runId}/accepted", new { }))
+        {
+            Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        }
+
+        // The probe half: I-005's registry, leased by the same worker.
+        var requesting = host.WithTenantAsync(services =>
+            services.GetRequiredService<GitProbeService>().RequestAsync(host.ProjectId, CancellationToken));
+        _ = await host.WaitForUnsettledProbeAsync(TimeSpan.FromSeconds(10));
+        var probeClaim = await GitProbeTestHost.ClaimOneProbeAsync(client, workerToken);
+
+        // The definition half: the branch observation the push queued, leased by the same worker.
+        var definitionClaim = await host.ClaimDefinitionAsync(client, workerToken);
+        Assert.NotNull(definitionClaim);
+
+        // Each id opens its own door...
+        using (var ownDefinition = await FetchDefinitionCredentialAsync(
+            client, workerToken, definitionClaim!.ValidationId))
+        {
+            Assert.Equal(HttpStatusCode.OK, ownDefinition.StatusCode);
+            Assert.Contains(
+                "zkpat_0123456789abcdef0123456789abcdef",
+                await ownDefinition.Content.ReadAsStringAsync(CancellationToken),
+                StringComparison.Ordinal);
+        }
+
+        using (var ownProbe = await GitProbeTestHost.FetchProbeCredentialAsync(
+            client, workerToken, probeClaim.ProbeId))
+        {
+            Assert.Equal(HttpStatusCode.OK, ownProbe.StatusCode);
+        }
+
+        using (var ownRun = await FetchCredentialAsync(
+            client, workerToken, $"/api/workers/runs/{runId}/git-credential"))
+        {
+            Assert.Equal(HttpStatusCode.OK, ownRun.StatusCode);
+        }
+
+        // ...and no other type's: every crossing is the same bodyless 404 a nonexistent id answers.
+        var crossings = new[]
+        {
+            $"/api/workers/runs/{definitionClaim.ValidationId}/git-credential",
+            $"/api/workers/probes/{definitionClaim.ValidationId}/git-credential",
+            $"/api/workers/definitions/{runId}/git-credential",
+            $"/api/workers/definitions/{probeClaim.ProbeId}/git-credential",
+        };
+        foreach (var path in crossings)
+        {
+            using var crossed = await FetchCredentialAsync(client, workerToken, path);
+            Assert.True(
+                crossed.StatusCode == HttpStatusCode.NotFound,
+                $"{path} answered {(int)crossed.StatusCode}; a foreign id type must be a bodyless 404.");
+            Assert.Equal(string.Empty, await crossed.Content.ReadAsStringAsync(CancellationToken));
+        }
+
+        // Settle both leases, so the background request is not left waiting on a worker that is done.
+        using (var reported = await GitProbeTestHost.ReportProbeAsync(
+            client,
+            workerToken,
+            probeClaim.ProbeId,
+            GitProbeOutcomes.AuthRejected,
+            message: "cross-type fact"))
+        {
+            Assert.Equal(HttpStatusCode.OK, reported.StatusCode);
+        }
+
+        Assert.Equal(GitProbeOutcomes.AuthRejected, (await requesting).Outcome);
+    }
+
+    [Fact]
+    public async Task One_tick_with_several_new_heads_asks_for_one_probe()
+    {
+        // Card Q-022: "one probe per project per tick" was protected only by I-005's registry serialising
+        // per (project, repository) and the 15 s dedupe window - and the review's mutation that moved the
+        // probe inside the per-branch loop stayed green. A single discovery probe may wait up to 10 s, so
+        // three or more new heads in one tick would open duplicate git sessions. Count the invocations, do
+        // not read the structure: the registry's RequestCount is how many callers one probe served.
+        using var host = await WebhooksTestHost.CreateAsync(new Dictionary<string, string?>
+        {
+            [BranchDiscoveryOptions.SweepIntervalSecondsKey] = "3600",
+        });
+        await host.SetBranchDiscoveryAsync(host.ProjectId, BranchDiscoveryModes.Branches);
+        var workerToken = await host.CreateWorkerAsync("tick-agent", canProbe: true);
+        var sweeper = await host.Host.InScopeAsync(services => Task.FromResult(
+            services.GetServices<IHostedService>().OfType<BranchDiscoverySweeper>().Single()));
+
+        var tick = sweeper.SweepOnceAsync(CancellationToken);
+        var probe = await host.WaitForUnsettledProbeAsync(TimeSpan.FromSeconds(10));
+
+        var heads = new[]
+        {
+            new GitProbeRef("refs/heads/feature/one", WebhookPayloads.Commit('1')),
+            new GitProbeRef("refs/heads/feature/two", WebhookPayloads.Commit('2')),
+            new GitProbeRef("refs/heads/feature/three", WebhookPayloads.Commit('3')),
+            new GitProbeRef("refs/heads/main", WebhookPayloads.Commit('4')),
+        };
+        using (var workerClient = host.CreateDeliveryClient())
+        {
+            var claim = await GitProbeTestHost.ClaimOneProbeAsync(workerClient, workerToken);
+            Assert.Equal(probe.Id, claim.ProbeId);
+            using var reported = await GitProbeTestHost.ReportProbeAsync(
+                workerClient,
+                workerToken,
+                claim.ProbeId,
+                GitProbeOutcomes.Refs,
+                heads,
+                headSha: heads[0].Sha,
+                headBranch: heads[0].Name);
+            Assert.Equal(HttpStatusCode.OK, reported.StatusCode);
+        }
+
+        var result = await tick;
+        Assert.Equal(1, result.ProjectsDiscovered);
+
+        // The tick's work really happened (four heads registered, one probe answered all of them)...
+        Assert.Equal(4, (await host.ReadBranchesAsync()).Count);
+
+        // ...and it asked the repository once. A probe per head shows up here as RequestCount 4 (the
+        // registry's dedupe would still hand back one probe, which is why the count, not the entry, is
+        // the fact).
+        var probes = await host.Host.InScopeAsync(services => Task.FromResult(
+            services.GetRequiredService<GitProbeRegistry>().Snapshots
+                .Where(snapshot => snapshot.ProjectId == host.ProjectId)
+                .ToArray()));
+        var only = Assert.Single(probes);
+        Assert.Equal(1, only.RequestCount);
+        Assert.Equal(probe.Id, only.Id);
     }
 
     [Fact]

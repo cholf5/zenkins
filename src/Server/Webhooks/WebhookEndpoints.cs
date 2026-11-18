@@ -115,11 +115,14 @@ public static class WebhookEndpoints
                     statusCode: StatusCodes.Status400BadRequest);
 
             default:
-                // The closed vocabulary the card fixes: `queued`, `ignored:branch`, `ignored:delete`,
-                // `ignored:not-branch`, `project-disabled` and `queue-full` (cards F-028/F-029: the
-                // project's own gate refused the push - recorded, and still a 2xx), and `duplicate` for a
-                // replay (which still carries the original outcome and, when it queued one, the original
-                // run id).
+                // The closed vocabulary, named in full so a client reads the set itself and not a
+                // remembered subset: `queued`, `ignored:branch`, `ignored:not-branch`, `ignored:delete`,
+                // `ignored:no-repository`, `ignored:branch-too-long`, `awaiting-observation`,
+                // `no-pipeline`, `project-disabled` and `queue-full` (cards F-028/F-029: the project's
+                // own gate refused the push - recorded, and still a 2xx) are the members of
+                // `WebhookOutcomes.All`; `duplicate` is the status a replay answers with, and the record
+                // still carries the original outcome and, when it queued one, the original run id. A fact
+                // holds this list equal to the set, so the sentence cannot fall behind it.
                 return Results.Json(new WebhookDeliveryResponse(
                     Status: result.Status == WebhookDeliveryStatus.Duplicate
                         ? "duplicate"
@@ -446,9 +449,10 @@ public static class WebhookEndpoints
     }
 
     /// <summary>
-    /// The answer of an accepted delivery. <see cref="Status"/> is one of <c>queued</c>,
-    /// <c>ignored:branch</c>, <c>ignored:delete</c>, <c>ignored:not-branch</c> or <c>duplicate</c>;
-    /// <see cref="Outcome"/> is the stored disposition the same delivery would answer with again.
+    /// The answer of an accepted delivery. <see cref="Status"/> is `duplicate` for a replay, and otherwise
+    /// one of the members of <see cref="WebhookOutcomes.All"/> - the list is written out once, at the
+    /// response site above, and a fact holds it equal to the set; <see cref="Outcome"/> is the stored
+    /// disposition the same delivery would answer with again.
     /// </summary>
     public sealed record WebhookDeliveryResponse(
         string Status,

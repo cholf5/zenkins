@@ -413,6 +413,13 @@ public sealed class WebhookDeliveryService(
         var now = timeProvider.GetUtcNow();
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
 
+        // Q-022: the vocabulary is closed here, not in a comment. Every value this method can store - the
+        // classified outcome and the refusal a project's gate answers with - is checked against
+        // WebhookOutcomes.All, so a value invented in one branch of the delivery path throws instead of
+        // reaching the row, the settings page and the API answer. The column stays open (it also carries
+        // run validation codes); this is the guard the column cannot be.
+        outcome = WebhookOutcomes.Require(outcome);
+
         var row = new WebhookDelivery
         {
             OrganizationId = webhook.OrganizationId,
@@ -492,7 +499,7 @@ public sealed class WebhookDeliveryService(
                 // - with the refusal as its outcome instead of "queued" - and the git host is answered
                 // accepted. A 4xx here would make most hosts disable the webhook automatically, which is
                 // the opposite of what "enable the project again and it works" promises.
-                outcome = refusals[0].Code;
+                outcome = WebhookOutcomes.Require(refusals[0].Code);
                 row.Outcome = outcome;
                 logger.LogInformation(
                     "Webhook delivery refused by the project gate. OrganizationId={OrganizationId} ProjectId={ProjectId} WebhookId={WebhookId} Outcome={Outcome}",

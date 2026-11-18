@@ -96,6 +96,16 @@ public static class WebhookValidation
 /// <summary>
 /// The closed set of delivery outcomes a stored <see cref="Data.Entities.WebhookDelivery"/> records and a
 /// duplicate answers with. The vocabulary is also what the settings page shows as "last outcome".
+/// <para>
+/// <b>The set is closed by <see cref="All"/>, and the delivery path is held to it.</b> C# cannot
+/// enumerate a type's constants, so <see cref="All"/> is written out by hand - which would make it just
+/// another list to fall behind. What keeps it honest is a fact that reflects over this type and fails
+/// when a constant is added, renamed or re-valued without <see cref="All"/> following (and when
+/// <see cref="All"/> names something no constant declares). The delivery path writes through
+/// <see cref="Require"/>, so a value invented in one branch of it throws instead of being stored and
+/// rendered on the settings page as-is. The column itself stays open on purpose: it also carries run
+/// validation codes, so a check constraint there would be the wrong place for this rule.
+/// </para>
 /// </summary>
 public static class WebhookOutcomes
 {
@@ -156,4 +166,38 @@ public static class WebhookOutcomes
 
     /// <summary>Longest stored outcome.</summary>
     public const int MaxLength = 32;
+
+    /// <summary>
+    /// Every outcome a delivery can record - the one list the delivery path is held to and the endpoint
+    /// documentation is checked against. Kept equal to the constants above by a fact
+    /// (<c>WebhookOutcomeVocabularyTests</c>), never by attention.
+    /// </summary>
+    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
+    {
+        Queued,
+        IgnoredBranch,
+        IgnoredDelete,
+        IgnoredNotBranch,
+        IgnoredNoRepository,
+        ProjectDisabled,
+        QueueFull,
+        AwaitingObservation,
+        NoPipeline,
+        BranchTooLong,
+    };
+
+    /// <summary>Whether <paramref name="outcome"/> is a member of <see cref="All"/>.</summary>
+    public static bool IsKnown(string? outcome) => outcome is not null && All.Contains(outcome);
+
+    /// <summary>
+    /// The delivery path's write barrier: the stored outcome, or an exception naming the offending value.
+    /// A misspelled or newly invented outcome fails at the writer instead of reaching the row and the
+    /// page that renders it.
+    /// </summary>
+    public static string Require(string? outcome) => IsKnown(outcome)
+        ? outcome!
+        : throw new ArgumentOutOfRangeException(
+            nameof(outcome),
+            outcome,
+            "A webhook delivery outcome must be a member of WebhookOutcomes.All.");
 }
