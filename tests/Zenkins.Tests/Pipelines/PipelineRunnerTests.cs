@@ -138,6 +138,64 @@ public sealed class PipelineRunnerTests
         Assert.Contains(run.LogLines, line => line.Contains("step 1/1", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The v2 <b>document</b>, not a model this build serialised: hand-written JSON with <c>"version": 2</c> and no
+    /// <c>stage</c> on any step, four steps long, executed by the real child processes. Each step appends its own
+    /// word to the marker file, so an executor that reordered, grouped or dropped steps by a field v2 does not
+    /// have would change what the file says - the marker is the order, not an inference from the log.
+    /// <para>
+    /// <b>Why there is no clone, and why that is the production shape.</b> A frozen document only travels to a
+    /// Worker on a Freestyle run: <see cref="RunDefinitionSources.For"/> answers <c>repository</c> for any run with
+    /// a branch, and a repository run derives its spec from the checkout (the writer freezes v3 today, so a
+    /// repository run never carries a v2 document). Asserting a clone here would therefore assert a shape the
+    /// product does not have; the clone-plus-order half is
+    /// <c>A_three_step_pipeline_runs_in_order_and_reports_its_spec_first</c>'s job.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_v2_document_literal_executes_its_whole_flat_step_list_in_order()
+    {
+        var specJson = $$"""
+        {
+          "version": 2,
+          "name": "legacy",
+          "steps": [
+            { "name": "Restore", "run": ["{{PipelineTestData.DotNet}}", "{{PipelineTestData.ArgvEcho}}", "append", "marker.txt", "restore"] },
+            { "name": "Build", "run": ["{{PipelineTestData.DotNet}}", "{{PipelineTestData.ArgvEcho}}", "append", "marker.txt", "build"] },
+            { "name": "Test", "run": ["{{PipelineTestData.DotNet}}", "{{PipelineTestData.ArgvEcho}}", "append", "marker.txt", "test"] },
+            { "name": "Package", "run": ["{{PipelineTestData.DotNet}}", "{{PipelineTestData.ArgvEcho}}", "append", "marker.txt", "package"] }
+          ]
+        }
+        """;
+
+        // The document really is v2 with no stage anywhere - the executor below cannot be passing because the
+        // reader silently upgraded the version or filled the field in.
+        Assert.True(PipelineSpecJson.TryRead(specJson, out var frozen, out var readError), readError);
+        Assert.Equal(2, frozen!.Version);
+        Assert.All(frozen.Steps, step => Assert.Null(step.Stage));
+
+        using var run = new PipelineRunHarness(specJson);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+
+        // The whole list, in declaration order: four markers, in the order the document declared them.
+        Assert.Equal(
+            ["restore", "build", "test", "package"],
+            File.ReadAllLines(Path.Combine(run.Work.WorkspacePath, "marker.txt")));
+
+        // One Running and one terminal report per step, index 1..4 in order - the document's flat list, executed
+        // as one list, not grouped into sections of any kind.
+        Assert.Equal([1, 1, 2, 2, 3, 3, 4, 4], run.StepReports.Select(report => report.Index));
+        Assert.Equal(
+            ["Restore", "Build", "Test", "Package"],
+            run.StepReports
+                .Where(report => report.Status == PipelineStepStatus.Success)
+                .Select(report => report.Name));
+    }
+
     // ------------------------------------------------------------------
     // TC-002: a failing step stops the run
     // ------------------------------------------------------------------

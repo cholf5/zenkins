@@ -105,21 +105,37 @@ public sealed class RunStagePageTests
     {
         Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
         using var host = await RunUiHost.CreateAsync();
+        // An unstaged step before the first section AND one after a named section, with a second named section
+        // behind it: the trailing one is the case that matters, because "absorbed into the previous stage" is a
+        // no-op for a leading step but moves this one inside a section the author never chose.
         var run = await host.CreateRunAsync(
         [
             new PipelineStep("Notify", Run: ["notify"]),
-            new PipelineStep("Build", Run: ["dotnet", "build"], Stage: "Build"),
+            new PipelineStep("Compile", Run: ["dotnet", "build"], Stage: "Build"),
             new PipelineStep("Report", Run: ["report"]),
+            new PipelineStep("Unit", Run: ["dotnet", "test"], Stage: "Test"),
         ]);
 
         var page = await run.ReadRunPageAsync();
 
-        // Before the first section and after the last one: an unstaged step is never folded into a stage.
+        // The page renders exactly the two named sections - an unstaged step is neither a section of its own nor a
+        // second section sharing the previous stage's name (which is what "absorbed into the previous stage"
+        // produces: a duplicate `run-stage-Build`).
+        var sections = StageSections(page);
+        Assert.Equal(2, sections.Count);
+
+        // Before the first section, and between the two: outside every `run-stage-` element, not merely outside
+        // the first `</details>` the page happens to contain.
         var notify = page.IndexOf("id=\"run-step-Notify\"", StringComparison.Ordinal);
-        var details = page.IndexOf("<details", StringComparison.Ordinal);
-        var close = page.IndexOf("</details>", details, StringComparison.Ordinal);
         var report = page.IndexOf("id=\"run-step-Report\"", StringComparison.Ordinal);
-        Assert.True(notify >= 0 && details > notify && close > details && report > close);
+        Assert.True(notify >= 0 && notify < sections[0].Start);
+        Assert.True(report > sections[0].End && report < sections[1].Start);
+        Assert.All(
+            sections,
+            section => Assert.DoesNotContain(
+                "run-step-Report",
+                page[section.Start..section.End],
+                StringComparison.Ordinal));
     }
 
     [Fact(Timeout = 2 * 60 * 1000)]
@@ -138,6 +154,29 @@ public sealed class RunStagePageTests
 
         Assert.Contains("<details open", Section(page, "Build"), StringComparison.Ordinal);
         Assert.Contains("Running", Section(page, "Build"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every stage section the page renders, as (Start, End) offsets, in page order. A section starts at its
+    /// <c>run-stage-</c> id and ends at the <c>&lt;/li&gt;</c> that closes the item after its
+    /// <c>&lt;/details&gt;</c> - the step rows inside are <c>&lt;li&gt;</c> elements too, so the first
+    /// <c>&lt;/li&gt;</c> after the start is not the section's end.
+    /// </summary>
+    private static List<(int Start, int End)> StageSections(string page)
+    {
+        var sections = new List<(int Start, int End)>();
+        var start = 0;
+        while ((start = page.IndexOf("id=\"run-stage-", start, StringComparison.Ordinal)) >= 0)
+        {
+            var details = page.IndexOf("</details>", start, StringComparison.Ordinal);
+            Assert.True(details > start, "a stage section never closes its details element.");
+            var end = page.IndexOf("</li>", details, StringComparison.Ordinal);
+            Assert.True(end > details, "a stage section never closes its list item.");
+            sections.Add((start, end));
+            start = end;
+        }
+
+        return sections;
     }
 
     private static string Section(string page, string stage)
