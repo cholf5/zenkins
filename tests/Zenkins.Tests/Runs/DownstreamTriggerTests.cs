@@ -1,5 +1,8 @@
+using System.Net;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
@@ -17,6 +20,12 @@ namespace Zenkins.Tests.Runs;
 /// <see cref="ProjectLinkService"/> and <see cref="DownstreamTriggerService"/> - against a real database, and reads
 /// the rows back. The background timer is never waited on: the tests call one dispatch pass, which is the seam the
 /// sweeper itself uses.
+/// </para>
+/// <para>
+/// The staging facts call <see cref="DownstreamTriggers.StageAsync"/> by hand because their subject is what happens
+/// to a row that already exists. The same-transaction claim is the one thing that cannot be written that way - a
+/// test that stages the row itself would keep passing while the product committed it in a second transaction - so
+/// one fact drives a real <see cref="RunService.CompleteAsync"/> and watches the commits it makes.
 /// </para>
 /// </summary>
 [Trait("Category", "Run")]
@@ -60,6 +69,64 @@ public sealed class DownstreamTriggerTests
         Assert.Equal(upstreamRun, run.TriggeredByRunId);
         Assert.Equal(1, run.UpstreamHops);
         Assert.Equal("abc1111", run.GitCommit is null ? "abc1111" : "abc1111");
+    }
+
+    /// <summary>
+    /// The same-transaction sentence, stated where it can fail: a real completion - the production hook, not
+    /// <see cref="DownstreamTriggers.StageAsync"/> called by hand - commits the terminal status and the obligation it
+    /// owes in <b>one</b> unit of work. A <see cref="SaveChangesInterceptor"/> on every context this host opens
+    /// records the units of work the product actually commits, so "one commit, and the row was in it" is read off
+    /// the product's own call, not off a row the test wrote.
+    /// </summary>
+    [Fact]
+    public async Task A_real_run_completion_commits_the_terminal_status_and_its_obligation_together()
+    {
+        var commits = new RecordingSaveChangesInterceptor();
+        using var host = await RunTestHost.CreateAsync(
+            configureAppConfiguration: null,
+            configureTestServices: services =>
+            {
+                // The options singleton feeds the scoped context and every factory-created context alike, so the
+                // recorder sees the units of work the product really opens (the pattern DashboardTestHost uses).
+                services.RemoveAll<DbContextOptions<ZenkinsDbContext>>();
+                services.AddSingleton(serviceProvider => new DbContextOptionsBuilder<ZenkinsDbContext>()
+                    .UseZenkinsDatabase(serviceProvider.GetRequiredService<ZenkinsDataOptions>())
+                    .AddInterceptors(commits)
+                    .Options);
+            });
+        var (upstreamProject, owner) = await host.CreateProjectAsync("same-commit-upstream");
+        var downstreamProject = await host.SeedProjectAsync(
+            "same-commit-downstream",
+            "https://example.test/same-commit.git");
+        await LinkAsync(host, upstreamProject, downstreamProject);
+        var link = Assert.Single(await ReadLinkCountAsync(host));
+
+        var runId = await RunTestHost.TriggerRunAsync(owner, upstreamProject);
+        var (token, _) = await host.RegisterWorkerAsync();
+        using var worker = host.Host.CreateClient();
+        using var claim = await RunTestHost.ClaimAsync(worker, token);
+        Assert.Equal(runId, await RunTestHost.ReadClaimedRunIdAsync(claim));
+        using var accepted = await RunTestHost.AcceptAsync(worker, token, runId);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+
+        // The hook's own commit only: everything before this point is setup the fact is not about.
+        var before = commits.Units.Count;
+        using var completed = await RunTestHost.CompleteAsync(worker, token, runId, exitCode: 0);
+        Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
+
+        // Exactly one commit carried the terminal status, and the obligation was staged inside that same commit.
+        // A hook that saved the status first and wrote the row in a second unit of work leaves this unit without
+        // the outbox row, which is what the next assertion reads.
+        var terminal = Assert.Single(commits.Units.Skip(before), unit => unit.TerminalRunIds.Contains(runId));
+        Assert.Equal(runId, Assert.Single(terminal.TerminalRunIds));
+        Assert.Equal(link.Id, Assert.Single(terminal.StagedLinkIds));
+
+        // And the row really is on disk, tied to the same run and the same edge - the commit the interceptor saw is
+        // the one that stuck.
+        var message = Assert.Single(await ReadOutboxAsync(host));
+        Assert.Equal(OutboxKinds.DownstreamTrigger, message.Kind);
+        Assert.Equal(runId, message.UpstreamRunId);
+        Assert.Equal(link.Id, message.LinkId);
     }
 
     [Fact]
@@ -465,6 +532,66 @@ public sealed class DownstreamTriggerTests
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Records what each unit of work contained when the product asked to save it: the terminal runs it moved and
+    /// the obligation rows it added. Reading <see cref="DbContext.ChangeTracker"/> here is the only place the two are
+    /// still visible together - after the call the entries are <c>Unchanged</c> and the commit boundary is gone.
+    /// </summary>
+    private sealed class RecordingSaveChangesInterceptor : SaveChangesInterceptor
+    {
+        public List<UnitOfWork> Units { get; } = [];
+
+        public override InterceptionResult<int> SavingChanges(
+            DbContextEventData eventData,
+            InterceptionResult<int> result)
+        {
+            Record(eventData.Context);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(eventData.Context);
+            return ValueTask.FromResult(result);
+        }
+
+        private void Record(DbContext? context)
+        {
+            if (context is null)
+            {
+                return;
+            }
+
+            var entries = context.ChangeTracker.Entries()
+                .Where(entry => entry.State is EntityState.Added or EntityState.Modified)
+                .ToList();
+
+            // Only a `Modified` run counts: a queued run was `Added`, and a terminal status is a transition of a row
+            // that already existed - the completion's edit, not a trigger's insert.
+            Units.Add(new UnitOfWork(
+                [
+                    .. entries
+                        .Where(entry => entry.State == EntityState.Modified
+                            && entry.Entity is BuildRun run
+                            && RunReruns.IsTerminal(run.Status))
+                        .Select(entry => ((BuildRun)entry.Entity).Id),
+                ],
+                [
+                    .. entries
+                        .Where(entry => entry.State == EntityState.Added && entry.Entity is OutboxMessage)
+                        .Select(entry => ((OutboxMessage)entry.Entity).LinkId),
+                ]));
+        }
+
+        /// <summary>One <c>SaveChanges</c> call: the terminal run transitions and the staged obligations in it.</summary>
+        public sealed record UnitOfWork(
+            IReadOnlyList<Guid> TerminalRunIds,
+            IReadOnlyList<Guid> StagedLinkIds);
+    }
 
     private static async Task<Guid> SeedRunAsync(
         RunTestHost host,

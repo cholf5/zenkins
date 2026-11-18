@@ -10,9 +10,11 @@ namespace Zenkins.Server.Runs;
 public static class DownstreamTriggerLimits
 {
     /// <summary>
-    /// How many links deep a chain may go before it stops. The runtime half of the loop protection: a chain can
-    /// loop through branch policies (A main -> B main -> A main) without the graph ever containing a cycle, so the
-    /// save-time check cannot see it. Twenty is deliberately shallow - a legitimate chain is a handful of jobs.
+    /// How many links deep a chain may go before it stops. This bounds <b>depth</b>, not branch policies: the
+    /// save-time search refuses every cycle whatever policy each edge carries (A main -> B main -> A main is the
+    /// graph cycle, and is refused), so what a legal chain can still do is run long - the 21st link stops here with
+    /// its own reason. It is also the only stop left for an edge that reached the table without the save-time
+    /// check. Twenty is deliberately shallow - a legitimate chain is a handful of jobs.
     /// </summary>
     public const int MaxHops = 20;
 
@@ -232,7 +234,8 @@ public sealed class DownstreamTriggerService(
                 cancellationToken);
         }
 
-        // The runtime half of the loop protection (card F-026): a chain that only loops through branch policies.
+        // How deep a chain may go (card F-026): cycles are refused at save time whatever their branch policies, so
+        // what is left to stop is a chain that is legal edge by edge and still too long.
         if (upstream.UpstreamHops + 1 > DownstreamTriggerLimits.MaxHops)
         {
             return await SettleAsync(

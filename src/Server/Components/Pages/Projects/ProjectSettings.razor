@@ -238,8 +238,9 @@
                     A chain runs projects in order: when an upstream run reaches a terminal state the server
                     queues the downstream exactly once, in the same transaction, and the run page names the run
                     that caused it. A link that would close a cycle is refused below with the path that would
-                    close it; a chain that only loops through branch policies stops after
-                    @ProjectLinkService.MaxUpstreamHops hops.
+                    close it, whatever branch policy the edges carry. A chain is also bounded in depth: after
+                    @ProjectLinkService.MaxUpstreamHops links it stops with its own recorded reason - the limit
+                    that is likewise the only stop left for an edge written past that save-time check.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>

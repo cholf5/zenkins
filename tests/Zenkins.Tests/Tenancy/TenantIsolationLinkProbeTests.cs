@@ -49,6 +49,7 @@ public sealed class TenantIsolationLinkProbeTests : IClassFixture<TenantProbeHos
                 ["BranchPolicy"] = ProjectLinkBranchPolicies.DefaultBranch,
             });
         Assert.Equal(HttpStatusCode.NotFound, foreignRoute.StatusCode);
+        Assert.Empty(await foreignRoute.Content.ReadAsByteArrayAsync(CancellationToken));
 
         // 2. B's project in the body: the route is A's own project, so the only leak left is the target.
         using var foreignTarget = await OrganizationTestHost.PostFormAsync(
@@ -63,6 +64,7 @@ public sealed class TenantIsolationLinkProbeTests : IClassFixture<TenantProbeHos
                 ["BranchPolicy"] = ProjectLinkBranchPolicies.DefaultBranch,
             });
         Assert.Equal(HttpStatusCode.NotFound, foreignTarget.StatusCode);
+        Assert.Empty(await foreignTarget.Content.ReadAsByteArrayAsync(CancellationToken));
 
         // 3. B's link id, under A's own route: a foreign link is the same 404 as a missing one.
         using var foreignLink = await OrganizationTestHost.PostFormAsync(
@@ -71,6 +73,7 @@ public sealed class TenantIsolationLinkProbeTests : IClassFixture<TenantProbeHos
             $"/projects/{TwoOrgsFixture.ProjectAId}/links/{betaLink}/delete",
             new Dictionary<string, string>(StringComparer.Ordinal));
         Assert.Equal(HttpStatusCode.NotFound, foreignLink.StatusCode);
+        Assert.Empty(await foreignLink.Content.ReadAsByteArrayAsync(CancellationToken));
 
         // Nothing was written in either tenant, and B's own edge is untouched.
         Assert.Empty(await _host.Data.ReadAcrossTenantsAsync<ProjectLink>(

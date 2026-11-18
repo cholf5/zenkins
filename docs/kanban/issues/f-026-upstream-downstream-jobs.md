@@ -48,8 +48,12 @@ answer all three.
       `defaultBranch` (the downstream builds its default branch); a branch the
       downstream cannot build is recorded as `skipped-branch`, not a failure.
 - [x] Loop protection at two levels: a cycle is refused at save time (graph
-      check), and a runtime hop counter (e.g. 20) stops a chain that only loops
-      through branch policies, with a recorded reason on the run that stopped.
+      check — and that search does not read branch policies, so `A→B→A` is
+      refused whatever branches the two edges build), and a runtime hop counter
+      (`MaxUpstreamHops`) bounds how deep a chain may run: it stops an acyclic
+      chain that is legal edge by edge yet too long, with a recorded reason on
+      the run that stopped, and it is the second brake for an edge written past
+      the save-time check.
 - [x] The trigger is delivered exactly once even if the Server dies right after the
       upstream completes: an outbox row is written in the same transaction as the
       terminal status and dispatched after commit, retried until delivered.
@@ -130,6 +134,12 @@ Expected:
   exist before the feature does.
 - The outbox is deliberately a table and not an in-memory queue: the guarantee is
   "a completed upstream does not lose its downstream".
+- Superseded wording: this card, the settings page's description and the code comments used to say a chain
+  could "cycle only through branch policies without the graph ever containing a cycle", with the hop counter
+  as the answer. That is not true - the save-time search ignores branch policies and refuses that edge - so
+  all three now say what does hold: the hop limit bounds depth, and it is the second brake for an edge
+  written past the save-time check. The message of the `feat(F-026)` commit on `main` still carries the old
+  sentence; it is history and is left as written.
 
 ## Delivered / remaining
 
@@ -142,7 +152,7 @@ Expected:
 | `A_link_without_only_on_success_triggers_on_a_failed_upstream` | `OnlyOnSuccess = false` really triggers on a failure | the skip made unconditional: `Expected "pending" / Actual "settled"` |
 | `A_branch_policy_the_downstream_cannot_build_is_a_skip_not_a_failure` | `sameBranch` on a branchless upstream skips; `defaultBranch` queues the downstream's default | the branch check disabled: `Expected "skipped-branch" / Actual "queued"` |
 | `A_cycle_is_refused_at_save_with_the_path_that_would_close_it` | A->B->C then C->A is refused, with the path in the message; a self-link is refused | the graph walk disabled: `Expected InvalidInput / Actual Success` |
-| `A_chain_at_the_hop_limit_stops_with_its_own_reason` | the runtime counter stops a chain the graph check cannot see | the cap loosened by 100: `Expected "skipped-hop-limit" / Actual "queued"` |
+| `A_chain_at_the_hop_limit_stops_with_its_own_reason` | the runtime counter bounds depth: a chain that is legal edge by edge still stops at the limit | the cap loosened by 100: `Expected "skipped-hop-limit" / Actual "queued"` |
 | `A_disabled_downstream_is_skipped_with_its_reason_and_not_retried` | a disabled project is skipped (not failed, not retried) | the disabled check removed: the queue gate answers instead, `Expected 1 / Actual 0` settled rows |
 | `A_downstream_run_carries_the_upstream_facts_and_its_definitions_defaults` | the downstream's parameters are the definitions' defaults and its claim carries the five `UPSTREAM_*` facts | dropping the facts from the claim merge (`UPSTREAM_PROJECT` assertion) and passing no parameters (`GREETING` assertion) - two mutations, one per half |
 | `The_run_page_shows_the_chain_on_both_ends` | the downstream page names and links its upstream; the upstream page lists every downstream with its outcome and reason (including a skipped one) | dropping the chain links from `RunView` |
@@ -178,10 +188,12 @@ batch run at the end.
   and a restart finishes the work. The facts pin the three properties separately: a committed row is
   dispatched afterwards, an unsettled row is dispatched again on the next pass (which is what makes the
   restart case real), and settling before dispatch would queue twice.
-- **Loop protection is two mechanisms because one is not enough.** A cycle is refused when the link is
-  saved, naming the path that would close it; a chain that cycles only through branch policies - two
-  projects pointing at each other with `defaultBranch` - looks acyclic on the graph and is stopped by a hop
-  counter with its own reason. Each has a mutation that reddens only its own fact.
+- **Loop protection is two mechanisms, and only the first one is about cycles.** A cycle is refused when the
+  link is saved, naming the path that would close it - and that search does not read branch policies, so two
+  projects pointing at each other with `defaultBranch` is the graph cycle and is refused like any other. The
+  hop counter bounds how deep a chain may go: it stops a chain that is legal edge by edge and still too long,
+  with its own recorded reason, and it is the only stop left for an edge that reached the table without
+  passing the save-time check. Each has a mutation that reddens only its own fact.
 - **Branch policy is a policy, not a failure.** `sameBranch` carries the upstream branch, `defaultBranch`
   builds the downstream's own; a branch the downstream cannot build is `skipped-branch` and the upstream
   run stays successful. Pinned by a mutation that turns the skip into a queue.

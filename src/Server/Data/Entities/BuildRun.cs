@@ -269,8 +269,9 @@ public sealed class BuildRun : ITenantOwned
 
     /// <summary>
     /// How many upstream links deep this run is (card F-026): 0 for a run nobody triggered, upstream's hops + 1 for
-    /// a downstream run. The runtime half of the loop protection - a chain that only loops through branch policies
-    /// is not a graph cycle, so the graph check cannot see it and this counter is what stops it.
+    /// a downstream run. The runtime half of the loop protection - but it bounds depth, not branch policies: the
+    /// save-time search already refuses every cycle whatever policy each edge carries, so this counter stops a chain
+    /// that is legal edge by edge from running past <c>DownstreamTriggerLimits.MaxHops</c>.
     /// </summary>
     public int UpstreamHops { get; set; }
 

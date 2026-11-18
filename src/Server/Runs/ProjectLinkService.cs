@@ -47,8 +47,10 @@ public sealed record ProjectLinkResult(ProjectLinkStatus Status, ProjectLinkView
 /// <b>A cycle is refused here, not discovered at run time.</b> Saving a link runs a depth-first search from the new
 /// downstream back towards the new upstream; if the upstream is reachable, the link would close a loop and is
 /// refused with the path (<c>A -&gt; B -&gt; A</c>), because "that would make a cycle" without the cycle is a
-/// message a person cannot act on. The runtime hop counter is the second line of defence: a chain can loop through
-/// branch policies without the graph ever containing a cycle, and no save-time check can see that.
+/// message a person cannot act on. This search does not read branch policies - an edge exists whatever branches it
+/// builds - so <c>A -&gt; B -&gt; A</c> is refused however the two edges choose them, and a branch policy cannot hide
+/// a loop from it. What the runtime hop counter bounds is depth: the 21st link of a chain with no cycle in it stops
+/// with its own reason, and it is the only stop left for an edge that reached the table without passing this check.
 /// </para>
 /// <para>
 /// <b>Tenant boundary.</b> Every read goes through the tenant-filtered context, so a foreign project id is the same

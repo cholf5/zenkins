@@ -101,7 +101,7 @@ public static class DownstreamOutcomes
     /// <summary>The downstream project is disabled (card F-028).</summary>
     public const string SkippedDisabled = "skipped-disabled";
 
-    /// <summary>The chain reached the hop limit - the stop a branch-policy loop hits.</summary>
+    /// <summary>The chain reached the hop limit - how deep a legal chain may go, not a cycle's stop.</summary>
     public const string SkippedHopLimit = "skipped-hop-limit";
 
     /// <summary>The downstream project no longer exists (deleted between completion and dispatch).</summary>

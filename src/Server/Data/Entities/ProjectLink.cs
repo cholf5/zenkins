@@ -6,9 +6,9 @@ namespace Zenkins.Server.Data.Entities;
 /// One "run the downstream after the upstream succeeds" edge between two projects (card F-026).
 /// <para>
 /// <b>The graph is per organization and must stay acyclic.</b> A link is refused at save time when it would
-/// close a cycle (the refusal names the path), and the runtime carries a hop counter as well - a chain that only
-/// loops through branch policies (A's <c>main</c> triggers B's <c>main</c>, which triggers A's <c>main</c>) is not
-/// a graph cycle but it is still a loop, and the counter is what stops it.
+/// close a cycle (the refusal names the path). That search ignores branch policies: A's <c>main</c> triggering B's
+/// <c>main</c>, which triggers A's <c>main</c> again, is the graph cycle and is refused like any other. The runtime
+/// hop counter bounds how deep a legal chain may go; it does not make a cycle acceptable.
 /// </para>
 /// <para>
 /// <b>Direction is stored, not inferred.</b> <see cref="UpstreamProjectId"/> is the project whose run finishing
