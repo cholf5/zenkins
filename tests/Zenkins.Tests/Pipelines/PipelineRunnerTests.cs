@@ -513,13 +513,16 @@ public sealed class PipelineRunnerTests
     [Fact]
     public async Task An_inline_definition_carries_its_triggers_pipeline_env_and_secret_references()
     {
-        var script = """
+        // The step runs through `dotnet <ArgvEcho>` like every other step in this file (PipelineTestData
+        // .Step's own rendering): a hand-written `echo` is not an executable on Windows, where the step
+        // would then fail with step-failed before the definition facts below could be read.
+        var script = $$"""
             local token = secret("TOKEN")
             pipeline {
               name = "inline-definition",
               env = { REGION = "eu" },
               triggers = { branches = { "main", "release/*" } },
-              steps = { { name = "Only", run = { "echo", "hi" } } },
+              steps = { {{PipelineTestData.Step("Only", "echo", "hi")}} },
             }
             """;
         using var run = new PipelineRunHarness(script, inline: true);
