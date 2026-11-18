@@ -7,6 +7,7 @@ using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Probes;
+using Zenkins.Server.Polling;
 using Zenkins.Server.Runs;
 using Zenkins.Shared.Projects;
 
@@ -88,7 +89,7 @@ public sealed class WebhookDeliveryService(
     ISystemDataScope systemDataScope,
     WebhookSecretProtector protector,
     WebhookOptions options,
-    RunService runs,
+    ChangeTriggerService changes,
     BranchService branches,
     DefinitionValidationService validations,
     TimeProvider timeProvider,
@@ -483,8 +484,11 @@ public sealed class WebhookDeliveryService(
         Guid? runId = null;
         if (outcome == WebhookOutcomes.Queued)
         {
-            // 8. The run, staged on this context: the same transaction commits the replay record and the run.
-            var run = await runs.QueueWebhookRunAsync(
+            // 8. The run, through the ONE change-trigger path (card F-025): it claims the
+            //    (project, branch, commit) ledger row and stages the run on this context, so the replay
+            //    record, the ledger row and the run commit together. The ledger is also what makes a poll
+            //    that observes the same commit answer `duplicate` instead of queueing a second run.
+            var run = await changes.TriggerFromWebhookAsync(
                 context,
                 webhook.ProjectId,
                 branch,
@@ -492,14 +496,43 @@ public sealed class WebhookDeliveryService(
                 RunValidation.ParseTags(webhook.RequiredTags),
                 cancellationToken);
 
-            if (run.Status == RunOperationStatus.Refused && run.FieldErrors is { Count: > 0 } refusals)
+            if (run.Outcome == PollOutcomes.Duplicate)
             {
-                // Cards F-028 + F-029: the project's own gate refused the trigger (disabled, or the queue
-                // is at its cap). Nothing was inserted, and this is NOT a delivery error: the record stays
-                // - with the refusal as its outcome instead of "queued" - and the git host is answered
-                // accepted. A 4xx here would make most hosts disable the webhook automatically, which is
-                // the opposite of what "enable the project again and it works" promises.
-                outcome = WebhookOutcomes.Require(refusals[0].Code);
+                // The same commit was already triggered - by a poll, or by an earlier push whose delivery
+                // answered differently. The delivery is still recorded (the push was seen) and answered
+                // accepted; nothing is queued, and the original run id travels with it.
+                outcome = WebhookOutcomes.IgnoredDuplicate;
+                row.Outcome = outcome;
+                runId = run.RunId;
+                row.RunId = runId;
+                logger.LogInformation(
+                    "Webhook delivery found the change already triggered. OrganizationId={OrganizationId} ProjectId={ProjectId} WebhookId={WebhookId} Branch={Branch} Commit={Commit} TriggeredBy={TriggeredBy} RunId={RunId}",
+                    webhook.OrganizationId,
+                    webhook.ProjectId,
+                    webhook.Id,
+                    branch,
+                    commit,
+                    run.TriggeredBy,
+                    runId);
+            }
+            else if (run.Status is RunOperationStatus.NotFound or RunOperationStatus.InvalidInput)
+            {
+                // Nothing was queued for a reason that is not the project's gate (the project vanished, or
+                // the request was never valid): nothing is recorded either, so a retry can build.
+                await transaction.RollbackAsync(cancellationToken);
+                context.ChangeTracker.Clear();
+                return run.Status == RunOperationStatus.NotFound
+                    ? WebhookDeliveryResult.NotFound()
+                    : WebhookDeliveryResult.InvalidPayload();
+            }
+            else if (run.Outcome != PollOutcomes.Queued)
+            {
+                // The project's own gate refused the trigger (disabled, or the queue is at its cap):
+                // nothing was inserted, and this is NOT a delivery error - the record stays, with the
+                // refusal as its outcome instead of "queued", and the git host is answered accepted. A
+                // 4xx here would make most hosts disable the webhook automatically, which is the opposite
+                // of what "enable the project again and it works" promises.
+                outcome = WebhookOutcomes.Require(run.Outcome);
                 row.Outcome = outcome;
                 logger.LogInformation(
                     "Webhook delivery refused by the project gate. OrganizationId={OrganizationId} ProjectId={ProjectId} WebhookId={WebhookId} Outcome={Outcome}",
@@ -508,20 +541,12 @@ public sealed class WebhookDeliveryService(
                     webhook.Id,
                     outcome);
             }
-            else if (run.Status != RunOperationStatus.Success || run.RunId is null)
-            {
-                // Nothing was queued, so nothing is recorded: a retry can build.
-                await transaction.RollbackAsync(cancellationToken);
-                context.ChangeTracker.Clear();
-                return run.Status == RunOperationStatus.NotFound
-                    ? WebhookDeliveryResult.NotFound()
-                    : WebhookDeliveryResult.InvalidPayload();
-            }
             else
             {
                 runId = run.RunId;
                 row.RunId = runId;
             }
+
         }
 
         // 9. The "last delivery" facts on the webhook (the settings page's only delivery history), in the

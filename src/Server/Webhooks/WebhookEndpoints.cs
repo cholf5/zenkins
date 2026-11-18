@@ -117,7 +117,8 @@ public static class WebhookEndpoints
             default:
                 // The closed vocabulary, named in full so a client reads the set itself and not a
                 // remembered subset: `queued`, `ignored:branch`, `ignored:not-branch`, `ignored:delete`,
-                // `ignored:no-repository`, `ignored:branch-too-long`, `awaiting-observation`,
+                // `ignored:no-repository`, `ignored:branch-too-long`, `ignored:duplicate` (card F-025: a
+                // trigger already queued a run for this commit), `awaiting-observation`,
                 // `no-pipeline`, `project-disabled` and `queue-full` (cards F-028/F-029: the project's
                 // own gate refused the push - recorded, and still a 2xx) are the members of
                 // `WebhookOutcomes.All`; `duplicate` is the status a replay answers with, and the record

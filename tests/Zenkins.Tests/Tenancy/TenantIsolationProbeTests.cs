@@ -431,6 +431,57 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     // ---------------------------------------------------------------------------------------------
+    // F-025: polled branch heads and the change ledger shared by polling and webhooks
+
+    [Fact]
+    public Task Polled_branch_heads_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<BranchHead>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_branch_head_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<BranchHead>(
+            _fixture,
+            () => new BranchHead
+            {
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                Branch = "feature/cross-tenant",
+                Sha = new string('c', 40),
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_branch_heads() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<BranchHead>(
+            _fixture,
+            TwoOrgsFixture.BranchHeadAId,
+            TwoOrgsFixture.BranchHeadBId,
+            CancellationToken);
+
+    [Fact]
+    public Task Change_triggers_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<ChangeTrigger>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_change_trigger_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<ChangeTrigger>(
+            _fixture,
+            () => new ChangeTrigger
+            {
+                ProjectId = TwoOrgsFixture.ProjectAId,
+                Branch = "main",
+                Commit = new string('c', 40),
+                TriggerType = BuildRunTriggerType.Poll,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_change_triggers() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<ChangeTrigger>(
+            _fixture,
+            TwoOrgsFixture.ChangeTriggerAId,
+            TwoOrgsFixture.ChangeTriggerBId,
+            CancellationToken);
+
     // F-034: the organization environment layer
     // ---------------------------------------------------------------------------------------------
 

@@ -64,6 +64,9 @@ public static class ProjectEndpoints
         group.MapPost("/{projectId:guid}/enable", EnableProjectAsync);
         group.MapPost("/{projectId:guid}/limits", SaveLimitsAsync);
 
+        // F-025: the polling switch and interval, from the project's settings card.
+        group.MapPost("/{projectId:guid}/polling", SavePollingAsync);
+
         return endpoints;
     }
 
@@ -381,6 +384,36 @@ public static class ProjectEndpoints
         };
     }
 
+    /// <summary>Card F-025: saves the polling card (switch + interval).</summary>
+    private static async Task<IResult> SavePollingAsync(
+        Guid projectId,
+        [FromForm] ProjectPollingForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // F-019's rule in miniature: a lost body is the page's PRG error, never a null reference.
+        var result = await projects.SavePollingAsync(
+            userId,
+            projectId,
+            form?.ToInput() ?? new ProjectPollingInput(null, null),
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/settings?notice=polling-saved"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect($"/projects/{projectId}/settings?error={FirstCode(result)}"),
+        };
+    }
+
     /// <summary>The first field error's code, or the name field's when none was reported (F-019).</summary>
     private static string FirstCode(ProjectMutationResult result) =>
         result.FieldErrors?.FirstOrDefault()?.Code ?? ProjectErrorCodes.NameInvalid;
@@ -458,6 +491,16 @@ public static class ProjectEndpoints
         public string? MaxQueuedRuns { get; set; }
 
         public ProjectLimitsInput ToInput() => new(MaxConcurrentRuns, QuietPeriodSeconds, MaxQueuedRuns);
+    }
+
+    /// <summary>Card F-025's polling form: the checkbox and the interval, both as the browser sends them.</summary>
+    public sealed class ProjectPollingForm
+    {
+        public string? PollingEnabled { get; set; }
+
+        public string? PollIntervalMinutes { get; set; }
+
+        public ProjectPollingInput ToInput() => new(PollingEnabled, PollIntervalMinutes);
     }
 
     /// <summary>

@@ -164,6 +164,15 @@ public static class WebhookOutcomes
     /// </summary>
     public const string BranchTooLong = "ignored:branch-too-long";
 
+    /// <summary>
+    /// Card F-025: the push named a commit that a trigger <b>already</b> queued a run for - the same commit
+    /// a poll observed, or an earlier push of the same commit under a different delivery id. The delivery is
+    /// still recorded (the push was seen) and still answered 2xx; nothing is queued twice. The shared
+    /// <c>(project, branch, commit)</c> ledger is what answers this, and the record travels with the run id
+    /// it found.
+    /// </summary>
+    public const string IgnoredDuplicate = "ignored:duplicate";
+
     /// <summary>Longest stored outcome.</summary>
     public const int MaxLength = 32;
 
@@ -181,6 +190,7 @@ public static class WebhookOutcomes
         IgnoredNoRepository,
         ProjectDisabled,
         QueueFull,
+        IgnoredDuplicate,
         AwaitingObservation,
         NoPipeline,
         BranchTooLong,

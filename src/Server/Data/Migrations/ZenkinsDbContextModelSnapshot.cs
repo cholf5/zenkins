@@ -276,6 +276,63 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("BootstrapMarkers");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BranchHead", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("FirstSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastOutcome")
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)");
+
+                    b.Property<DateTimeOffset?>("LastOutcomeAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastRunAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastRunCommit")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Sha")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("ProjectId", "Branch")
+                        .IsUnique();
+
+                    b.ToTable("BranchHeads");
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.BranchJob", b =>
                 {
                     b.Property<Guid>("Id")
@@ -573,6 +630,49 @@ namespace Zenkins.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.ChangeTrigger", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Commit")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TriggerType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("ProjectId", "Branch", "Commit")
+                        .IsUnique();
+
+                    b.ToTable("ChangeTriggers");
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.GitCredential", b =>
                 {
                     b.Property<Guid>("Id")
@@ -779,6 +879,17 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
+                    b.Property<DateTimeOffset?>("LastPollAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastPollMessage")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("LastPollOutcome")
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)");
+
                     b.Property<DateTimeOffset?>("LastProbeAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -817,6 +928,15 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)")
                         .HasDefaultValue("repository");
+
+                    b.Property<int>("PollFailureStreak")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PollIntervalMinutes")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("PollingEnabled")
+                        .HasColumnType("boolean");
 
                     b.Property<int>("QuietPeriodSeconds")
                         .HasColumnType("integer");
@@ -1384,6 +1504,23 @@ namespace Zenkins.Server.Data.Migrations
                     b.Navigation("Run");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.BranchHead", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.BranchJob", b =>
                 {
                     b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
@@ -1455,6 +1592,23 @@ namespace Zenkins.Server.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Run");
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.ChangeTrigger", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.GitCredential", b =>

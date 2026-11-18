@@ -126,11 +126,26 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
         var edited = (await _host.Data.ReadAcrossTenantsAsync<Project>(project => project.Id == projectId, CancellationToken)).Single();
         Assert.Equal("form-probe-edited", edited.Name);
 
+        // F-025: the polling switch is a project mutation like the others, resolved through the tenant
+        // filter - a foreign id is the same 404, and B's polling state is untouched by it.
+        var polling = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/polling",
+            new Dictionary<string, string>
+            {
+                ["PollingEnabled"] = "true",
+                ["PollIntervalMinutes"] = "1",
+            });
+        Assert.Equal(HttpStatusCode.NotFound, polling.StatusCode);
+
         var beta = (await _host.Data.ReadAcrossTenantsAsync<Project>(
             project => project.Id == TwoOrgsFixture.ProjectBId,
             CancellationToken)).Single();
         Assert.Equal(TwoOrgsFixture.ProjectBName, beta.Name);
         Assert.Equal(TwoOrgsFixture.ProjectBRepositoryUrl, beta.RepositoryUrl);
+        Assert.Null(beta.PollIntervalMinutes);
+        Assert.False(beta.PollingEnabled);
 
         // A POST that names B in the route is a 404 even with A's id in the body, and B is untouched.
         var foreignEdit = await OrganizationTestHost.PostFormAsync(

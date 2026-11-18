@@ -103,6 +103,12 @@ public static class ProjectErrorCodes
     /// <summary>F-029: the queue cap is not a whole number in the accepted range.</summary>
     public const string MaxQueuedRunsInvalid = "max-queued-runs-invalid";
 
+    /// <summary>Card F-025: the poll interval is not a whole number inside its bounds.</summary>
+    public const string PollIntervalInvalid = "poll-interval-invalid";
+
+    /// <summary>Card F-025 (AC-7): polling was switched on for a project with no repository.</summary>
+    public const string PollingNotPipeline = "polling-not-pipeline";
+
     /// <summary>The form field the code belongs to, or <see langword="null"/> for an unknown code.</summary>
     public static string? FieldFor(string? code) => code switch
     {
@@ -119,6 +125,7 @@ public static class ProjectErrorCodes
         MaxConcurrentRunsInvalid => ProjectFields.MaxConcurrentRuns,
         QuietPeriodInvalid => ProjectFields.QuietPeriodSeconds,
         MaxQueuedRunsInvalid => ProjectFields.MaxQueuedRuns,
+        PollIntervalInvalid or PollingNotPipeline => ProjectFields.MaxConcurrentRuns,
         _ => null,
     };
 
@@ -165,6 +172,10 @@ public static class ProjectErrorCodes
             $"The quiet period is a whole number of seconds between 0 and {ProjectValidation.MaxQuietPeriodSeconds}.",
         MaxQueuedRunsInvalid =>
             $"The queue cap is a whole number between {ProjectValidation.MinMaxQueuedRuns} and {ProjectValidation.MaxMaxQueuedRuns}; leave it blank for unlimited.",
+        PollIntervalInvalid =>
+            $"The poll interval is a whole number of minutes between {ProjectValidation.MinPollIntervalMinutes} and {ProjectValidation.MaxPollIntervalMinutes}.",
+        PollingNotPipeline =>
+            "Only a project with a repository can be polled: this one is Freestyle or inline, so it has no remote to watch.",
         _ => null,
     };
 }
@@ -201,6 +212,13 @@ public static class ProjectValidation
     /// <summary>F-029: the accepted queue-cap range.</summary>
     public const int MinMaxQueuedRuns = 1;
     public const int MaxMaxQueuedRuns = 1_000;
+
+    /// <summary>Card F-025: the shortest poll interval (the card's own minimum).</summary>
+    public const int MinPollIntervalMinutes = 1;
+
+    /// <summary>Card F-025: the longest poll interval - a day. Anything longer is not polling any more;
+    /// a schedule (F-024) is the tool for "build once a week".</summary>
+    public const int MaxPollIntervalMinutes = 1_440;
 
     public const int MaxNameLength = 200;
     public const int MaxRepositoryUrlLength = 2048;
@@ -293,6 +311,46 @@ public static class ProjectValidation
 
     /// <summary>Whole number in <paramref name="min"/>..<paramref name="max"/> (invariant culture, no
     /// signs, no decimals); anything else is refused instead of silently coerced.</summary>
+    /// <summary>
+    /// Validates the polling card (card F-025): the switch, and - when it is on - a whole-number interval in
+    /// minutes, defaulting to <c>PollOptions.DefaultIntervalMinutes</c> when the field is left blank. Turning
+    /// polling off stores no interval at all.
+    /// </summary>
+    public static string? ValidatePolling(ProjectPollingInput input, out ProjectPolling polling)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var enabled = input.PollingEnabled is { } flag
+            && (flag.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || flag.Equals("on", StringComparison.OrdinalIgnoreCase)
+                || flag == "1");
+
+        polling = new ProjectPolling(false, null);
+        if (!enabled)
+        {
+            return null;
+        }
+
+        var interval = Zenkins.Server.Polling.PollOptions.DefaultIntervalMinutes;
+        if (!string.IsNullOrWhiteSpace(input.PollIntervalMinutes))
+        {
+            if (!TryParseBounded(
+                    input.PollIntervalMinutes,
+                    MinPollIntervalMinutes,
+                    MaxPollIntervalMinutes,
+                    out var parsed))
+            {
+                polling = new ProjectPolling(true, null);
+                return ProjectErrorCodes.PollIntervalInvalid;
+            }
+
+            interval = parsed;
+        }
+
+        polling = new ProjectPolling(true, interval);
+        return null;
+    }
+
     private static bool TryParseBounded(string text, int min, int max, out int value)
     {
         value = min;

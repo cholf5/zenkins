@@ -145,6 +145,18 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>F-023: B's only branch job (the id a cross-tenant probe substitutes).</summary>
     public static readonly Guid BranchBId = new("b0000000-0000-4000-8000-0000000000c2");
 
+    /// <summary>F-025: A's only polled branch head, the positive control for its probes.</summary>
+    public static readonly Guid BranchHeadAId = new("a0000000-0000-4000-8000-0000000000e1");
+
+    /// <summary>F-025: B's only polled branch head (the id a cross-tenant probe substitutes).</summary>
+    public static readonly Guid BranchHeadBId = new("b0000000-0000-4000-8000-0000000000e2");
+
+    /// <summary>F-025: A's only change-ledger row, the positive control for its probes.</summary>
+    public static readonly Guid ChangeTriggerAId = new("a0000000-0000-4000-8000-0000000000f1");
+
+    /// <summary>F-025: B's only change-ledger row (the id a cross-tenant probe substitutes).</summary>
+    public static readonly Guid ChangeTriggerBId = new("b0000000-0000-4000-8000-0000000000f2");
+
     /// <summary>F-034: A's only organization environment variable, the positive control for its probes.</summary>
     public static readonly Guid EnvironmentAId = new("a0000000-0000-4000-8000-0000000000d1");
 
@@ -753,6 +765,53 @@ public sealed class TwoOrgsFixture : IDisposable
                 Branch = "main",
                 PipelineState = BranchPipelineStates.NoPipeline,
                 ObservedCommit = new string('b', 40),
+            });
+
+        // F-025: one polled head and one ledger row per organization. Same branch name and same commit
+        // shape on purpose - the unique keys are (ProjectId, Branch) and (ProjectId, Branch, Commit), so
+        // two organizations legitimately observe the same commit.
+        context.Set<BranchHead>().AddRange(
+            new BranchHead
+            {
+                Id = BranchHeadAId,
+                OrganizationId = OrgAId,
+                ProjectId = ProjectAId,
+                Branch = "main",
+                Sha = new string('a', 40),
+                FirstSeenAt = new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero),
+                LastSeenAt = new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero),
+                LastOutcome = "first-sighting",
+            },
+            new BranchHead
+            {
+                Id = BranchHeadBId,
+                OrganizationId = OrgBId,
+                ProjectId = ProjectBId,
+                Branch = "main",
+                Sha = new string('b', 40),
+                FirstSeenAt = new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero),
+                LastSeenAt = new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero),
+                LastOutcome = "first-sighting",
+            });
+
+        context.Set<ChangeTrigger>().AddRange(
+            new ChangeTrigger
+            {
+                Id = ChangeTriggerAId,
+                OrganizationId = OrgAId,
+                ProjectId = ProjectAId,
+                Branch = "main",
+                Commit = new string('a', 40),
+                TriggerType = BuildRunTriggerType.Poll,
+            },
+            new ChangeTrigger
+            {
+                Id = ChangeTriggerBId,
+                OrganizationId = OrgBId,
+                ProjectId = ProjectBId,
+                Branch = "main",
+                Commit = new string('b', 40),
+                TriggerType = BuildRunTriggerType.Poll,
             });
 
         // F-034: one plain-configuration variable per organization - no ciphertext, no masking: the value

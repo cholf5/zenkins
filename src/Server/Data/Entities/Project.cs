@@ -164,6 +164,40 @@ public sealed class Project : ITenantOwned
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
+    // ---- Card F-025: SCM polling -------------------------------------------------------
+
+    /// <summary>
+    /// Whether this project polls its remote for head movement. <b>Off by default</b>: polling is opt-in per
+    /// project, because a fleet-wide default would silently load every repository in an organization.
+    /// </summary>
+    public bool PollingEnabled { get; set; }
+
+    /// <summary>
+    /// The poll interval in minutes (>= 1), or null while polling is off. The <i>effective</i> interval is
+    /// longer than this after a failed probe - see <see cref="PollFailureStreak"/>.
+    /// </summary>
+    public int? PollIntervalMinutes { get; set; }
+
+    /// <summary>When the last poll tick considered this project (success, skip or failure - all of them).</summary>
+    public DateTimeOffset? LastPollAt { get; set; }
+
+    /// <summary>
+    /// A <see cref="Zenkins.Server.Polling.PollOutcomes"/> value: what the last tick decided for this project.
+    /// Every tick records one - a skipped poll (<c>skipped:project-disabled</c>, <c>skipped:queue-full</c>,
+    /// <c>skipped:concurrency</c>) is never silent.
+    /// </summary>
+    public string? LastPollOutcome { get; set; }
+
+    /// <summary>The probe's diagnostic for the last poll, when it had one (never a credential value).</summary>
+    public string? LastPollMessage { get; set; }
+
+    /// <summary>
+    /// Consecutive failed probes. The effective interval doubles per failure (1x, 2x, 4x ... capped at
+    /// <see cref="Zenkins.Server.Polling.PollOptions.MaxBackoff"/>), and a successful probe resets it to 0 -
+    /// so a remote that is down costs one probe per half hour instead of one per interval.
+    /// </summary>
+    public int PollFailureStreak { get; set; }
+
     /// <summary>
     /// Card I-005: the outcome of the project's most recent Git remote probe - a
     /// <see cref="Zenkins.Shared.Probes.GitProbeOutcomes"/> value, or <see langword="null"/> for a project

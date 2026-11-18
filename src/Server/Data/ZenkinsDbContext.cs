@@ -142,6 +142,14 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// not built. Unique on (ProjectId, Branch).</summary>
     public DbSet<BranchJob> BranchJobs => Set<BranchJob>();
 
+    /// <summary>The head each branch was last observed at, and what the last poll decided for it (F-025).
+    /// Unique on (ProjectId, Branch); it is the polling state, never a derivation from a run.</summary>
+    public DbSet<BranchHead> BranchHeads => Set<BranchHead>();
+
+    /// <summary>The shared change ledger (F-025): one row per (project, branch, commit) that any trigger
+    /// path queued a run for. Unique on the triple - the webhook and the poll cannot both queue it.</summary>
+    public DbSet<ChangeTrigger> ChangeTriggers => Set<ChangeTrigger>();
+
     // Every query starts by resolving a DbSet, so this is the one place that catches a tenant switch
     // before Find/Include can short-circuit on rows tracked under the previous tenant.
     public override DbSet<TEntity> Set<TEntity>()
@@ -869,6 +877,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                     + ")");
             });
 
+            // F-025: the poll state's words are bounded like every other vocabulary column.
+            entity.Property(project => project.LastPollOutcome).HasMaxLength(48);
+            entity.Property(project => project.LastPollMessage).HasMaxLength(200);
+
             entity.HasQueryFilter(project => project.OrganizationId == CurrentOrganizationId);
         });
 
@@ -1084,6 +1096,49 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 $"\"Attempts\" BETWEEN {PipelineSpecSchema.MinStepRetry} AND {PipelineSpecSchema.MaxStepRetry}"));
 
             entity.HasQueryFilter(step => step.OrganizationId == CurrentOrganizationId);
+        });
+
+        // F-025: the polling state, one row per branch of a polling project. The unique key is the guard
+        // (a second poll tick upserts, never duplicates) and the ordinal branch name is the same rule every
+        // other branch surface follows.
+        modelBuilder.Entity<BranchHead>(entity =>
+        {
+            entity.HasKey(head => head.Id);
+            entity.Property(head => head.Branch).IsRequired().HasMaxLength(200);
+            entity.Property(head => head.Sha).HasMaxLength(64);
+            entity.Property(head => head.LastRunCommit).HasMaxLength(64);
+            entity.Property(head => head.LastOutcome).HasMaxLength(48);
+
+            entity.HasIndex(head => new { head.ProjectId, head.Branch }).IsUnique();
+
+            // The navigation and the explicit FK are the same relationship: naming the navigation here is
+            // what stops EF from mapping a second, shadow `ProjectId1` column.
+            entity.HasOne(head => head.Project).WithMany().HasForeignKey(head => head.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Organization>().WithMany().HasForeignKey(head => head.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasQueryFilter(head => head.OrganizationId == CurrentOrganizationId);
+        });
+
+        // F-025: the shared change ledger. The unique (ProjectId, Branch, Commit) index is the whole point:
+        // it is what makes "a webhook and a poll observing the same commit queue one run" a database rule
+        // rather than a check-then-act in two call sites that can drift.
+        modelBuilder.Entity<ChangeTrigger>(entity =>
+        {
+            entity.HasKey(trigger => trigger.Id);
+            entity.Property(trigger => trigger.Branch).IsRequired().HasMaxLength(200);
+            entity.Property(trigger => trigger.Commit).IsRequired().HasMaxLength(64);
+            entity.Property(trigger => trigger.TriggerType).IsRequired().HasMaxLength(16);
+
+            entity.HasIndex(trigger => new { trigger.ProjectId, trigger.Branch, trigger.Commit }).IsUnique();
+
+            entity.HasOne(trigger => trigger.Project).WithMany().HasForeignKey(trigger => trigger.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Organization>().WithMany().HasForeignKey(trigger => trigger.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasQueryFilter(trigger => trigger.OrganizationId == CurrentOrganizationId);
         });
 
         // F-012: secrets are tenant-owned and write-only above the storage layer. The name is the

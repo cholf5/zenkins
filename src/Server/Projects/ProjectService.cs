@@ -99,7 +99,26 @@ public sealed record ProjectView(
     /// <see cref="BranchDiscoveryModes.Single"/> is the default and describes every project created
     /// before the card, so a read path that sees this value never has to guess.
     /// </summary>
-    string BranchDiscovery = BranchDiscoveryModes.Single);
+    string BranchDiscovery = BranchDiscoveryModes.Single,
+
+    /// <summary>Card F-025: whether this project polls its remote for head movement (opt-in, off by default).</summary>
+    bool PollingEnabled = false,
+
+    /// <summary>Card F-025: the declared poll interval in minutes (null while polling is off).</summary>
+    int? PollIntervalMinutes = null,
+
+    /// <summary>Card F-025: when the last poll tick considered this project.</summary>
+    DateTimeOffset? LastPollAt = null,
+
+    /// <summary>Card F-025: what the last tick decided (a <c>Zenkins.Server.Polling.PollOutcomes</c> value),
+    /// so a skipped poll is visible on the settings card instead of silent.</summary>
+    string? LastPollOutcome = null,
+
+    /// <summary>Card F-025: the poll's diagnostic, when it had one (never a credential value).</summary>
+    string? LastPollMessage = null,
+
+    /// <summary>Card F-025: consecutive failed probes - the backoff state the card shows (1x, 2x, 4x ...).</summary>
+    int PollFailureStreak = 0);
 
 /// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
 /// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
@@ -138,6 +157,13 @@ public sealed record ProjectLimitsInput(
 
 /// <summary>The validated queue controls (card F-029) a project row stores.</summary>
 public sealed record ProjectLimits(int? MaxConcurrentRuns, int QuietPeriodSeconds, int? MaxQueuedRuns);
+
+/// <summary>The polling card's raw form values (card F-025). The interval travels as text, parsed and
+/// bounded server-side exactly like the limits form's numbers.</summary>
+public sealed record ProjectPollingInput(string? PollingEnabled, string? PollIntervalMinutes);
+
+/// <summary>The validated polling settings a project row stores (card F-025).</summary>
+public sealed record ProjectPolling(bool Enabled, int? IntervalMinutes);
 
 /// <summary>
 /// Result of a mutation. <see cref="ProjectId"/> is set on success (and is the id the endpoint
@@ -736,6 +762,72 @@ public sealed class ProjectService(
     /// every project behaved before this card, so a project that never opens this form keeps today's
     /// behaviour.
     /// </summary>
+    /// <summary>
+    /// Card F-025: saves the polling switch and interval. Turning polling off clears the interval (a project
+    /// that is not polled has no interval to mean) and leaves the recorded poll state alone - it is history,
+    /// and the card still shows the last poll and its outcome.
+    /// </summary>
+    public async Task<ProjectMutationResult> SavePollingAsync(
+        string actingUserId,
+        Guid projectId,
+        ProjectPollingInput input,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to edit.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return ProjectMutationResult.NotFound();
+        }
+
+        var error = ProjectValidation.ValidatePolling(input, out var polling);
+        if (error is not null)
+        {
+            return ProjectMutationResult.Invalid(
+                new ProjectFieldError(ProjectErrorCodes.FieldFor(error) ?? ProjectFields.MaxConcurrentRuns, error));
+        }
+
+        // AC-7: a project with no repository cannot be polled, and saying so here is the point - the form
+        // refuses to switch it on rather than turning on a poll whose only possible answer is a failure.
+        if (polling.Enabled && !ProjectSources.HasRepository(project.Kind, project.PipelineSource))
+        {
+            return ProjectMutationResult.Invalid(new ProjectFieldError(
+                ProjectFields.MaxConcurrentRuns,
+                ProjectErrorCodes.PollingNotPipeline));
+        }
+
+        project.PollingEnabled = polling.Enabled;
+        project.PollIntervalMinutes = polling.IntervalMinutes;
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Project polling saved. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId} PollingEnabled={PollingEnabled} PollIntervalMinutes={IntervalMinutes}",
+            activeOrganizationId,
+            project.Id,
+            actingUserId,
+            project.PollingEnabled,
+            project.PollIntervalMinutes);
+
+        return ProjectMutationResult.Success(project.Id);
+    }
+
     public async Task<ProjectMutationResult> SaveLimitsAsync(
         string actingUserId,
         Guid projectId,
@@ -966,5 +1058,11 @@ public sealed class ProjectService(
         project.LastProbeMessage,
         project.PipelineSource,
         project.InlineScript,
-        BranchDiscoveryModes.Normalize(project.BranchDiscovery));
+        BranchDiscoveryModes.Normalize(project.BranchDiscovery),
+        project.PollingEnabled,
+        project.PollIntervalMinutes,
+        project.LastPollAt,
+        project.LastPollOutcome,
+        project.LastPollMessage,
+        project.PollFailureStreak);
 }

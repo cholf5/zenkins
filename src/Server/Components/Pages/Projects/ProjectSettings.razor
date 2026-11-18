@@ -280,6 +280,114 @@
             </BbCardContent>
         </BbCard>
 
+        @* Card F-025: SCM polling, for hosts that cannot reach the Server (or that nobody wants to wire a
+           webhook on). Off by default - a fleet-wide default would silently load every repository - and the
+           card states every decision the poller made, including the ones that queued nothing. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Polling</BbCardTitle>
+                <BbCardDescription>
+                    Ask the remote for this project's branch heads on an interval and queue a run when one
+                    moved. The Server runs no git: the claiming worker does the <code>ls-remote</code>, so a
+                    poll costs one probe per repository per tick and nothing else. A push from a webhook and a
+                    poll that see the same commit queue <span class="bb:font-medium">one</span> run between
+                    them: the dedupe key is the project, the branch and the commit.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <form id="project-polling-form" method="post"
+                      action="@($"/projects/{_project.Id}/polling")" data-zenkins-antiforgery>
+                    <div class="bb:grid bb:grid-cols-1 bb:gap-4 bb:sm:grid-cols-2">
+                        <div>
+                            <label class="bb:flex bb:items-center bb:gap-2">
+                                <input type="checkbox" id="polling-enabled" name="PollingEnabled" value="true"
+                                       checked="@(_project.PollingEnabled)" />
+                                <span class="bb:text-sm bb:font-medium">Poll this repository</span>
+                            </label>
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                A moved head queues one run pinned to the commit the probe observed. In
+                                multibranch mode every head is polled; otherwise the project's default
+                                branch is.
+                            </p>
+                        </div>
+                        <div>
+                            <label for="polling-interval" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">
+                                Interval (minutes)
+                            </label>
+                            <input id="polling-interval"
+                                   name="PollIntervalMinutes"
+                                   value="@_project.PollIntervalMinutes"
+                                   inputmode="numeric"
+                                   autocomplete="off"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                   placeholder="@Zenkins.Server.Polling.PollOptions.DefaultIntervalMinutes" />
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                At least @Zenkins.Server.Polling.PollOptions.MinIntervalMinutes minute. After
+                                a failed probe the wait doubles (1x, 2x, 4x ...) up to
+                                @Zenkins.Server.Polling.PollOptions.MaxBackoffMinutes minutes, and one
+                                successful probe resets it.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="bb:mt-4">
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save polling</BbButton>
+                    </div>
+                </form>
+
+                @* Card F-025 AC-7: say what would make polling pointless instead of letting every interval
+                   fail silently. *@
+                @if (!ProjectSources.HasRepository(_project.Kind, _project.PipelineSource))
+                {
+                    <p id="polling-no-repository" class="bb:mt-3 bb:text-xs bb:text-muted-foreground">
+                        This project has no repository (Freestyle or inline Pipeline), so there is nothing to
+                        poll and this switch is refused.
+                    </p>
+                }
+                else if (_project.GitCredentialId is null)
+                {
+                    <p id="polling-no-credential" class="bb:mt-3 bb:text-xs bb:text-muted-foreground">
+                        No Git credential is assigned. A public repository polls fine; a private one fails with
+                        <code>missing-credential</code> on every tick until a credential is attached on this
+                        tab.
+                    </p>
+                }
+
+                @* The last decision, always: "never polled" and "polled, nothing moved" are different facts. *@
+                <dl id="polling-state" class="bb:mt-4 bb:grid bb:grid-cols-1 bb:gap-2 bb:text-xs bb:sm:grid-cols-2">
+                    <div>
+                        <dt class="bb:text-muted-foreground">Last poll</dt>
+                        <dd id="polling-last-at">
+                            @(_project.LastPollAt is { } at
+                                ? at.ToString("yyyy-MM-dd HH:mm") + " UTC"
+                                : "never")
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-muted-foreground">Last outcome</dt>
+                        <dd id="polling-last-outcome">
+                            @(PollingOutcomeText(_project.LastPollOutcome) ?? "never polled")
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="bb:text-muted-foreground">Consecutive failures</dt>
+                        <dd id="polling-backoff">
+                            @(_project.PollFailureStreak == 0
+                                ? "none"
+                                : $"{_project.PollFailureStreak} - the next wait is at most "
+                                    + $"{Zenkins.Server.Polling.PollOptions.MaxBackoffMinutes} minutes")
+                        </dd>
+                    </div>
+                    @if (_project.LastPollMessage is { } message)
+                    {
+                        <div>
+                            <dt class="bb:text-muted-foreground">Diagnostic</dt>
+                            <dd id="polling-last-message" class="bb:break-all">@message</dd>
+                        </div>
+                    }
+                </dl>
+            </BbCardContent>
+        </BbCard>
+
         @* Card F-024: the cron schedules. Both kinds carry them (a Freestyle project has no repository
            file to declare one in, and the clock is the Server's), so the card sits outside the
            Pipeline-only section below. Every decision a due time makes is listed under it: queued,
@@ -982,6 +1090,28 @@
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
+    /// <summary>
+    /// Card F-025: a poll outcome in words. Every fixed value has a sentence - a skip names the reason it
+    /// skipped, because "nothing was built" is the answer an operator most needs - and a probe's own failure
+    /// word falls through as itself (the closed <c>GitProbeOutcomes</c> vocabulary is already readable).
+    /// </summary>
+    private static string? PollingOutcomeText(string? outcome) => outcome switch
+    {
+        null => null,
+        Zenkins.Server.Polling.PollOutcomes.Queued => "queued a run",
+        Zenkins.Server.Polling.PollOutcomes.Duplicate => "already triggered by a webhook or an earlier poll",
+        Zenkins.Server.Polling.PollOutcomes.Unchanged => "nothing moved",
+        Zenkins.Server.Polling.PollOutcomes.FirstSighting => "recorded the current head (nothing queued yet)",
+        Zenkins.Server.Polling.PollOutcomes.SkippedDisabled => "skipped: the project is disabled",
+        Zenkins.Server.Polling.PollOutcomes.SkippedQueueFull => "skipped: the queue is at its cap",
+        Zenkins.Server.Polling.PollOutcomes.SkippedOverlap =>
+            "skipped: the concurrency limit is reached",
+        Zenkins.Server.Polling.PollOutcomes.NoRepository => "skipped: no repository to poll",
+        Zenkins.Server.Polling.PollOutcomes.MissingCredential =>
+            "failed: the repository needs a credential and none is assigned",
+        _ => outcome,
+    };
+
     private UserSessionInfo? _session;
     private ProjectView? _project;
     private bool _canDelete;
@@ -1045,6 +1175,8 @@
         "project-enabled" =>
             "The project is enabled. Triggers queue runs again; canceled runs stay canceled and nothing was replayed.",
         "limits-saved" => "The project's limits were saved.",
+        // F-025's polling card.
+        "polling-saved" => "The polling settings were saved.",
         // F-024's schedules.
         ScheduleEndpoints.NoticeCreated =>
             "The schedule was saved. Its first due time is the next one the expression names.",

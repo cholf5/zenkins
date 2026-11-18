@@ -1536,7 +1536,8 @@ public sealed class RunService(
         string branch,
         string gitCommit,
         IReadOnlyList<string> requiredTags,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string triggerType = BuildRunTriggerType.Webhook)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(requiredTags);
@@ -1587,7 +1588,7 @@ public sealed class RunService(
             normalizedBranch,
             string.Join(',', requiredTags),
             timeoutSeconds: null,
-            BuildRunTriggerType.Webhook,
+            triggerType,
             triggerUserId: null,
             gitCommit,
             pipelineSpecJson: null,
@@ -1605,14 +1606,15 @@ public sealed class RunService(
         }
 
         logger.LogInformation(
-            "Run queued by webhook. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Number={Number} Branch={Branch} Commit={Commit} PipelinePath={PipelinePath}",
+            "Run queued by a repository change. OrganizationId={OrganizationId} ProjectId={ProjectId} RunId={RunId} Number={Number} Branch={Branch} Commit={Commit} PipelinePath={PipelinePath} TriggerType={TriggerType}",
             activeOrganizationId,
             project.Id,
             run.Id,
             run.Number,
             run.GitBranch,
             run.GitCommit,
-            run.PipelinePath);
+            run.PipelinePath,
+            triggerType);
         return staged;
     }
 

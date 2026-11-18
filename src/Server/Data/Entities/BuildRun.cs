@@ -74,6 +74,13 @@ public static class BuildRunTriggerType
     /// same build numbering, the same worker contract.
     /// </summary>
     public const string Schedule = "Schedule";
+
+    /// <summary>
+    /// Card F-025's SCM poll: the Server's poller saw the branch head move and queued a run pinned to the
+    /// observed commit - the same pinned-commit run a webhook delivery queues, for hosts that cannot reach
+    /// the Server. Nobody was signed in, so it carries no <see cref="BuildRun.TriggerUserId"/>.
+    /// </summary>
+    public const string Poll = "Poll";
 }
 
 /// <summary>

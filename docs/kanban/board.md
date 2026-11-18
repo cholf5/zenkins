@@ -12,7 +12,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
-| [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | M | | I-005, F-017 |
 | [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | M | | F-036 |
 | [F-030](issues/f-030-stage-grouping.md) | Stage grouping: named stages in the frozen spec, with status and duration | P2 | L | | F-014, F-015, F-020 |
 | [F-031](issues/f-031-post-actions.md) | Post actions: always / on-success / on-failure steps after the last step | P2 | M | | F-030, F-009 |
@@ -105,3 +104,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-034](issues/f-034-organization-environment.md) | Organization environment variables: one shared env layer for every project | P2 | 2026-11-17 |
 | [Q-022](issues/q-022-branch-discovery-evidence-gaps.md) | The F-023 review proved four branch-discovery properties by reading code, and the suite does not carry them | P2 | 2026-11-17 |
 | [F-032](issues/f-032-step-timeout-retry.md) | Step-level timeout and retry: a hung or flaky step is the pipeline's problem | P2 | 2026-11-18 |
+| [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | 2026-11-18 |

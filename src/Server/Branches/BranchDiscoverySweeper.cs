@@ -211,6 +211,33 @@ public sealed class BranchDiscoverySweeper(
     }
 
     /// <summary>
+    /// Whether the discovery pass selects <paramref name="project"/>. Public because the rule is the other
+    /// half of a coupling: a poll asks for a branch verdict exactly when the project is multibranch, and
+    /// that verdict only ever becomes known because this pass observes the tree. If these two ever stop
+    /// agreeing, `awaiting-observation` becomes a dead end - see
+    /// <c>Zenkins.Tests.Branches.BranchDiscoveryCouplingTests</c>, which pins the agreement.
+    /// <para>
+    /// <b>The price of that.</b> Because this predicate runs in memory rather than in the query, every tick
+    /// reads every non-disabled project row - and a <c>Project</c> carries three large text columns
+    /// (<c>InlineScript</c> up to 32k, <c>FreestyleSpecJson</c>, <c>ParametersJson</c>), so this is "a batch
+    /// of rows with blobs every thirty seconds", not "a few extra objects". At the current scale (a handful
+    /// of projects per organization, one tick per interval) that is not worth a second copy of the rule.
+    /// </para>
+    /// <para>
+    /// <b>When to come back.</b> At a thousand projects: project the five columns this decision needs
+    /// (<c>Id</c>, <c>OrganizationId</c>, <c>Disabled</c>, <c>BranchDiscovery</c>, <c>LastProbeAt</c>) into a
+    /// small type, and point <c>BranchDiscoveryCouplingTests</c> at that type instead of at <c>Project</c>.
+    /// Do <b>not</b> "optimise" this back into a SQL condition: that reintroduces a second copy of the rule,
+    /// which is exactly what the coupling fact exists to prevent.
+    /// </para>
+    /// </summary>
+    public static bool Selects(Project project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        return project.BranchDiscovery == BranchDiscoveryModes.Branches;
+    }
+
+    /// <summary>
     /// The interval pass: the multibranch projects whose last probe is older than the interval, capped per
     /// tick, each with one probe. Failures are logged per project and never stop the loop.
     /// </summary>
@@ -222,10 +249,16 @@ public sealed class BranchDiscoverySweeper(
             {
                 using var scope = systemScope.BeginScope();
                 var projects = await context.SystemQueryAsync<Project>(
-                    project => !project.Disabled
-                        && project.BranchDiscovery == BranchDiscoveryModes.Branches,
+                    project => !project.Disabled,
                     cancellationToken);
+
+                // The discovery rule is a named predicate, applied here rather than inside the SQL: card
+                // F-025's poll asks for a branch's verdict exactly when the project is multibranch, and
+                // this sweeper is what resolves that "unknown". Two questions, one field today - so the
+                // two answers must stay in step, and BranchDiscoveryCouplingTests fails the build's tests
+                // if they ever drift apart (for example when discovery grows its own switch).
                 return projects
+                    .Where(Selects)
                     .Where(project => project.LastProbeAt is null || now - project.LastProbeAt.Value >= interval)
                     .OrderBy(project => project.LastProbeAt ?? DateTimeOffset.MinValue)
                     .ThenBy(project => project.Id)

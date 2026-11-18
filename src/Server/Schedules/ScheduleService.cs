@@ -870,7 +870,7 @@ public sealed class ScheduleService(
         // The overlap policy (F-024): "any run of the project is queued or running" - including a claimed but not
         // yet accepted one, which is still Queued. Read before this tick stages anything, so it is the state the
         // due time actually met.
-        var inFlight = await FindInFlightRunAsync(context, schedule.ProjectId, cancellationToken);
+        var inFlight = await InFlightRuns.FindOldestAsync(context, schedule.ProjectId, cancellationToken: cancellationToken);
         if (inFlight is not null && !schedule.QueueAnyway)
         {
             context.ScheduleOccurrences.Add(new ScheduleOccurrence
@@ -934,33 +934,6 @@ public sealed class ScheduleService(
         return outcome == ScheduleOutcomes.SkippedQueueFull
             ? new ScheduleTickResult(SkippedQueueFull: 1)
             : new ScheduleTickResult(SkippedRefused: 1);
-    }
-
-    /// <summary>The project's oldest queued-or-running run's number, or null when the project is idle.</summary>
-    private static async Task<int?> FindInFlightRunAsync(
-        ZenkinsDbContext context,
-        Guid projectId,
-        CancellationToken cancellationToken)
-    {
-        // Statuses are translated; the ordering is not (SQLite cannot order DateTimeOffset in SQL), so the
-        // handful of active rows is read and ordered here.
-        var active = await context.BuildRuns
-            .AsNoTracking()
-            .Where(run => run.ProjectId == projectId
-                && (run.Status == BuildRunStatus.Queued || run.Status == BuildRunStatus.Running))
-            .Select(run => new { run.Number, run.CreatedAt })
-            .ToListAsync(cancellationToken);
-
-        if (active.Count == 0)
-        {
-            return null;
-        }
-
-        return active
-            .OrderBy(run => run.CreatedAt)
-            .ThenBy(run => run.Number)
-            .First()
-            .Number;
     }
 
     /// <summary>F-028/F-029's refusal codes, mapped into the schedule's vocabulary (one cause, one spelling).</summary>
