@@ -33,17 +33,15 @@ namespace Zenkins.Server.Data.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropColumn(
-                name: "RetentionDays",
-                table: "Projects");
-
-            migrationBuilder.DropColumn(
-                name: "RetentionKeep",
-                table: "Projects");
-
-            migrationBuilder.DropColumn(
-                name: "Pinned",
-                table: "BuildRuns");
+            // Native DROP COLUMN, not migrationBuilder.DropColumn: on SQLite that call rebuilds the whole table, and the
+            // rebuild recreates the indexes this migration's generated script knew about. Card F-042 added its folder
+            // indexes on "Projects" in a parallel branch, so this migration's stale index set silently dropped them
+            // while a downgrade passed through - and the F-042 migration's own Down then failed with
+            // "no such index: IX_Projects_FolderId". None of these three columns is indexed and no constraint
+            // mentions them, so the native statement is legal on both providers and leaves the tables' indexes alone.
+            migrationBuilder.Sql("ALTER TABLE \"Projects\" DROP COLUMN \"RetentionDays\";");
+            migrationBuilder.Sql("ALTER TABLE \"Projects\" DROP COLUMN \"RetentionKeep\";");
+            migrationBuilder.Sql("ALTER TABLE \"BuildRuns\" DROP COLUMN \"Pinned\";");
         }
     }
 }

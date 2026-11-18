@@ -215,3 +215,24 @@ alongside.
   was mutated to prove the older facts really do exercise that path.
 - **Counts.** fast 1594 -> 1628 measured on the merged tree (34 facts), Postgres stays 9, the slow categories
   24, everything 1661. The batch run at the end of the series verifies the full suite and Postgres.
+
+## Follow-up: the downgrade path was dropping F-042's indexes (2026-11-18)
+
+Landing F-031 beside F-038 and F-042 turned four integration reds into one real bug in the migrations rather
+than in the tests.
+
+`AddProjectPostFailureSwitch.Down` (this card) and `AddBuildRetention.Down` (F-038) were generated before F-042
+existed. On SQLite a `DropColumn` rebuilds the table using the index set that was known when the migration was
+generated, so stepping *down* through either of them silently removed `IX_Projects_FolderId` and
+`IX_Projects_OrganizationId_FolderKey_NameKey`, and F-042's own `Down` then failed with `no such index`. In
+other words the downgrade path lost schema that the upgrade path had created - invisible to every test that only
+ever migrates forward, which is all of them except the three upgrade facts that caught it.
+
+Both `Down` methods now use the native `ALTER TABLE ... DROP COLUMN` statement, which both providers accept and
+which touches nothing else on the table. The round trip head -> AddApiTokens -> head and
+head -> AddSecretRotationAttribution -> head both keep the folder indexes, and the model snapshot is unchanged
+because only the backwards SQL moved.
+
+The same commit registers F-031's `post-failure` endpoint in the Q-006 inventory, and - because the review
+pointed out that the named probe never actually called the route - adds that POST to the tenant probe it names,
+so the inventory row and the test it points at describe the same thing.

@@ -210,6 +210,10 @@ public sealed class FolderMigrationUpgradeTests
             ["LastProbeOutcome"] = "NULL",
             ["LastProbeAt"] = "NULL",
             ["LastProbeMessage"] = "NULL",
+
+            // F-031: the post-step failure switch, added by a migration between this test's base revision and
+            // the current head - so the duplicate insert at step 4 runs against a schema that has it.
+            ["PostFailureFailsRun"] = "0",
             ["CreatedAt"] = "'2026-11-18 10:00:00+00:00'",
             ["UpdatedAt"] = "'2026-11-18 10:00:00+00:00'",
         };

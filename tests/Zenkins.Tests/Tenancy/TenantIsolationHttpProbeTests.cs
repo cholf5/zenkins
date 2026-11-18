@@ -282,6 +282,15 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
             new Dictionary<string, string> { ["FolderId"] = TwoOrgsFixture.FolderAId.ToString() });
         Assert.Equal(HttpStatusCode.NotFound, move.StatusCode);
 
+        // F-031: the post-failure switch resolves the project through the tenant filter as well, so a
+        // foreign id is the same 404 - and B's project keeps its switch off.
+        var postFailure = await OrganizationTestHost.PostFormAsync(
+            client,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/post-failure",
+            new Dictionary<string, string> { ["Enabled"] = "true" });
+        Assert.Equal(HttpStatusCode.NotFound, postFailure.StatusCode);
+
         var beta = (await _host.Data.ReadAcrossTenantsAsync<Project>(
             project => project.Id == TwoOrgsFixture.ProjectBId,
             CancellationToken)).Single();
@@ -292,6 +301,7 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
         Assert.Null(beta.MaxQueuedRuns);
         Assert.Equal(0, beta.QuietPeriodSeconds);
         Assert.Null(beta.FolderId);
+        Assert.False(beta.PostFailureFailsRun);
     }
 
     [Fact]
