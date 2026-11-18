@@ -14,6 +14,7 @@ using Zenkins.Server.Branches;
 using Zenkins.Server.Components;
 using Zenkins.Server.Data;
 using Zenkins.Server.Dashboard;
+using Zenkins.Server.Environments;
 using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Organizations;
@@ -69,6 +70,10 @@ builder.Services.AddZenkinsSchedules();
 builder.Services.AddZenkinsDashboard();
 builder.Services.AddZenkinsLogs(builder.Configuration);
 builder.Services.AddZenkinsSecrets();
+
+// F-034: the organization environment layer - plain name/value configuration every project's steps
+// receive, snapshotted onto each run at trigger time.
+builder.Services.AddZenkinsOrganizationEnvironment();
 builder.Services.AddZenkinsGit();
 
 // I-005: the Git remote probe primitive - an in-memory queue/lease (see GitProbeRegistry) and the
@@ -247,6 +252,10 @@ app.MapScheduleEndpoints();
 // Secret create/rotate/delete (F-012). Owner-only, form-bound; there is deliberately no
 // value-returning route at all - SecretRouteShapeTests pins the route table.
 app.MapSecretEndpoints();
+
+// F-034: the organization environment variables' create/edit/delete forms. Member-readable list,
+// Owner-only mutations; form-bound like the secret forms above.
+app.MapOrganizationEnvironmentEndpoints();
 app.MapGitCredentialEndpoints();
 
 // Worker registration/heartbeat API (token-authenticated, exempt from cookie auth) and the

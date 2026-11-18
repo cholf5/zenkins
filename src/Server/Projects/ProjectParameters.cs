@@ -108,6 +108,19 @@ public static class ProjectParameters
                 return [];
             }
 
+            // F-034: a parameter is a layer of the step's environment, and the ZENKINS_* namespace is the
+            // server's own record of the run. Refusing the name at save time is what keeps the metadata
+            // unspoofable now that it is the *lowest* layer (PRD §3.11.3): before the reorder the value
+            // merely lost by sort order, which was correct by accident and silent either way.
+            if (Zenkins.Server.Environments.ServerEnvironmentNames.IsReserved(name))
+            {
+                error = $"{path}.name '{name}' is reserved: "
+                    + $"{string.Join(", ", Zenkins.Server.Environments.ServerEnvironmentNames.ReservedPrefixes)} "
+                    + "is the namespace of Zenkins' own run metadata (ZENKINS_RUN_ID, ZENKINS_BUILD_NUMBER, …). "
+                    + "Choose another name.";
+                return [];
+            }
+
             if (!names.Add(name))
             {
                 error = $"{path}.name '{name}' is declared more than once; a parameter name is unique.";

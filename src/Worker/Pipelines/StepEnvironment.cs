@@ -19,13 +19,21 @@ public sealed record StepConditionFacts(string Branch, string Platform)
 }
 
 /// <summary>
-/// The environment of one step (card F-015, PRD §3.3.5).
+/// The environment of one step (card F-015, PRD §3.3.5 / §3.11.3).
 /// <para>
-/// <b>The precedence is explicit and testable:</b> the worker's inherited process environment, then the
-/// pipeline's <c>env</c>, then the step's <c>env</c>, then the server-provided run environment
-/// (<c>ZENKINS_RUN_ID</c>, <c>ZENKINS_PROJECT_ID</c>, <c>ZENKINS_WORKER_NAME</c>, <c>ZENKINS_STEP_NAME</c>).
-/// A secret value enters only where the script put the reference - it is a value the script passes
-/// explicitly, not a layer that can silently override a name.
+/// <b>The precedence is explicit, in one place, and testable.</b> Lowest first: the worker's inherited
+/// process environment, the server's <c>ZENKINS_*</c> metadata, the server-resolved values
+/// (organization layer, then parameters - already merged on the server), the pipeline's <c>env</c>, then
+/// the step's <c>env</c> (highest). A secret value enters only where the script put the reference - it is
+/// a value the script passes explicitly, not a layer that can silently override a name.
+/// </para>
+/// <para>
+/// <b>The reserved namespace is protected by dropping, not by ordering.</b> The metadata sits at the
+/// bottom of the chain, so any layer that could write a <c>ZENKINS_*</c> name would win it. Instead, a
+/// reserved name arriving from any non-metadata layer is <em>dropped</em> and reported to
+/// <c>onReservedDropped</c> (the caller writes a line into the run log), so the server's record of the
+/// run can never be spoofed and a script that tried is told why. The two save-time refusals - an
+/// organization variable and a build parameter - are the same rule where it can be applied earlier.
 /// </para>
 /// <para>
 /// <b>One composition, two readers.</b> The same map is what <c>env("NAME")</c> reads (through the deferred
@@ -35,26 +43,40 @@ public sealed record StepConditionFacts(string Branch, string Platform)
 /// </summary>
 public static class StepEnvironment
 {
-    /// <summary>The per-step metadata every step sees (it is the run's environment plus the step's name).</summary>
-    public const string StepNameVariable = "ZENKINS_STEP_NAME";
+    /// <summary>The per-step metadata variable every step sees (now owned by <see cref="RunEnvironment"/>).</summary>
+    public const string StepNameVariable = RunEnvironment.StepNameVariable;
 
     /// <summary>
     /// Composes one step's effective environment. <paramref name="inherited"/> is the worker's own process
     /// environment; a <see langword="null"/> value in one of the declared layers means "do not set"
     /// (nothing is removed: a pipeline can add variables, never unset the worker's).
     /// </summary>
+    /// <param name="onReservedDropped">
+    /// Called once for every declared value that was dropped because its name is reserved for the run's
+    /// metadata. The caller turns it into a run-log line; a <see langword="null"/> callback drops
+    /// silently, which only the pure composition tests do.
+    /// </param>
     public static Dictionary<string, string?> Compose(
         IReadOnlyDictionary<string, string?> inherited,
         IReadOnlyDictionary<string, string>? pipelineEnvironment,
         IReadOnlyDictionary<string, string>? stepEnvironment,
-        IReadOnlyDictionary<string, string?> runEnvironment)
+        RunEnvironment runEnvironment,
+        Action<string>? onReservedDropped = null)
     {
         ArgumentNullException.ThrowIfNull(inherited);
+        ArgumentNullException.ThrowIfNull(runEnvironment);
 
         var composed = new Dictionary<string, string?>(inherited, StringComparer.Ordinal);
-        Apply(composed, pipelineEnvironment);
-        Apply(composed, stepEnvironment);
-        Apply(composed, runEnvironment);
+
+        // 1. The server's own metadata: the lowest of the five layers (only the worker's inherited
+        //    process environment is below it, and that is the worker's, not the run's).
+        Apply(composed, runEnvironment.Metadata);
+
+        // 2-5. Everything else, in the documented order. A reserved name here is dropped and reported.
+        ApplyDeclared(composed, runEnvironment.Values, "server-resolved environment", onReservedDropped);
+        ApplyDeclared(composed, pipelineEnvironment, "pipeline env", onReservedDropped);
+        ApplyDeclared(composed, stepEnvironment, "step env", onReservedDropped);
+
         return composed;
     }
 
@@ -90,6 +112,38 @@ public static class StepEnvironment
             }
 
             target[name] = value.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Applies a layer that a pipeline, a step or the server-resolved map declared: a name inside the
+    /// server's reserved namespace is skipped and reported instead of overwriting the metadata.
+    /// </summary>
+    private static void ApplyDeclared(
+        Dictionary<string, string?> target,
+        IReadOnlyDictionary<string, string>? layer,
+        string layerName,
+        Action<string>? onReservedDropped)
+    {
+        if (layer is null)
+        {
+            return;
+        }
+
+        foreach (var (name, value) in layer)
+        {
+            if (name.Length == 0)
+            {
+                continue;
+            }
+
+            if (RunEnvironment.IsReserved(name))
+            {
+                onReservedDropped?.Invoke(RunEnvironment.CollisionDiagnostic(name, layerName));
+                continue;
+            }
+
+            target[name] = value;
         }
     }
 }

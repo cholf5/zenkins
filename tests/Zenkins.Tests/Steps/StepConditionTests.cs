@@ -284,7 +284,7 @@ public sealed class StepConditionTests
             new Dictionary<string, string?> { ["A"] = "inherited", ["B"] = "inherited", ["C"] = "inherited" },
             new SortedDictionary<string, string>(StringComparer.Ordinal) { ["B"] = "pipeline", ["C"] = "pipeline" },
             new SortedDictionary<string, string>(StringComparer.Ordinal) { ["C"] = "step" },
-            new Dictionary<string, string?> { ["ZENKINS_RUN_ID"] = "run" });
+            new RunEnvironment { Metadata = new Dictionary<string, string?> { ["ZENKINS_RUN_ID"] = "run" } });
 
         Assert.Equal("inherited", composed["A"]);
         Assert.Equal("pipeline", composed["B"]);

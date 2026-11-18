@@ -145,6 +145,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>F-023: B's only branch job (the id a cross-tenant probe substitutes).</summary>
     public static readonly Guid BranchBId = new("b0000000-0000-4000-8000-0000000000c2");
 
+    /// <summary>F-034: A's only organization environment variable, the positive control for its probes.</summary>
+    public static readonly Guid EnvironmentAId = new("a0000000-0000-4000-8000-0000000000d1");
+
+    /// <summary>F-034: B's only organization environment variable (the id a cross-tenant probe substitutes).</summary>
+    public static readonly Guid EnvironmentBId = new("b0000000-0000-4000-8000-0000000000d2");
+
     /// <summary>F-027: A's only API token, the positive control for the API probes.</summary>
     public static readonly Guid ApiTokenAId = new("a0000000-0000-4000-8000-0000000000a1");
 
@@ -171,6 +177,13 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string ProjectBBranch = "develop";
     public const string ProjectARepositoryUrl = "https://example.test/alpha.git";
     public const string ProjectBRepositoryUrl = "https://example.test/beta.git";
+
+    // F-034: one organization environment variable per organization. Both the names and the values are
+    // distinct per tenant, so a page or a claim that leaked one would be visible in the other's scan.
+    public const string EnvironmentAName = "ALPHA_REGISTRY_HOST";
+    public const string EnvironmentBName = "BETA_REGISTRY_HOST";
+    public const string EnvironmentAValue = "registry.alpha.internal";
+    public const string EnvironmentBValue = "registry.beta.internal";
 
     public const string WorkerAName = "alpha-agent";
     public const string WorkerBName = "beta-agent";
@@ -740,6 +753,26 @@ public sealed class TwoOrgsFixture : IDisposable
                 Branch = "main",
                 PipelineState = BranchPipelineStates.NoPipeline,
                 ObservedCommit = new string('b', 40),
+            });
+
+        // F-034: one plain-configuration variable per organization - no ciphertext, no masking: the value
+        // is exactly what a step of that tenant would read.
+        context.Set<OrganizationEnvironmentVariable>().AddRange(
+            new OrganizationEnvironmentVariable
+            {
+                Id = EnvironmentAId,
+                OrganizationId = OrgAId,
+                Name = EnvironmentAName,
+                Value = EnvironmentAValue,
+                CreatedByUserId = OrgAOwnerUserId,
+            },
+            new OrganizationEnvironmentVariable
+            {
+                Id = EnvironmentBId,
+                OrganizationId = OrgBId,
+                Name = EnvironmentBName,
+                Value = EnvironmentBValue,
+                CreatedByUserId = OrgBOwnerUserId,
             });
 
         context.SaveChanges();

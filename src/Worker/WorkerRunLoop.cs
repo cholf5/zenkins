@@ -328,9 +328,17 @@ public sealed class WorkerRunLoop(
     /// </para>
     /// </summary>
     /// <summary>
-    /// The server-provided run environment (F-007) plus the run's resolved build parameters (F-021).
-    /// One layer, so one precedence story: the trigger's values win over anything a step declares,
-    /// exactly like the <c>ZENKINS_*</c> metadata beside them.
+    /// The server-provided run environment: the run's <c>ZENKINS_*</c> metadata (F-007/F-036) and the
+    /// <b>one</b> map of values the server resolved for it (F-021's parameters with F-034's organization
+    /// layer underneath) as <see cref="RunEnvironment.Values"/> - the worker does not compare two server
+    /// layers, because the order was decided where the claim was composed.
+    /// <para>
+    /// The metadata is the server's record of this run, so it is the reserved layer: a value named
+    /// <c>ZENKINS_RUN_ID</c> cannot make a step read a different run id, project id or build number than
+    /// the claim describes. The organization form and the parameters editor refuse those names at save
+    /// time; <see cref="StepEnvironment.Compose"/> drops (and reports) any that still arrives from a
+    /// declared <c>env</c> layer.
+    /// </para>
     /// <para>
     /// Card F-036 adds the run's identity in the shape people name a build by: <c>ZENKINS_BUILD_NUMBER</c>
     /// (the project-scoped <c>#N</c> every page prints, so a step can tag an artifact or a notification with
@@ -338,40 +346,34 @@ public sealed class WorkerRunLoop(
     /// carried - kept, never replaced, because a script may name either).
     /// </para>
     /// </summary>
-    internal static Dictionary<string, string?> BuildRunEnvironment(
+    internal static RunEnvironment BuildRunEnvironment(
         WorkerClaimResponse claim,
         string workerName)
     {
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-
-        if (claim.Parameters is { } parameters)
+        var metadata = new Dictionary<string, string?>(StringComparer.Ordinal)
         {
-            foreach (var (name, value) in parameters)
-            {
-                if (name.Length > 0)
-                {
-                    environment[name] = value;
-                }
-            }
-        }
+            ["ZENKINS_RUN_ID"] = claim.RunId.ToString(),
+            ["ZENKINS_WORKER_NAME"] = workerName,
+            ["ZENKINS_PROJECT_ID"] = claim.ProjectId.ToString(),
 
-        // The metadata is written last: it is the server's own record of this run, so a parameter that
-        // happens to be named ZENKINS_RUN_ID (or another reserved name) cannot make a step read a
-        // different run id, project id or worker name than the claim describes (F-021).
-        environment["ZENKINS_RUN_ID"] = claim.RunId.ToString();
-        environment["ZENKINS_WORKER_NAME"] = workerName;
-        environment["ZENKINS_PROJECT_ID"] = claim.ProjectId.ToString();
-
-        // F-036: the build's identity as a person names it, and the one guid a script can quote. A claim
-        // without a number (an older server) leaves ZENKINS_BUILD_NUMBER unset rather than writing a 0
-        // that would look like a real build.
-        environment["ZENKINS_BUILD_ID"] = claim.RunId.ToString();
+            // F-036: the build's identity as a person names it, and the one guid a script can quote. A claim
+            // without a number (an older server) leaves ZENKINS_BUILD_NUMBER unset rather than writing a 0
+            // that would look like a real build.
+            ["ZENKINS_BUILD_ID"] = claim.RunId.ToString(),
+        };
         if (claim.Number is > 0 and var number)
         {
-            environment["ZENKINS_BUILD_NUMBER"] = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            metadata["ZENKINS_BUILD_NUMBER"] =
+                number.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        return environment;
+        return new RunEnvironment
+        {
+            Metadata = metadata,
+
+            // One map: no absent-claim special case is needed, because an empty map is an empty layer.
+            Values = claim.Parameters ?? RunEnvironment.Empty.Values,
+        };
     }
 
     private async Task<RunExecutionResult> ExecutePipelineAsync(
@@ -461,10 +463,10 @@ public sealed class WorkerRunLoop(
                 KnownHostsPath = configuration.GitKnownHostsPath,
                 GitOperationTimeout = configuration.GitOperationTimeout
                     ?? WorkerConfiguration.DefaultGitOperationTimeout,
-                // F-021: the run's resolved build-parameter values join this same server-provided
-                // layer (the highest precedence below nothing), so every step of both kinds reads
-                // them by name and a step's own env can never override what the trigger froze.
-                StepEnvironment = BuildRunEnvironment(claim, configuration.WorkerName),
+                // F-021/F-034: the run's server-resolved values (organization layer, then parameters) join
+                // the server-provided metadata as the next layer up, so every step of both kinds reads
+                // them by name and the one composition decides which layer won.
+                RunEnvironment = BuildRunEnvironment(claim, configuration.WorkerName),
                 Log = Emit,
                 OnProcessOutput = OnOutput,
 

@@ -6,6 +6,7 @@ using Zenkins.Server.Branches;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Server.Environments;
 using Zenkins.Server.Git;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Projects;
@@ -203,6 +204,14 @@ public sealed record RunView(
     IReadOnlyList<RunStepView>? Steps = null,
     bool? GitCredentialAssigned = null,
     IReadOnlyDictionary<string, string>? Parameters = null,
+
+    /// <summary>
+    /// Card F-034: the organization environment layer this run was queued with (its own snapshot, not
+    /// the organization's current variables) - shown with values on the run page, because it is
+    /// configuration rather than a secret. <see langword="null"/> when the organization had none at
+    /// trigger time.
+    /// </summary>
+    IReadOnlyDictionary<string, string>? Environment = null,
 
     /// <summary>
     /// Cards F-028: whether the run's project is disabled <em>now</em> (read when the page was read), so a
@@ -514,7 +523,9 @@ public sealed record RunClaimResult(
     // own snapshot so the Worker never guesses from "is there a spec?" - an inline run can carry both.
     string? DefinitionSource = null,
 
-    // F-021: the run's resolved build-parameter values. Null when the project declares none.
+    // F-021 + F-034: the run's server-resolved environment values - the organization layer with the
+    // parameter values on top of it, already merged in the documented order. One map crosses the
+    // boundary (see RunEnvironmentSnapshot.Merge); the worker injects it without comparing layers.
     IReadOnlyDictionary<string, string>? Parameters = null,
 
     /// <summary>
@@ -1071,9 +1082,24 @@ public sealed class RunService(
                 ProjectTriggerGuard.QueueFullMessage(queued, cap));
         }
 
+        // F-034: the organization environment layer is resolved *here*, in the one insert path every
+        // trigger source funnels through (manual form, API, webhook, schedule, rebuild), and frozen onto
+        // the row. Editing or deleting a variable afterwards cannot reach this run any more: the row is
+        // the snapshot, exactly like the branch, the spec and the parameter values beside it.
+        //
+        // The read is keyed by *this run's* organization and taken inside the system scope, because a
+        // webhook delivery and a schedule tick have no request tenant: leaning on the request's active
+        // organization would hand those runs an empty layer - silently, and for exactly the runs nobody
+        // is watching. An organization with no variables leaves the column null ("no layer").
+        staged.EnvironmentJson = RunEnvironmentSnapshot.Serialize(
+            await RunEnvironmentSnapshot.ReadForOrganizationAsync(
+                context,
+                systemDataScope,
+                staged.OrganizationId,
+                cancellationToken));
+
         context.BuildRuns.Add(staged);
         await SaveStagedRunAsync(context, staged, cancellationToken);
-
         if (idempotency is not null)
         {
             // Card B-008: the binding is written inside the same transaction (and through a second
@@ -2165,7 +2191,13 @@ public sealed class RunService(
                         candidate.PipelineSpecJson,
                         candidate.GitBranch),
 
-                    ReadParameters(candidate.ParametersJson),
+                    // F-034: the one map that crosses to the worker - the run's frozen organization layer
+                    // with the parameter values on top (parameters win a shared name). The two columns stay
+                    // separate on the row for the page and for a rebuild; the order is resolved here, once,
+                    // so the worker never holds a second copy of it.
+                    RunEnvironmentSnapshot.Merge(
+                        RunEnvironmentSnapshot.Read(candidate.EnvironmentJson),
+                        ReadParameters(candidate.ParametersJson)),
 
                     // F-036 (review M1): a non-positive number is "no number", never `#0`.
                     candidate.Number is > 0 ? candidate.Number : null);
@@ -3632,6 +3664,11 @@ public sealed class RunService(
                 // F-021: the values this run was triggered with (the snapshot, not the project's
                 // current definitions). Null when the project declared no parameters.
                 ReadParameters(run.ParametersJson),
+
+                // F-034: the organization environment layer frozen onto this run, read from the run's own
+                // column - never from the organization's current variables, which may have been edited or
+                // deleted since (a removed variable still shows the value this run executed with).
+                RunEnvironmentSnapshot.Read(run.EnvironmentJson),
 
                 // F-028: the project's current disabled state (null when it could not be read).
                 projectFacts is null ? (bool?)null : projectFacts.Disabled,

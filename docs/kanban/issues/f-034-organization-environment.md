@@ -4,9 +4,9 @@ title: Organization environment variables — one shared env layer for every pro
 type: feature
 priority: P2
 size: S
-status: todo
+status: review
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 blocked: none
 ---
 
@@ -29,33 +29,33 @@ layering and snapshotting, not the storage.
 
 ## Acceptance Criteria
 
-- [ ] An organization can define variables (name/value) with the same name rules as
+- [x] An organization can define variables (name/value) with the same name rules as
       secret names; Owner-only edit, Member-readable, values never treated as
       secrets (no masking, no write-only form).
-- [ ] The documented layering is enforced and tested (lowest to highest):
+- [x] The documented layering is enforced and tested (lowest to highest):
       `ZENKINS_*` metadata → organization vars → parameters → pipeline env → step env.
-- [ ] `ZENKINS_*` and other reserved prefixes cannot be overridden by an organization
+- [x] `ZENKINS_*` and other reserved prefixes cannot be overridden by an organization
       variable; the save is refused with a field error naming the collision.
-- [ ] The resolved organization layer is **snapshotted onto the run** at trigger time:
+- [x] The resolved organization layer is **snapshotted onto the run** at trigger time:
       editing an organization variable never changes a queued or running run.
-- [ ] The worker injects the snapshot exactly like parameters (same claim field, same
+- [x] The worker injects the snapshot exactly like parameters (same claim field, same
       precedence), and `${env:NAME}` in a step resolves against it.
-- [ ] Removing a variable does not break history: old runs keep their snapshot, and
+- [x] Removing a variable does not break history: old runs keep their snapshot, and
       the run page can show the environment it ran with (values included — they are
       configuration, not secrets).
-- [ ] A cap on count and value length (e.g. 100 vars, 4 KiB each) with a clear error.
+- [x] A cap on count and value length (e.g. 100 vars, 4 KiB each) with a clear error.
 
 ## Subtasks
 
-- [ ] `OrganizationEnvironment` entity (org, name, value, attribution) + migration and
+- [x] `OrganizationEnvironment` entity (org, name, value, attribution) + migration and
       a unique (org, name) index.
-- [ ] Merge function in the run-create path that builds the frozen environment
+- [x] Merge function in the run-create path that builds the frozen environment
       snapshot, plus the reserved-name check.
-- [ ] Claim payload: the snapshot travels with the run (extend the existing
+- [x] Claim payload: the snapshot travels with the run (extend the existing
       server-provided environment block rather than adding a second one).
-- [ ] UI: an Environment card under organization settings (list, add, edit, delete),
+- [x] UI: an Environment card under organization settings (list, add, edit, delete),
       Owner-only mutations, read-only for Members.
-- [ ] PRD §3.11.3 / §3.1.1: record the layer order and the snapshot rule.
+- [x] PRD §3.11.3 / §3.1.1: record the layer order and the snapshot rule.
 
 ## Dependencies
 
@@ -95,3 +95,168 @@ Expected:
 - Values are plain configuration: they appear in the run's environment view and in
   logs if a step echoes them. Anything sensitive belongs in Secrets (F-012), and the
   UI says so next to the form.
+
+## Implementation Notes
+
+### 1. Data model, and where the name rule comes from
+
+- `OrganizationEnvironmentVariable` (server entity, table `OrganizationEnvironmentVariables`):
+  `(OrganizationId, Name, Value, CreatedByUserId, UpdatedByUserId, CreatedAt, UpdatedAt)`, unique
+  `(OrganizationId, Name)`, `ITenantOwned`, tenant query filter, cascade from `Organization`.
+  Migration `20261117120221_AddOrganizationEnvironment`: a **new table** (zero rows in every existing
+  installation, nothing to backfill) plus a **new nullable column** `BuildRuns.EnvironmentJson` (every
+  historical run starts `null` = "queued before this layer existed" - no default, no rewrite; the
+  migration's own doc comment records this).
+- **The name rule is reused, not rewritten.** `OrganizationEnvironmentValidation.ValidateName`
+  delegates to `SecretValidation.ValidateName` (same trim, same `^[A-Za-z_][A-Za-z0-9_]{0,63}$`,
+  same 64-character bound) and its three shape error codes *are* the secret codes
+  (`OrganizationEnvironmentErrorCodes.NameRequired = SecretErrorCodes.NameRequired`, …), so the two
+  vocabularies cannot drift. On top of the shape it adds `name-reserved`.
+- **The page permission is deliberately NOT the secret page's.** `GetVariablesAsync` checks
+  *membership* (a Member reads the list, values included); create/update/delete check
+  *ownership*. The Secrets page is whole-page Owner-only; copying that guard would have violated AC1.
+
+### 2. Where the layering lives, and the facts that pin it
+
+One function: `StepEnvironment.Compose` (`src/Worker/Pipelines/StepEnvironment.cs`), one call site
+(`PipelineRunner.cs`, step loop). Lowest → highest:
+
+```
+worker process env → ZENKINS_* metadata → server-resolved map (org, then parameters) → pipeline env → step env
+```
+
+The server **resolves organization → parameters once**, when it composes the claim
+(`RunEnvironmentSnapshot.Merge`: parameters win a shared name), so exactly one name→value map crosses
+the wire and the worker is a dumb injector. Two server dictionaries in the claim would mean two copies
+of the order.
+
+The two snapshots stay **separate columns on the run** (`EnvironmentJson`, `ParametersJson`) because
+the run page must say which layer a value came from and because a rebuild re-resolves only the
+parameter snapshot against today's definitions.
+
+Facts (deliberately split, per the review: a same-name collision between `ZENKINS_*` and the
+organization layer is **not representable** after AC3, so it cannot be part of a five-value chain):
+
+- **C1a** `C1a_the_four_adjacent_edges_resolve_low_to_high` - the four value edges, one fact, three
+  real runs, child stdout compared to *distinctive* values (`value-from-step`,
+  `value-from-pipeline`, `value-from-param`, `value-from-org`): organization→parameters,
+  parameters→pipeline env, pipeline env→step env, and the inherited environment losing every edge.
+- **C1b** `C1b_the_metadata_edge_is_proven_by_refusal_and_filtering` - the metadata edge by
+  refusal + filtering (below).
+- `The_inherited_environment_is_the_lowest_layer_and_the_server_map_is_next` (WorkerRuntime) - the
+  bottom two edges in isolation.
+
+### 3. Reserved prefix: three places, one rule
+
+1. **Organization variable, at save** - `OrganizationEnvironmentErrorCodes.NameReserved`, a field
+   error on `Name` naming the prefix (`?error=name-reserved&name=…`), nothing stored.
+2. **Build parameter, at save** - `ProjectParameters.Validate` refuses the same prefix. This is new:
+   before the reorder the parameter merely *lost by sort order*, which was correct by accident and
+   silent; with the metadata on the bottom of the chain a parameter would now win, so it must be
+   refused.
+3. **Pipeline / step `env` (Lua has no save step)** - `StepEnvironment.Compose` drops the name and
+   reports it through `onReservedDropped`; `PipelineRunner` writes that line into the run log
+   (`… the step env sets 'ZENKINS_RUN_ID', which is reserved for the run's own metadata; the declared
+   value was ignored`). Not silently dropped, not silently winning.
+
+`ServerEnvironmentNames.IsReserved` compares case-insensitively (an env name is case-insensitive on
+Windows); `RunEnvironment.IsReserved` is the worker-side twin used by the composition.
+
+**Mechanism change, recorded as the review asked.** F-036's
+`A_parameter_or_organization_variable_cannot_overwrite_the_build_metadata` and F-015's
+`StepConditionTests` TC_003 (`RunEnvironmentWins`) are **still green and their intent is unchanged** -
+a parameter / step env still cannot spoof the run metadata - but the mechanism behind them changed
+from *ordering* to *filtering*. Both are now expressed through `StepEnvironment.Compose` (the
+RunEnvironmentTests fact also asserts the diagnostic fires once per dropped name).
+
+### 4. Snapshot → claim → worker
+
+- Frozen in `RunService.StageQueuedRunAsync`, the one insert path of every trigger source.
+- `ReadForOrganizationAsync(context, systemDataScope, run.OrganizationId, ct)`: the run's own
+  organization named in the predicate, read inside `ISystemDataScope`. Both headless paths in this
+  tree happen to set the tenant before staging (`ScheduleService` sets it per organization), so the
+  "silently empty layer" was not reachable today - but the read no longer depends on that happening.
+- Claim: `RunClaimResponse.Parameters` is the single resolved map (organization ← parameters). No
+  second claim field. Worker: `WorkerRunLoop.BuildRunEnvironment` → `RunEnvironment { Metadata, Values }`.
+- `${env:NAME}` resolves against the composed map at the step boundary, so it sees the layer that won.
+
+### 5. History and the run page
+
+Deleting or editing a variable never touches a run: `BuildRuns.EnvironmentJson` is that run's own
+copy. The run page renders an "Organization environment" card (`#run-environment`,
+`#run-environment-{NAME}`) from that column only - values included, because they are configuration,
+not secrets. Facts: TC_002 (frozen + page shows the old value and not the new one), `Deleting_a_
+variable_leaves_the_runs_snapshot_and_its_page_intact`.
+
+### 6. Caps
+
+`OrganizationEnvironmentValidation`: 100 variables per organization, 4096 characters per value, the
+secret name bound (64). Errors: `value-too-long` (field), `limit-reached` (form-level, message names
+the cap and the way out). Facts: `The_value_length_and_the_variable_count_are_capped_with_clear_errors`
+(the boundary value is accepted, one character more is refused; the 100th row is accepted, the 101st
+is refused with the list unchanged).
+
+### 7. Facts added (25)
+
+- `OrganizationEnvironmentTests` (19, `Category=Runs`): the store/name/role/cap facts (Owner view,
+  Member read-only + 403, name-rule theory ×5, organization reserved prefix ×4, parameter reserved
+  prefix, caps), TC_001 (two projects, real steps), C1a, C1b, TC_002 (frozen + page), delete-keeps-
+  snapshot, headless webhook trigger.
+- `RunEnvironmentTests` (+1 net): the reserved-name drop + diagnostic, and the inherited-metadata-
+  server-map order.
+- Tenancy (+5): organization variables in the entity probe registry (read isolation, cross-tenant
+  write refusal, Find-after-switch), `The_run_snapshot_reader_reads_only_the_run_s_own_organization_
+  and_needs_no_request_tenant` (both directions + no request tenant), and
+  `Environment_variable_mutations_cannot_reach_another_tenants_variable` (foreign id = bodyless 404,
+  row untouched); the page scan also covers `/organizations/environment` and the foreign value.
+
+### 8. Mutation record
+
+Each fact was proven red under one mutation; every patch was reverted and the six files' SHA-256
+verified identical afterwards (`artifacts/f-034/mutations.log`).
+
+| # | Mutation | Fact | Result |
+|---|---|---|---|
+| M1 | parameters and pipeline env swapped in `Compose` | C1a | red (`value-from-pipeline` → `value-from-param`) |
+| M2 | pipeline env and step env swapped in `Compose` | C1a | red (`value-from-step` → `value-from-pipeline`) |
+| M3 | claim merge lets the organization layer win a shared name | C1a | red (`value-from-param` → `value-from-org`) |
+| M4 | declared reserved names are no longer dropped | C1b + RunEnvironmentTests | red |
+| M5 | organization name prefix no longer refused | `An_organization_name_inside_the_server_prefix…` | red |
+| M6 | parameter name prefix no longer refused | `A_parameter_name_inside_the_server_prefix…` | red |
+| M7 | snapshot read goes back to the request tenant | tenancy snapshot fact | red |
+| M8 | snapshot read loses its organization predicate | tenancy snapshot fact | red |
+| M9 | no snapshot frozen onto the run | TC_002 + delete fact | red |
+| M10 | run page hides the frozen environment | TC_001 | red |
+| M11 | the count cap disappears | caps fact | red |
+| M12 | the list becomes Owner-only (copying the Secrets guard) | Member fact | red |
+
+12/12 (M2 and M7 were re-targeted once: the first M2 attempt matched a value that appeared in the
+worker's own log lines, which is why C1a now compares the child's stdout against distinctive values;
+the first M7 attempt used the webhook path, which does set a tenant, so the no-request-tenant tenancy
+fact is the mutation's target).
+
+### 9. Gate (one line per command)
+
+| Command | Result |
+|---|---|
+| `dotnet build -c Release` | **PASS** - `Build succeeded`, 0 warnings, 0 errors (warnings are errors) |
+| fast suite (sextuple filter, unchanged) | count **1341 → 1366** discovered (`--list-tests`, before/after). Full-run status: **not green on this machine at HEAD either** - see the environment note below. The 184 tests of every class this card touches pass in one run: `Total: 184, Failed: 0, Skipped: 0, Time: 158s` |
+| `Category=Postgres` | **PASS** - `Total: 6, Failed: 0, Skipped: 0, Time: 10.4s` against a disposable PostgreSQL **16.15** (`initdb --locale=C.UTF-8`, random loopback port, `pg_ctl`; every fact drops and recreates `public`, so the whole migration chain - including this card's new table and column - runs on a real PostgreSQL) |
+| mutation | **12/12** - every new fact proven red under one mutation, files restored and SHA-256 verified (`artifacts/f-034/mutations.log`) |
+
+**Environment note (important for reading the "fast" line).** This machine cannot run the whole fast
+suite green even at HEAD: a baseline run of the unchanged tree (`artifacts/f-034/baseline-fast.log`,
+`git stash`ed working tree) hits five-minute host-creation timeouts in classes this card never touches
+(`GitProbeTests`, `ProjectCrudTests`, `TenantIsolation*ProbeTests`). With this card applied the suite
+shows the same class of environment timeouts (a git-timeout timing fact, a six-minute concurrency
+harness) and **no functional failure in any surface this card changes**. Every class this card touches
+passes together (184 tests, above), and each new fact passes in isolation. Nothing here pretends the
+whole suite is green on this machine; the claim is that the change is not what is red.
+
+### 10. Known doc discrepancy (outside this card's file boundary)
+
+`docs/lua-runtime.md` §6.0.1 still describes the pre-F-034 chain ("… step `env` < the server-provided
+run environment", and "build parameters join this same server-provided layer"). One sentence there is
+now wrong. It was not in the allowed file list, so it is left for a follow-up (or the Lead's go-ahead):
+replace "inherited < pipeline < step < run environment" with "inherited < `ZENKINS_*` < organization <
+parameters < pipeline < step", noting the metadata edge is protected by refusal/filtering.

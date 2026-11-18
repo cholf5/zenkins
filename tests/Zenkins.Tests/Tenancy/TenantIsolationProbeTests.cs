@@ -430,6 +430,77 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             },
             CancellationToken);
 
+    // ---------------------------------------------------------------------------------------------
+    // F-034: the organization environment layer
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public Task Organization_environment_variables_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<OrganizationEnvironmentVariable>(
+            _fixture, CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_organization_environment_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<OrganizationEnvironmentVariable>(
+            _fixture,
+            () => new OrganizationEnvironmentVariable
+            {
+                // Only the tenant field is wrong; the name is fresh, so the rejection is the tenant
+                // guard's rather than the unique index's.
+                Name = "SMUGGLED_REGISTRY_HOST",
+                Value = "registry.smuggled.internal",
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_organization_environment_variables() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<OrganizationEnvironmentVariable>(
+            _fixture,
+            TwoOrgsFixture.EnvironmentAId,
+            TwoOrgsFixture.EnvironmentBId,
+            CancellationToken);
+
+    [Fact]
+    public async Task The_run_snapshot_reader_reads_only_the_run_s_own_organization_and_needs_no_request_tenant()
+    {
+        // The trigger freezes the organization layer through RunEnvironmentSnapshot.ReadForOrganizationAsync,
+        // so that one read is where a cross-tenant leak - or a silently empty layer - would enter every run.
+        // Two properties, in both directions:
+        //   * the named organization is the only one read, whatever the request tenant happens to be;
+        //   * with NO request tenant at all (the headless webhook / schedule case) the read still answers
+        //     that organization's layer instead of an empty one.
+        foreach (var (organizationId, own, foreign) in new[]
+                 {
+                     (TwoOrgsFixture.OrgAId, TwoOrgsFixture.EnvironmentAName, TwoOrgsFixture.EnvironmentBName),
+                     (TwoOrgsFixture.OrgBId, TwoOrgsFixture.EnvironmentBName, TwoOrgsFixture.EnvironmentAName),
+                 })
+        {
+            // A request tenant pointing at the *other* organization must not matter: the predicate decides.
+            _fixture.UseOrganization(organizationId == TwoOrgsFixture.OrgAId
+                ? TwoOrgsFixture.OrgBId
+                : TwoOrgsFixture.OrgAId);
+            await using var context = _fixture.CreateContext();
+
+            var snapshot = await Zenkins.Server.Environments.RunEnvironmentSnapshot
+                .ReadForOrganizationAsync(context, _fixture.SystemDataScope, organizationId, CancellationToken);
+
+            Assert.True(snapshot.ContainsKey(own));
+            Assert.False(snapshot.ContainsKey(foreign));
+            Assert.Single(snapshot);
+
+            // ...and the headless case: no request tenant at all.
+            _fixture.ClearOrganizationSelection();
+            await using var headless = _fixture.CreateContext();
+
+            var headlessSnapshot = await Zenkins.Server.Environments.RunEnvironmentSnapshot
+                .ReadForOrganizationAsync(headless, _fixture.SystemDataScope, organizationId, CancellationToken);
+
+            Assert.True(headlessSnapshot.ContainsKey(own));
+            Assert.Single(headlessSnapshot);
+        }
+    }
+
     [Fact]
     public Task Find_after_a_tenant_switch_returns_null_for_schedules() =>
         TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<ProjectSchedule>(

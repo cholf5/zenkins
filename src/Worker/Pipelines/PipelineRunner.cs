@@ -85,12 +85,12 @@ public sealed class PipelineRunOptions
         new Dictionary<string, string?>();
 
     /// <summary>
-    /// The server-provided run environment (F-007): <c>ZENKINS_RUN_ID</c>, <c>ZENKINS_PROJECT_ID</c>,
-    /// <c>ZENKINS_WORKER_NAME</c>. It is the <b>last</b> layer of the composition - it wins over the
-    /// pipeline's and the step's own <c>env</c> (card F-015's precedence).
+    /// The server-provided run environment (F-007/F-021/F-034): the <c>ZENKINS_*</c> metadata, the
+    /// organization layer frozen onto the run and the run's parameter values, as named layers. They are
+    /// the lower half of the composition (metadata → organization → parameters → pipeline env → step env,
+    /// PRD §3.11.3) and the reserved metadata is pinned, so a declared <c>env</c> cannot shadow it.
     /// </summary>
-    public IReadOnlyDictionary<string, string?> StepEnvironment { get; init; } =
-        new Dictionary<string, string?>();
+    public RunEnvironment RunEnvironment { get; init; } = RunEnvironment.Empty;
 
     /// <summary>
     /// The worker's own process environment, the <b>first</b> layer of the composition. Null means "read the
@@ -571,17 +571,17 @@ public sealed class PipelineRunner
                 return PipelineRunOutcome.Cancellation(commit);
             }
 
-            // 5a. The step's effective environment: inherited < pipeline env < step env < run env. One
-            //     composition serves both readers - the deferred env() references below and the child.
-            var runLayer = new Dictionary<string, string?>(_options.StepEnvironment, StringComparer.Ordinal)
-            {
-                [StepEnvironment.StepNameVariable] = step.Name,
-            };
+            // 5a. The step's effective environment, in the one documented order (PRD §3.11.3): inherited
+            //     < ZENKINS_* metadata < the server-resolved values (organization, then parameters) <
+            //     pipeline env < step env. One composition serves both readers - the deferred env()
+            //     references below and the child - and a declared ZENKINS_* name is dropped there with a
+            //     line in this run's log (a reserved name is the server's, never a script's).
             var environment = StepEnvironment.Compose(
                 _inheritedEnvironment,
                 spec.Env,
                 step.Env,
-                runLayer);
+                _options.RunEnvironment.WithStepName(step.Name),
+                dropped => Log($"zenkins: step {position} \"{step.Name}\": {dropped}"));
 
             // 5b. The condition is evaluated against the run's frozen facts before anything is resolved or
             //     started. A step that does not match is recorded Skipped - never claimed Running, no start

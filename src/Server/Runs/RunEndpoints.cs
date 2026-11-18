@@ -583,8 +583,11 @@ public static class RunEndpoints
         // whose spec comes from the Worker's definition phase.
         string? PipelineSpecJson = null,
 
-        // F-021: the run's resolved build-parameter values (name → value). Null when the project
-        // declares no parameters; the worker injects them into the server-provided env layer.
+        // F-021 + F-034: the run's server-resolved environment values (name → value) - the organization
+        // layer this run was queued with, with the parameter values on top of it. **One map**: the server
+        // resolved the order at trigger time, so the worker injects this and never compares two server
+        // layers (a second copy of the order at the other end is a second thing that can drift). Null
+        // when the run has neither layer; the two frozen snapshots stay separate on the run row.
         IReadOnlyDictionary<string, string>? Parameters = null,
 
         // F-036: the run's per-project build number, injected as ZENKINS_BUILD_NUMBER beside the

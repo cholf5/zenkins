@@ -374,6 +374,34 @@
             </BbCard>
         }
 
+        @* F-034: the organization environment this run was queued with. Read from the run's own snapshot,
+           so deleting or editing an organization variable never rewrites history - and the values are shown:
+           they are configuration, not secrets (which is why this card carries no masking). *@
+        @if (_run.Environment is { Count: > 0 } environment)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Organization environment</BbCardTitle>
+                    <BbCardDescription>
+                        The organization variables this run was queued with, frozen at trigger time. Editing
+                        or deleting one afterwards does not change this run - every step of it read these
+                        values.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl id="run-environment" class="bb:grid bb:grid-cols-1 bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
+                        @foreach (var (name, value) in environment.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                        {
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@name</dt>
+                                <dd id="@($"run-environment-{name}")" class="bb:whitespace-pre-wrap bb:break-all bb:font-mono">@value</dd>
+                            </div>
+                        }
+                    </dl>
+                </BbCardContent>
+            </BbCard>
+        }
+
         <BbCard>
             <BbCardHeader>
                 <BbCardTitle As="h2">Execution</BbCardTitle>

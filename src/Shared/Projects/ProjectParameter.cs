@@ -11,8 +11,10 @@ namespace Zenkins.Shared.Projects;
 /// record is the definition, so editing it later never moves a queued run.
 /// <para>
 /// <b>Names are environment variables.</b> A parameter is injected into every step's environment under
-/// its own name (the same layer the server-provided <c>ZENKINS_*</c> variables occupy), so the name must
-/// pass the reference-name shape - the same rule <c>secret()</c> targets and stored secrets follow.
+/// its own name, one layer above the organization's environment variables and below the pipeline's and
+/// the step's own <c>env</c> (PRD §3.11.3, card F-034), so the name must pass the reference-name shape -
+/// the same rule <c>secret()</c> targets and stored secrets follow. The <c>ZENKINS_*</c> namespace belongs
+/// to the server's own run metadata and is refused when a definition is saved.
 /// </para>
 /// </summary>
 /// <param name="Name">Env-variable shaped (letter/underscore first, then letters, digits, underscores).</param>

@@ -10,6 +10,7 @@ using Zenkins.Server.Projects;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Artifacts;
 using Zenkins.Server.Branches;
+using Zenkins.Server.Environments;
 using Zenkins.Server.Schedules;
 using Zenkins.Server.Webhooks;
 using Zenkins.Shared.LogStreaming;
@@ -109,6 +110,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Encrypted organization secrets (F-012). Write-only above this layer: nothing outside
     /// <c>SecretService.TryGetValueAsync</c> ever decrypts a row, and no endpoint returns a value.</summary>
     public DbSet<Secret> Secrets => Set<Secret>();
+
+    /// <summary>Plain (unencrypted) organization environment variables (F-034): the layer every
+    /// project's steps receive, snapshotted onto each run at trigger time.</summary>
+    public DbSet<OrganizationEnvironmentVariable> OrganizationEnvironmentVariables =>
+        Set<OrganizationEnvironmentVariable>();
 
     /// <summary>Encrypted Git credentials (F-013). Write-only above this layer: the only decrypt path
     /// is <c>GitCredentialService.FetchMaterialForRunAsync</c>, which serves one run's worker.</summary>
@@ -958,6 +964,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // F-021: the run's resolved parameter values (a name → value object), bounded by
             // ProjectParameterLimits when both the definitions and the supplied values are validated.
             entity.Property(run => run.ParametersJson);
+
+            // F-034: the frozen organization environment layer (another name → value object). Bounded at
+            // the source by OrganizationEnvironmentValidation (100 variables, 4 KiB each), so the column
+            // needs no typed cap of its own.
+            entity.Property(run => run.EnvironmentJson);
             entity.Property(run => run.FailureReason).HasMaxLength(200);
 
             // F-009: the reason a cancellation was requested (canceled-by-user <user>, timeout),
@@ -1087,6 +1098,29 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasQueryFilter(secret => secret.OrganizationId == CurrentOrganizationId);
+        });
+
+        // F-034: the organization's environment variables. Tenant-owned like everything else, name-unique
+        // per organization; the value is plaintext on purpose (configuration, not a secret). The reserved
+        // prefix is refused in the service at save time, not silently resolved by the worker.
+        modelBuilder.Entity<OrganizationEnvironmentVariable>(entity =>
+        {
+            entity.HasKey(variable => variable.Id);
+            entity.Property(variable => variable.Name).IsRequired()
+                .HasMaxLength(OrganizationEnvironmentValidation.MaxNameLength);
+            entity.Property(variable => variable.Value).IsRequired()
+                .HasMaxLength(OrganizationEnvironmentValidation.MaxValueLength);
+            entity.Property(variable => variable.CreatedByUserId).IsRequired().HasMaxLength(450);
+            entity.Property(variable => variable.UpdatedByUserId).HasMaxLength(450);
+
+            // The guard, not a pre-flight query: two concurrent creates cannot both pass an "is the name
+            // free" check. The service translates the violation into a field error.
+            entity.HasIndex(variable => new { variable.OrganizationId, variable.Name }).IsUnique();
+            entity.HasOne<Organization>().WithMany()
+                .HasForeignKey(variable => variable.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasQueryFilter(variable => variable.OrganizationId == CurrentOrganizationId);
         });
 
         // F-013: the Git credential entity (tenant-owned, name-unique) and BuildRun.GitCommit's bounded

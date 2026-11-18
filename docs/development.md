@@ -78,6 +78,16 @@ loop (`dotnet run` from a clone).
 > category and no new exclusion - the sextuple filter is unchanged. Q-014 (the artifact-zip temp snapshot)
 > moved no count: it retargeted the zip fact and two harness self-tests at the download's own scoped temp
 > root, 2 rewrites and 0 deletions.
+> F-034 (organization environment variables) added **25** tests on 2026-11-17: 19 in the fast suite
+> (`OrganizationEnvironmentTests` - the store/name/role/cap facts, including a 5-row `Theory` that holds
+> the organization validator's answer together with the stored-secret validator's and a 4-row `Theory`
+> for the reserved `ZENKINS_*` prefix at save; TC-001's two projects running real steps; TC-002's frozen
+> snapshot and its run-page view; a deleted variable whose old run keeps its value; and a headless webhook
+> run), 1 net in `RunEnvironmentTests` (the reserved name dropped and reported by the composition, plus
+> the inherited/metadata/server-map order) and 5 in the tenancy harness (the new tenant-owned entity's
+> three probes, the snapshot reader asked with no request tenant at all, and a foreign-id mutation probe;
+> the page scan also covers `/organizations/environment`). No new category and no new exclusion - the
+> sextuple filter is unchanged, and the fast suite goes from 1341 to 1366 discovered tests.
 > Q-021 (the theme cascade model, which counted element selectors as zero and ignored `@layer`) added
 > **8** facts on 2026-11-17, all in `ThemeCascadeModelTests.cs`, and every one of them pins a dimension a
 > browser decides and the old reader got by luck: specificity is the (ids, classes, types) triple compared

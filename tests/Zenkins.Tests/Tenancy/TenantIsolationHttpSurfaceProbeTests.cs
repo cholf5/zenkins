@@ -52,6 +52,7 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
                      "/workers",
                      "/api-tokens",
                      "/organizations/members",
+                     "/organizations/environment",
                      $"/projects/{TwoOrgsFixture.ProjectAId}/settings",
                      $"/projects/{TwoOrgsFixture.ProjectAId}/runs",
                      $"/projects/{TwoOrgsFixture.ProjectAId}/pipelines",
@@ -71,6 +72,11 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
             Assert.DoesNotContain(TwoOrgsFixture.ProjectBRepositoryUrl, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.WorkerBName, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.SecretBName, scanned, StringComparison.Ordinal);
+
+            // F-034: the organization environment is plain configuration, so a leak would be visible
+            // verbatim - the value is asserted, not only the name.
+            Assert.DoesNotContain(TwoOrgsFixture.EnvironmentBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.EnvironmentBValue, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.SecretBCiphertext, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.GitCredentialBName, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.WebhookBName, scanned, StringComparison.Ordinal);
@@ -78,6 +84,7 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
             Assert.DoesNotContain(TwoOrgsFixture.OrgBOwnerUserId, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.ProjectBId.ToString(), scanned, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(TwoOrgsFixture.BuildRunBId.ToString(), scanned, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(TwoOrgsFixture.EnvironmentBId.ToString(), scanned, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("beta-line", scanned, StringComparison.Ordinal);
         }
     }
@@ -297,6 +304,38 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
             host, run => run.Id == TwoOrgsFixture.BuildRunBId)).Single();
         Assert.Equal(BuildRunStatus.Queued, beta.Status);
         Assert.Null(beta.EndedAt);
+    }
+
+    [Fact]
+    public async Task Environment_variable_mutations_cannot_reach_another_tenants_variable()
+    {
+        using var host = new TenantProbeHostFixture();
+        using var client = await TenantIsolationAuditProbes.SignInAsync(host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
+
+        // F-034: both mutations are form-bound and Owner-only; the id is resolved through the tenant
+        // filter, so B's id is a bodyless 404 for A's Owner and the foreign row is untouched.
+        var update = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/organizations/environment",
+            $"/organizations/environment/{TwoOrgsFixture.EnvironmentBId}/update",
+            new Dictionary<string, string>
+            {
+                ["Name"] = "HIJACKED_REGISTRY_HOST",
+                ["Value"] = "registry.hijacked.internal",
+            });
+        Assert.Equal(HttpStatusCode.NotFound, update.StatusCode);
+
+        var delete = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/organizations/environment",
+            $"/organizations/environment/{TwoOrgsFixture.EnvironmentBId}/delete",
+            new Dictionary<string, string>());
+        Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
+
+        var beta = (await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<OrganizationEnvironmentVariable>(
+            host, variable => variable.Id == TwoOrgsFixture.EnvironmentBId)).Single();
+        Assert.Equal(TwoOrgsFixture.EnvironmentBName, beta.Name);
+        Assert.Equal(TwoOrgsFixture.EnvironmentBValue, beta.Value);
     }
 
     [Fact]

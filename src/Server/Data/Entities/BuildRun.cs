@@ -220,6 +220,21 @@ public sealed class BuildRun : ITenantOwned
     /// </summary>
     public string? ParametersJson { get; set; }
 
+    /// <summary>
+    /// The organization environment layer this run executes with (card F-034): a JSON object of
+    /// variable name → value, frozen at trigger time exactly like the branch, the spec and the
+    /// parameter values. Null when the organization defined no variables when this run was queued.
+    /// <para>
+    /// <b>Its own column, not part of <see cref="ParametersJson"/>.</b> The parameter snapshot has a
+    /// second consumer with its own meaning - the trigger form of a rebuild/replay re-resolves it
+    /// against today's definitions, which refuses a name the project never declared - so merging the
+    /// organization layer into it would make a rebuild post configuration as parameters. The two
+    /// layers travel together (one environment block in the claim, one composition on the worker) but
+    /// are stored, and read back to the page, under their own names.
+    /// </para>
+    /// </summary>
+    public string? EnvironmentJson { get; set; }
+
     /// <summary>Set when the run reaches a terminal state. Duration is derived on display.</summary>
     public DateTimeOffset? EndedAt { get; set; }
 

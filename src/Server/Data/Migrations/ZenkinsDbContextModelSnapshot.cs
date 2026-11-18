@@ -413,6 +413,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<DateTimeOffset?>("EndedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("EnvironmentJson")
+                        .HasColumnType("text");
+
                     b.Property<int?>("ExitCode")
                         .HasColumnType("integer");
 
@@ -635,6 +638,48 @@ namespace Zenkins.Server.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Organizations");
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.OrganizationEnvironmentVariable", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpdatedByUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("character varying(4096)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("OrganizationEnvironmentVariables");
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.OrganizationMember", b =>
@@ -1406,6 +1451,15 @@ namespace Zenkins.Server.Data.Migrations
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.GitCredential", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.OrganizationEnvironmentVariable", b =>
                 {
                     b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
                         .WithMany()

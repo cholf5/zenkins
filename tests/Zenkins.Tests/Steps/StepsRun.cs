@@ -83,6 +83,17 @@ internal sealed class StepsRun : IDisposable
     /// <summary>The branch the run was triggered for.</summary>
     public string Branch { get; set; } = "main";
 
+    /// <summary>
+    /// The claim the worker received for this run (null for the seeded second-organization path). The
+    /// harness composes the run environment from it with the product's own
+    /// <see cref="WorkerRunLoop.BuildRunEnvironment"/>, so a layer the server put in the claim reaches the
+    /// steps here exactly as it would in the worker - no harness-side copy of the composition.
+    /// </summary>
+    public WorkerClaimResponse? Claim { get; private set; }
+
+    /// <summary>The worker name this run registered under (the claim's <c>ZENKINS_WORKER_NAME</c>).</summary>
+    public string WorkerName { get; private set; } = "steps-agent";
+
     /// <summary>The worker's own environment for this run (the first composition layer).</summary>
     public IReadOnlyDictionary<string, string?>? InheritedEnvironment { get; set; }
 
@@ -147,12 +158,13 @@ internal sealed class StepsRun : IDisposable
         PipelineRepository repository,
         string? branch = null,
         string workerName = "steps-agent",
-        HttpClient? actingClient = null)
+        HttpClient? actingClient = null,
+        Func<Guid, HttpClient, Task>? prepareProject = null)
     {
         var run = new StepsRun(host, repository);
         try
         {
-            await run.StartProductRunAsync(branch, workerName, actingClient);
+            await run.StartProductRunAsync(branch, workerName, actingClient, prepareProject);
             return run;
         }
         catch
@@ -236,12 +248,22 @@ internal sealed class StepsRun : IDisposable
                 PipelinePath = "pipeline.lua",
                 Deadline = DateTimeOffset.UtcNow + PipelineDeadline,
                 InheritedEnvironment = InheritedEnvironment,
-                StepEnvironment = new Dictionary<string, string?>
-                {
-                    ["ZENKINS_RUN_ID"] = RunId.ToString(),
-                    ["ZENKINS_PROJECT_ID"] = ProjectId.ToString(),
-                    ["ZENKINS_WORKER_NAME"] = "steps-agent",
-                },
+
+                // F-034: the claim is the source of the layers - the same call the worker makes, so the
+                // organization snapshot and the parameter values reach the steps through the product's
+                // composition rather than through a harness copy of it. The seeded second-organization
+                // path has no claim, so it falls back to the metadata the server would have written.
+                RunEnvironment = Claim is { } claim
+                    ? WorkerRunLoop.BuildRunEnvironment(claim, WorkerName)
+                    : new RunEnvironment
+                    {
+                        Metadata = new Dictionary<string, string?>
+                        {
+                            ["ZENKINS_RUN_ID"] = RunId.ToString(),
+                            ["ZENKINS_PROJECT_ID"] = ProjectId.ToString(),
+                            ["ZENKINS_WORKER_NAME"] = WorkerName,
+                        },
+                    },
                 Log = Emit,
                 OnProcessOutput = OnOutput,
                 Redactor = redactor,
@@ -367,13 +389,24 @@ internal sealed class StepsRun : IDisposable
         return await response.Content.ReadAsStringAsync(CancellationToken);
     }
 
-    private async Task StartProductRunAsync(string? branch, string workerName, HttpClient? actingClient)
+    private async Task StartProductRunAsync(
+        string? branch,
+        string workerName,
+        HttpClient? actingClient,
+        Func<Guid, HttpClient, Task>? prepareProject)
     {
         Owner = await Host.Inner.SignInOwnerAsync();
         OrganizationId = await Host.OrganizationIdAsync();
         ProjectId = await Host.SeedProjectAsync(
             $"steps-project-{Guid.NewGuid():N}",
             Repository.FileUrl);
+        // The seam a card needs to configure the project (its parameters, its steps) before the trigger:
+        // everything a run reads is snapshotted at trigger time, so "after the trigger" is too late.
+        if (prepareProject is not null)
+        {
+            await prepareProject(ProjectId, Owner);
+        }
+
         (WorkerToken, WorkerId) = await Host.RegisterWorkerAsync(name: workerName);
         WorkerClient = Host.Host.CreateClient();
 
@@ -384,10 +417,16 @@ internal sealed class StepsRun : IDisposable
 
         // The trigger is the acting user's: any member may trigger (PRD §3.1.2), and a member-triggered run must
         // read the organization's secrets exactly like the owner's (PRD §3.8 - the script is trusted code).
+        WorkerName = workerName;
         RunId = await RunTestHost.TriggerRunAsync(actingClient ?? Owner, ProjectId, branch: branch);
 
         using var claimed = await RunTestHost.ClaimAsync(WorkerClient, WorkerToken);
-        Assert.Equal(RunId, await RunTestHost.ReadClaimedRunIdAsync(claimed));
+        Assert.Equal(System.Net.HttpStatusCode.OK, claimed.StatusCode);
+        Claim = System.Text.Json.JsonSerializer.Deserialize(
+            await claimed.Content.ReadAsStringAsync(CancellationToken),
+            WorkerJsonContext.Default.WorkerClaimResponse);
+        Assert.NotNull(Claim);
+        Assert.Equal(RunId, Claim!.RunId);
 
         using var accepted = await RunTestHost.AcceptAsync(WorkerClient, WorkerToken, RunId);
         Assert.Equal(System.Net.HttpStatusCode.OK, accepted.StatusCode);

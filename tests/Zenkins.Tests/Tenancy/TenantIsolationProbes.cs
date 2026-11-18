@@ -49,6 +49,11 @@ public static class TenantIsolationProbes
             // F-023: the branch jobs of a multibranch project - the same three probes, plus the branch
             // list's own project+tenant scope (the same branch name in another project never appears).
             typeof(BranchJob),
+
+            // F-034: the organization environment variables - the same three probes, plus two the other
+            // entities do not need: the snapshot reader the trigger uses returns only the active tenant's
+            // layer, and the page/mutation probes live in TenantIsolationHttpSurfaceProbeTests.
+            typeof(OrganizationEnvironmentVariable),
         ];
 
     /// <summary>

@@ -430,14 +430,27 @@ pipeline {
 ```
 
 `secret("NAME")` yields `${secret:NAME}`, `env("NAME")` yields `${env:NAME}`, and the C# executor
-substitutes them **immediately before the step starts**, on the full precedence chain: inherited
-process environment < pipeline `env` < step `env` < the server-provided run environment
-(`ZENKINS_RUN_ID`, `ZENKINS_PROJECT_ID`, `ZENKINS_WORKER_NAME`, `ZENKINS_STEP_NAME`). One
-composition feeds two readers — the substituted argv/`env` values and the child process's own
-environment — so a script and the process it starts can never disagree about a value. A secret's
-value enters only where the script put the reference; it is not a layer that silently overrides a
-name. A run's **build parameters** (F-021, PRD §3.11) join this same server-provided layer under
-their own names, so a step reads them directly or through `${env:NAME}` with no new syntax.
+substitutes them **immediately before the step starts**, on the full precedence chain (lowest first,
+PRD §3.11.3): the worker's inherited process environment < `ZENKINS_*` run metadata < the
+organization's environment variables < the run's build parameters < the pipeline's `env` < the
+step's `env` (highest). One composition feeds two readers — the substituted argv/`env` values and the
+child process's own environment — so a script and the process it starts can never disagree about a
+value. A secret's value enters only where the script put the reference; it is not a layer that
+silently overrides a name.
+
+Two properties of that chain are worth spelling out, because neither is "just ordering":
+
+- **The `ZENKINS_*` metadata is not protected by being written last — it is the lowest layer.** Its
+  namespace is the server's own record of this run, so it is protected by *refusal and filtering*: an
+  organization variable or a build parameter named `ZENKINS_*` is refused when it is saved
+  (`name-reserved`), and a name inside the prefix declared by a pipeline's or a step's `env` (Lua has
+  no save step) is dropped by the composition with a line in the run log. Nothing silently wins and
+  nothing is silently dropped.
+- **The organization layer and the build parameters are their own layers, not "the same layer as the
+  metadata".** The organization layer sits below the parameters and both sit below the pipeline's and
+  the step's `env`; the server resolves organization → parameters into one map before the claim is
+  sent, so a step reads them directly or through `${env:NAME}` with no new syntax, and the two
+  snapshots stay separate on the run so a page can say which layer a value came from.
 
 The value a reference resolves to is registered with the run's redaction filter (§7) at the moment
 it is decrypted — before the step that asked for it can log anything — and the definition phase

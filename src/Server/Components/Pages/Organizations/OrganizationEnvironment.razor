@@ -1,0 +1,262 @@
+@page "/organizations/environment"
+@attribute [Authorize]
+@using Zenkins.Server.Environments
+@inject UserSession UserSession
+@inject OrganizationEnvironmentService Variables
+
+<PageTitle>Environment · Zenkins</PageTitle>
+
+<div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
+    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+        <BbCardTitle As="h1" tabindex="-1">Organization environment</BbCardTitle>
+        @if (_session?.Organization is { } organization)
+        {
+            <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
+            <BbBadge Variant="BadgeVariant.Outline">Your role: @organization.Role</BbBadge>
+        }
+    </div>
+
+    @if (_session is { HasOrganization: false })
+    {
+        <NoOrganizationNotice />
+    }
+    else
+    {
+        @* AC1: the values are configuration, not credentials. Saying so next to the form is the point -
+           anything sensitive belongs in Secrets, which are Owner-only and write-only. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Configuration, not secrets</BbCardTitle>
+                <BbCardDescription>
+                    Every project's steps receive these variables, frozen onto each run when it is queued.
+                    The values are plain configuration: they are shown here, on the run page and in any log
+                    a step echoes them into. Anything sensitive belongs in
+                    <a href="/secrets" class="bb:font-medium bb:underline bb:underline-offset-4">Secrets</a>,
+                    which are encrypted and write-only.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <p class="bb:text-sm bb:text-muted-foreground">
+                    Precedence, lowest first: <code>ZENKINS_*</code> run metadata → organization variables →
+                    build parameters → pipeline <code>env</code> → step <code>env</code>. Names beginning
+                    with <code>@string.Join(", ", ServerEnvironmentNames.ReservedPrefixes)</code> are
+                    reserved for the server's own metadata and cannot be used here.
+                </p>
+            </BbCardContent>
+        </BbCard>
+
+        @if (Notice is { } notice)
+        {
+            <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@notice</p>
+            </div>
+        }
+
+        @if (Error is { } error)
+        {
+            <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                <p>@error</p>
+            </div>
+        }
+
+        @if (_canManage)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">New variable</BbCardTitle>
+                    <BbCardDescription>
+                        The name must be usable as an environment variable (letters, digits and underscores)
+                        and unique in this organization. An organization holds at most
+                        @OrganizationEnvironmentValidation.MaxVariables variables of at most
+                        @OrganizationEnvironmentValidation.MaxValueLength characters each.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <form method="post" action="/organizations/environment/create" data-zenkins-antiforgery class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row bb:sm:items-end">
+                        <div class="bb:flex-1 bb:space-y-2">
+                            <label for="environment-name" class="bb:text-sm bb:font-medium">Name</label>
+                            <input id="environment-name"
+                                   name="Name"
+                                   type="text"
+                                   required
+                                   maxlength="@OrganizationEnvironmentValidation.MaxNameLength"
+                                   pattern="[A-Za-z_][A-Za-z0-9_]*"
+                                   value="@SubmittedName"
+                                   class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                   autocomplete="off"
+                                   spellcheck="false"
+                                   placeholder="REGISTRY_HOST" />
+                        </div>
+                        <div class="bb:flex-1 bb:space-y-2">
+                            <label for="environment-value" class="bb:text-sm bb:font-medium">Value</label>
+                            <input id="environment-value"
+                                   name="Value"
+                                   type="text"
+                                   required
+                                   class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                   autocomplete="off"
+                                   spellcheck="false"
+                                   placeholder="registry.internal" />
+                        </div>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Add variable</BbButton>
+                    </form>
+                </BbCardContent>
+            </BbCard>
+        }
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Variables of this organization</BbCardTitle>
+                <BbCardDescription>
+                    @(_canManage
+                        ? "Edits and deletes change future runs only: a queued or finished run keeps the snapshot it was created with."
+                        : "Read-only: only an organization Owner can add, edit or delete these. Every project's steps receive them.")
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                @if (_variables.Count == 0)
+                {
+                    <BbEmpty Title="No variables configured"
+                             Description="Add a variable above to make it available to every project's steps.">
+                        <Icon>
+                            <LucideIcon Name="variable" Class="bb:h-12 bb:w-12" />
+                        </Icon>
+                    </BbEmpty>
+                }
+                else
+                {
+                    <div class="bb:overflow-x-auto">
+                        <table class="bb:w-full bb:text-sm">
+                            <thead>
+                                <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Name</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Value</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Updated</th>
+                                    @if (_canManage)
+                                    {
+                                        <th class="bb:py-2 bb:font-medium">Manage</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var variable in _variables)
+                                {
+                                    <tr class="bb:border-b bb:align-top">
+                                        <td class="bb:py-3 bb:pr-4 bb:font-medium bb:font-mono">@variable.Name</td>
+                                        <td id="@($"environment-value-{variable.Name}")"
+                                            class="bb:py-3 bb:pr-4 bb:whitespace-pre-wrap bb:break-all bb:font-mono">@variable.Value</td>
+                                        <td class="bb:py-3 bb:pr-4">@variable.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                        @if (_canManage)
+                                        {
+                                            <td class="bb:py-3">
+                                                <div class="bb:flex bb:flex-col bb:gap-2">
+                                                    <details class="bb:inline-block">
+                                                        <summary class="bb:cursor-pointer bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs">
+                                                            Edit…
+                                                        </summary>
+                                                        <form method="post" action="/organizations/environment/@variable.Id/update" data-zenkins-antiforgery class="bb:mt-2 bb:flex bb:flex-col bb:gap-2">
+                                                            <label for="edit-name-@variable.Id" class="bb:sr-only">Name</label>
+                                                            <input id="edit-name-@variable.Id"
+                                                                   name="Name"
+                                                                   value="@variable.Name"
+                                                                   required
+                                                                   maxlength="@OrganizationEnvironmentValidation.MaxNameLength"
+                                                                   pattern="[A-Za-z_][A-Za-z0-9_]*"
+                                                                   class="bb:h-8 bb:w-56 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-xs bb:font-mono"
+                                                                   autocomplete="off"
+                                                                   spellcheck="false" />
+                                                            <label for="edit-value-@variable.Id" class="bb:sr-only">Value</label>
+                                                            <input id="edit-value-@variable.Id"
+                                                                   name="Value"
+                                                                   value="@variable.Value"
+                                                                   required
+                                                                   class="bb:h-8 bb:w-56 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-xs bb:font-mono"
+                                                                   autocomplete="off"
+                                                                   spellcheck="false" />
+                                                            <button type="submit"
+                                                                    class="bb:self-start bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs bb:hover:bg-accent">
+                                                                Save
+                                                            </button>
+                                                        </form>
+                                                    </details>
+
+                                                    <details class="bb:inline-block">
+                                                        <summary class="bb:cursor-pointer bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive">
+                                                            Delete…
+                                                        </summary>
+                                                        <form method="post" action="/organizations/environment/@variable.Id/delete" data-zenkins-antiforgery class="bb:mt-2 bb:flex bb:flex-col bb:gap-2">
+                                                            <span class="bb:text-xs bb:text-muted-foreground">
+                                                                Delete @variable.Name? Runs already queued keep the
+                                                                snapshot they were created with.
+                                                            </span>
+                                                            <button type="submit"
+                                                                    class="bb:self-start bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive bb:hover:bg-destructive/10">
+                                                                Confirm delete
+                                                            </button>
+                                                        </form>
+                                                    </details>
+                                                </div>
+                                            </td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </BbCardContent>
+        </BbCard>
+    }
+</div>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private UserSessionInfo? _session;
+    private IReadOnlyList<OrganizationEnvironmentView> _variables = [];
+    private bool _canManage;
+
+    [SupplyParameterFromQuery(Name = "notice")]
+    private string? NoticeCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? ErrorCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "name")]
+    private string? SubmittedName { get; set; }
+
+    private string? Notice => NoticeCode switch
+    {
+        "created" => "The variable was added.",
+        "updated" => "The variable was saved. Runs already queued keep their own snapshot.",
+        "deleted" => "The variable was deleted. Runs already queued keep their own snapshot.",
+        _ => null,
+    };
+
+    // The value never travels in a query, so a form-level refusal carries no field name to echo.
+    private string? Error => OrganizationEnvironmentErrorCodes.MessageFor(ErrorCode);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // The session first: it establishes the circuit tenant before any tenant-filtered row is read.
+        _session = await UserSession.GetAsync();
+        _canManage = _session?.CanManageActiveOrganization == true;
+
+        if (_session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        // A Member reads the list (the values reach every step they can see); the mutations stay
+        // Owner-only, enforced in the service and in the endpoints.
+        var list = await Variables.GetVariablesAsync(_session.UserId);
+        if (list.Status == OrganizationEnvironmentStatus.Forbidden)
+        {
+            _variables = [];
+            return;
+        }
+
+        _variables = list.Variables;
+    }
+}
