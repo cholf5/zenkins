@@ -8,6 +8,8 @@ using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Runs;
+using Zenkins.Server.Schedules;
+using Zenkins.Server.Webhooks;
 using Zenkins.Shared.Artifacts;
 
 namespace Zenkins.Tests.Runs;
@@ -19,7 +21,8 @@ namespace Zenkins.Tests.Runs;
 /// Every fact drives the product's own pieces - <see cref="RetentionService"/> through
 /// <see cref="RetentionSweeper"/>'s tick, the pin and policy endpoints through their forms - against a real
 /// database and a real artifact store directory. Time is passed in, never waited for: a build "ten days old" is a
-/// row seeded with an old <see cref="BuildRun.CreatedAt"/>.
+/// row whose <see cref="BuildRun.CreatedAt"/> was written back after the insert (see <c>SeedRunAsync</c> - the
+/// context stamps every added row, so setting the value on the entity would be a seed that never happened).
 /// </para>
 /// </summary>
 [Trait("Category", "Run")]
@@ -126,6 +129,15 @@ public sealed class RetentionTests
         var only = await SeedRunAsync(host, project, BuildRunStatus.Failed, 1, daysOld: 10);
         await SavePolicyAsync(host, project, keep: null, days: 1);
 
+        // The premise, checked rather than assumed: the row really is ten days old, past a one-day window. A seed
+        // whose date the insert stamp overwrote would make this fact pass for the age rule's reason instead of the
+        // newest-build's, which is the false fact this assertion exists to keep out.
+        var seeded = await ReadRunAsync(host, only);
+        Assert.NotNull(seeded);
+        Assert.True(
+            DateTimeOffset.UtcNow - seeded!.CreatedAt > TimeSpan.FromDays(9),
+            $"the seeded build is not ten days old: CreatedAt={seeded.CreatedAt:O}.");
+
         // TC-003: a single ten-day-old build is older than the window, and is still kept - it is the project's
         // last result, and a project that deletes its only build has thrown its history away.
         var policy = new RetentionPolicy(null, 1);
@@ -138,6 +150,78 @@ public sealed class RetentionTests
 
         Assert.Equal(0, (await SweepAsync(host)).Deleted);
         Assert.NotNull(await ReadRunAsync(host, only));
+    }
+
+    /// <summary>
+    /// The day rule in the direction that keeps: a build inside the window is retained because of its age, and the
+    /// build the assertion is about is <em>not</em> the branch's newest, so the newest-build exemption cannot be the
+    /// reason. Together with <see cref="A_build_older_than_the_day_window_is_deleted"/> this is the pair that fails
+    /// whichever way the day comparison is broken (always true, always false).
+    /// </summary>
+    [Fact]
+    public async Task A_build_inside_the_day_window_is_kept_by_the_day_rule()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var project = await host.SeedProjectAsync("day-window-kept", "https://example.test/day-kept.git");
+        var inside = await SeedRunAsync(host, project, BuildRunStatus.Success, 1, daysOld: 10);
+        await SeedRunAsync(host, project, BuildRunStatus.Success, 2, daysOld: 5);
+
+        // The premise, checked: #1 really is ten days old. Without that read this fact would only prove that a
+        // build the database thinks is brand new is inside every window.
+        var seeded = await ReadRunAsync(host, inside);
+        Assert.NotNull(seeded);
+        Assert.True(
+            DateTimeOffset.UtcNow - seeded!.CreatedAt > TimeSpan.FromDays(9),
+            $"the seeded build is not ten days old: CreatedAt={seeded.CreatedAt:O}.");
+
+        // The count rule is unset, so only the day rule can say anything about #1.
+        await SavePolicyAsync(host, project, keep: null, days: 30);
+
+        var evaluation = await InTenantAsync(host, services =>
+            services.GetRequiredService<RetentionService>()
+                .EvaluateAsync(project, new RetentionPolicy(null, 30), DateTimeOffset.UtcNow, CancellationToken));
+        Assert.NotNull(evaluation);
+        Assert.Equal(0, evaluation!.WouldDelete);
+
+        Assert.Equal(0, (await SweepAsync(host)).Deleted);
+        Assert.NotNull(await ReadRunAsync(host, inside));
+        Assert.Equal(2, (await ReadRunsAsync(host, project)).Count);
+    }
+
+    /// <summary>
+    /// The day rule in the direction that deletes: a build past the window goes, with the sentence that says why.
+    /// Its counterpart (<see cref="A_build_inside_the_day_window_is_kept_by_the_day_rule"/>) keeps an in-window
+    /// build, so a comparison that ignores the age cannot satisfy both.
+    /// </summary>
+    [Fact]
+    public async Task A_build_older_than_the_day_window_is_deleted()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var project = await host.SeedProjectAsync("day-window-dropped", "https://example.test/day-dropped.git");
+        var old = await SeedRunAsync(host, project, BuildRunStatus.Success, 1, daysOld: 10);
+        var newest = await SeedRunAsync(host, project, BuildRunStatus.Success, 2, daysOld: 0);
+
+        var seeded = await ReadRunAsync(host, old);
+        Assert.NotNull(seeded);
+        Assert.True(
+            DateTimeOffset.UtcNow - seeded!.CreatedAt > TimeSpan.FromDays(9),
+            $"the seeded build is not ten days old: CreatedAt={seeded.CreatedAt:O}.");
+
+        await SavePolicyAsync(host, project, keep: null, days: 1);
+
+        // #1 is not the newest build of the branch, so the exemption does not cover it and the window decides.
+        var evaluation = await InTenantAsync(host, services =>
+            services.GetRequiredService<RetentionService>()
+                .EvaluateAsync(project, new RetentionPolicy(null, 1), DateTimeOffset.UtcNow, CancellationToken));
+        Assert.NotNull(evaluation);
+        Assert.Equal(1, evaluation!.WouldDelete);
+        var candidate = Assert.Single(evaluation.Candidates);
+        Assert.Equal(old, candidate.RunId);
+        Assert.Contains("older than 1 day(s)", candidate.Reason, StringComparison.Ordinal);
+
+        Assert.Equal(1, (await SweepAsync(host)).Deleted);
+        Assert.Null(await ReadRunAsync(host, old));
+        Assert.NotNull(await ReadRunAsync(host, newest));
     }
 
     [Fact]
@@ -323,6 +407,133 @@ public sealed class RetentionTests
         Assert.Single(await ReadRunsAsync(host, project));
     }
 
+    /// <summary>
+    /// F-026's "exactly once" against F-038's trimming: a run whose chain obligation has not been dispatched yet is
+    /// not history to delete, because deleting it would cascade the pending row away and lose a downstream trigger
+    /// that was promised. Once the obligation is settled the same policy takes the run.
+    /// </summary>
+    [Fact]
+    public async Task A_run_that_still_owes_a_downstream_trigger_is_spared_until_the_obligation_settles()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var project = await host.SeedProjectAsync("owed-trigger", "https://example.test/owed.git");
+        var owed = await SeedRunAsync(host, project, BuildRunStatus.Success, 1, daysOld: 400);
+        var newest = await SeedRunAsync(host, project, BuildRunStatus.Success, 2, daysOld: 1);
+        var obligation = await SeedPendingObligationAsync(host, project, owed);
+
+        // The premise: the row the sparing rule reads is really there and really pending.
+        var pending = Assert.Single(await ReadObligationsAsync(host, owed));
+        Assert.Equal(OutboxStatuses.Pending, pending.Status);
+
+        await SavePolicyAsync(host, project, keep: 1, days: null);
+
+        // Without the sparing rule #1 is a plain candidate: it is 400 days old and outside the newest one.
+        var evaluation = await InTenantAsync(host, services =>
+            services.GetRequiredService<RetentionService>()
+                .EvaluateAsync(project, new RetentionPolicy(1, null), DateTimeOffset.UtcNow, CancellationToken));
+        Assert.NotNull(evaluation);
+        Assert.Equal(0, evaluation!.WouldDelete);
+
+        Assert.Equal(0, (await SweepAsync(host)).Deleted);
+        Assert.NotNull(await ReadRunAsync(host, owed));
+        Assert.Equal(OutboxStatuses.Pending, Assert.Single(await ReadObligationsAsync(host, owed)).Status);
+
+        // Settled: the promise was kept, so the trigger is no longer a reason to keep the history - and the row
+        // goes with the run it hangs from (the cascade above), never as a dangling obligation.
+        await SettleObligationAsync(host, obligation);
+        Assert.Equal(1, (await SweepAsync(host)).Deleted);
+        Assert.Null(await ReadRunAsync(host, owed));
+        Assert.Empty(await ReadObligationsAsync(host, owed));
+        Assert.NotNull(await ReadRunAsync(host, newest));
+    }
+
+    /// <summary>
+    /// AC-5's "no ghosts" where the product chose clearing over deleting: a webhook delivery and a schedule
+    /// occurrence are dedupe and audit records, so deleting the build they named must leave them in place with no
+    /// run - not take them away and not leave a dangling id behind.
+    /// </summary>
+    [Fact]
+    public async Task A_deleted_build_clears_the_rows_that_name_it_instead_of_taking_them()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var project = await host.SeedProjectAsync("cleared-references", "https://example.test/refs.git");
+        var oldRun = await SeedRunAsync(host, project, BuildRunStatus.Success, 1, daysOld: 400);
+        await SeedRunAsync(host, project, BuildRunStatus.Success, 2, daysOld: 1);
+        var delivery = await SeedWebhookDeliveryAsync(host, project, oldRun);
+        var occurrence = await SeedScheduleOccurrenceAsync(host, project, oldRun);
+
+        // The premise: both rows really name the run before the sweep, so a seed that pointed nowhere cannot make
+        // the assertions below pass on their own.
+        Assert.Equal(oldRun, (await ReadDeliveryAsync(host, delivery))!.RunId);
+        Assert.Equal(oldRun, (await ReadOccurrenceAsync(host, occurrence))!.RunId);
+
+        await SavePolicyAsync(host, project, keep: 1, days: null);
+        Assert.Equal(1, (await SweepAsync(host)).Deleted);
+        Assert.Null(await ReadRunAsync(host, oldRun));
+
+        var keptDelivery = await ReadDeliveryAsync(host, delivery);
+        Assert.NotNull(keptDelivery);
+        Assert.Null(keptDelivery!.RunId);
+        var keptOccurrence = await ReadOccurrenceAsync(host, occurrence);
+        Assert.NotNull(keptOccurrence);
+        Assert.Null(keptOccurrence!.RunId);
+    }
+
+    /// <summary>
+    /// Q-006's other half of the retention guard: the save answers <c>Forbidden</c> for a caller who is not a member
+    /// of the active organization, and the row keeps both rules unset.
+    /// <para>
+    /// This is a service-level fact on purpose. The HTTP surface cannot reach this branch - the active organization
+    /// is chosen from the caller's own memberships, so another organization's project is a 404 before any role is
+    /// considered (that half is <c>TenantIsolationHttpProbeTests</c>). The refusal is still real, and Q-006's
+    /// inventory may only claim it because this fact exists.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Saving_a_policy_as_a_non_member_is_forbidden_and_leaves_the_row_alone()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var project = await host.SeedProjectAsync("non-member-policy", "https://example.test/nm-policy.git");
+
+        var denied = await SavePolicyAsync(host, project, keep: 0, days: 1, actingUserId: "not-a-member");
+        Assert.Equal(RetentionMutationStatus.Forbidden, denied.Status);
+
+        var untouched = await InTenantAsync(host, services =>
+            services.GetRequiredService<RetentionService>().GetPolicyAsync(project, CancellationToken));
+        Assert.NotNull(untouched);
+        Assert.True(untouched!.IsUnset);
+
+        // Positive control: the same call from a member of the organization is stored, so the refusal above is the
+        // membership guard and not a call that could never have worked.
+        var allowed = await SavePolicyAsync(host, project, keep: 0, days: 1);
+        Assert.Equal(RetentionMutationStatus.Success, allowed.Status);
+    }
+
+    /// <summary>
+    /// The pin route's half of the same guard (Q-006): a caller who is not a member of the active organization gets
+    /// <c>Forbidden</c> and the run's pin column is untouched. Service-level for the same reason as
+    /// <see cref="Saving_a_policy_as_a_non_member_is_forbidden_and_leaves_the_row_alone"/>.
+    /// </summary>
+    [Fact]
+    public async Task Pinning_a_run_as_a_non_member_is_forbidden_and_leaves_the_row_alone()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var project = await host.SeedProjectAsync("non-member-pin", "https://example.test/nm-pin.git");
+        var run = await SeedRunAsync(host, project, BuildRunStatus.Success, 1, daysOld: 1);
+
+        var denied = await InTenantAsync(host, services =>
+            services.GetRequiredService<RetentionService>()
+                .SetPinnedAsync("not-a-member", run, true, CancellationToken));
+        Assert.Equal(RunPinStatus.Forbidden, denied.Status);
+        Assert.False((await ReadRunAsync(host, run))!.Pinned);
+
+        var allowed = await InTenantAsync(host, async services =>
+            await services.GetRequiredService<RetentionService>()
+                .SetPinnedAsync(await OwnerUserIdAsync(host, services), run, true, CancellationToken));
+        Assert.Equal(RunPinStatus.Success, allowed.Status);
+        Assert.True((await ReadRunAsync(host, run))!.Pinned);
+    }
+
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
@@ -343,14 +554,19 @@ public sealed class RetentionTests
             .Single()
             .SweepOnceAsync(CancellationToken));
 
+    /// <param name="actingUserId">
+    /// The caller the service authorizes; null means the organization's owner (the member case). A value that is
+    /// not a member is how the non-member facts reach the service's own guard.
+    /// </param>
     private static Task<RetentionMutationResult> SavePolicyAsync(
         RunTestHost host,
         Guid projectId,
         int? keep,
-        int? days) =>
+        int? days,
+        string? actingUserId = null) =>
         InTenantAsync(host, async services =>
         {
-            var userId = await OwnerUserIdAsync(host, services);
+            var userId = actingUserId ?? await OwnerUserIdAsync(host, services);
             return await services.GetRequiredService<RetentionService>()
                 .SavePolicyAsync(userId, projectId, keep, days, CancellationToken);
         });
@@ -369,6 +585,17 @@ public sealed class RetentionTests
         return owner;
     }
 
+    /// <summary>
+    /// One run (with a step and a log) <paramref name="daysOld"/> days in the past.
+    /// <para>
+    /// <b>The age is written after the insert, on purpose.</b> <c>ZenkinsDbContext.StampTimestamps</c> overwrites
+    /// <see cref="BuildRun.CreatedAt"/> for every added row, so a "ten days old" value set on the entity never
+    /// reaches the column: the row would be brand new and every date rule in this file would be measured against
+    /// the wrong instant. <c>ExecuteUpdate</c> is the honest fix and the product's stamping behaviour stays as it
+    /// is; the date facts then read the column back (see their premise assertions) so the lie cannot come back
+    /// unnoticed.
+    /// </para>
+    /// </summary>
     private static Task<Guid> SeedRunAsync(
         RunTestHost host,
         Guid projectId,
@@ -418,6 +645,17 @@ public sealed class RetentionTests
                 Timestamp = created,
             });
             await context.SaveChangesAsync();
+
+            // Now that the insert has been stamped, put the two instants the seed asked for back on the row. The
+            // column update is deliberately a direct UPDATE: a tracked write would go through StampTimestamps again.
+            await context.BuildRuns
+                .IgnoreQueryFilters()
+                .Where(candidate => candidate.Id == run.Id)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(candidate => candidate.CreatedAt, created)
+                        .SetProperty(candidate => candidate.UpdatedAt, created),
+                    CancellationToken);
             return run.Id;
         });
 
@@ -487,6 +725,135 @@ public sealed class RetentionTests
 
     private static Task<List<Artifact>> ReadArtifactsAsync(RunTestHost host, Guid runId) =>
         host.InSystemScopeAsync(context => context.SystemQueryAsync<Artifact>(artifact => artifact.RunId == runId));
+
+    /// <summary>
+    /// One pending chain obligation hanging from <paramref name="upstreamRunId"/> (F-026), written the way the
+    /// completion path writes it. It is due in an hour on purpose: the background dispatcher only works rows whose
+    /// <see cref="OutboxMessage.NextAttemptAt"/> has passed, so it stays out of this fact's way while the row is
+    /// still <c>pending</c> - which is the only thing the retention rule reads.
+    /// </summary>
+    private static Task<Guid> SeedPendingObligationAsync(RunTestHost host, Guid projectId, Guid upstreamRunId) =>
+        host.InSystemScopeAsync(async context =>
+        {
+            var project = (await context.SystemQueryAsync<Project>(candidate => candidate.Id == projectId)).Single();
+            var message = new OutboxMessage
+            {
+                OrganizationId = project.OrganizationId,
+                Kind = OutboxKinds.DownstreamTrigger,
+                UpstreamRunId = upstreamRunId,
+                // The edge the obligation came from. No foreign key: the row is a record of what was promised.
+                LinkId = Guid.NewGuid(),
+                Status = OutboxStatuses.Pending,
+                NextAttemptAt = DateTimeOffset.UtcNow.AddHours(1),
+            };
+            context.OutboxMessages.Add(message);
+            await context.SaveChangesAsync();
+            return message.Id;
+        });
+
+    private static Task<List<OutboxMessage>> ReadObligationsAsync(RunTestHost host, Guid upstreamRunId) =>
+        host.InSystemScopeAsync(context =>
+            context.SystemQueryAsync<OutboxMessage>(message => message.UpstreamRunId == upstreamRunId));
+
+    /// <summary>Settles one obligation the way a dispatch does: status, outcome and the instant, together.</summary>
+    private static Task<bool> SettleObligationAsync(RunTestHost host, Guid obligationId) =>
+        host.InSystemScopeAsync(async context =>
+            await context.OutboxMessages
+                .IgnoreQueryFilters()
+                .Where(message => message.Id == obligationId)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(message => message.Status, OutboxStatuses.Settled)
+                        .SetProperty(message => message.SettledAt, DateTimeOffset.UtcNow)
+                        .SetProperty(message => message.Outcome, DownstreamOutcomes.Queued),
+                    CancellationToken) == 1);
+
+    /// <summary>
+    /// One webhook of the project plus a delivery record naming <paramref name="runId"/> (F-017). The delivery's
+    /// <see cref="WebhookDelivery.RunId"/> carries no foreign key - it is a link, not an owner - which is exactly
+    /// why deleting a build has to clear it (AC-5) and why this row can outlive the run.
+    /// </summary>
+    private static Task<Guid> SeedWebhookDeliveryAsync(RunTestHost host, Guid projectId, Guid runId) =>
+        host.InSystemScopeAsync(async context =>
+        {
+            var project = (await context.SystemQueryAsync<Project>(candidate => candidate.Id == projectId)).Single();
+            var webhook = new Webhook
+            {
+                OrganizationId = project.OrganizationId,
+                ProjectId = projectId,
+                Name = "delivery-link",
+                // Nothing reads the ciphertext in this fact; the column only has to be the string the model demands.
+                SecretCiphertext = "seeded-not-a-ciphertext",
+                BranchFilter = "main",
+                RequiredTags = string.Empty,
+                CreatedByUserId = await OwnerUserIdInSystemScopeAsync(context, project.OrganizationId),
+            };
+            context.Set<Webhook>().Add(webhook);
+
+            var delivery = new WebhookDelivery
+            {
+                OrganizationId = project.OrganizationId,
+                WebhookId = webhook.Id,
+                // The key's shape belongs to the delivery path; here it only has to be unique per webhook.
+                DedupeKey = $"id:{Guid.NewGuid():N}",
+                Outcome = WebhookOutcomes.Queued,
+                RunId = runId,
+                ReceivedAt = DateTimeOffset.UtcNow,
+            };
+            context.Set<WebhookDelivery>().Add(delivery);
+            await context.SaveChangesAsync();
+            return delivery.Id;
+        });
+
+    private static async Task<WebhookDelivery?> ReadDeliveryAsync(RunTestHost host, Guid deliveryId) =>
+        (await host.InSystemScopeAsync(context =>
+            context.SystemQueryAsync<WebhookDelivery>(delivery => delivery.Id == deliveryId))).SingleOrDefault();
+
+    /// <summary>
+    /// One schedule of the project plus a due-time row naming <paramref name="runId"/> (F-024). The schedule is
+    /// disabled with its watermark at now, so the schedule sweeper has no due time to record while this fact runs;
+    /// <see cref="ScheduleOccurrence.RunId"/> has no foreign key for the same reason the delivery's has none.
+    /// </summary>
+    private static Task<Guid> SeedScheduleOccurrenceAsync(RunTestHost host, Guid projectId, Guid runId) =>
+        host.InSystemScopeAsync(async context =>
+        {
+            var project = (await context.SystemQueryAsync<Project>(candidate => candidate.Id == projectId)).Single();
+            var schedule = new ProjectSchedule
+            {
+                OrganizationId = project.OrganizationId,
+                ProjectId = projectId,
+                Cron = "0 3 * * *",
+                TimeZone = "UTC",
+                Enabled = false,
+                LastEvaluatedAt = DateTimeOffset.UtcNow,
+                CreatedByUserId = await OwnerUserIdInSystemScopeAsync(context, project.OrganizationId),
+            };
+            context.Set<ProjectSchedule>().Add(schedule);
+
+            var occurrence = new ScheduleOccurrence
+            {
+                OrganizationId = project.OrganizationId,
+                ScheduleId = schedule.Id,
+                DueAt = DateTimeOffset.UtcNow.AddHours(-1),
+                Outcome = ScheduleOutcomes.Queued,
+                RunId = runId,
+                RunNumber = 1,
+            };
+            context.ScheduleOccurrences.Add(occurrence);
+            await context.SaveChangesAsync();
+            return occurrence.Id;
+        });
+
+    private static async Task<ScheduleOccurrence?> ReadOccurrenceAsync(RunTestHost host, Guid occurrenceId) =>
+        (await host.InSystemScopeAsync(context =>
+            context.SystemQueryAsync<ScheduleOccurrence>(occurrence => occurrence.Id == occurrenceId))).SingleOrDefault();
+
+    /// <summary>The organization's owner, read inside an already-active system scope (a seed has no request).</summary>
+    private static async Task<string> OwnerUserIdInSystemScopeAsync(ZenkinsDbContext context, Guid organizationId) =>
+        (await context.SystemQueryAsync<OrganizationMember>(
+            member => member.OrganizationId == organizationId && member.Role == OrganizationRole.Owner))
+        .First()
+        .UserId;
 
     private static Task<HttpResponseMessage> PostFormAsync(
         RunTestHost host,

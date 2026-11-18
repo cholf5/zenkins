@@ -140,7 +140,7 @@ downstream run's `TriggeredByRunId` - keep their row but stop naming the deleted
 | `Retention_with_both_rules_unset_keeps_every_build` | both rules unset is a no-op: 5 old terminal builds, 0 deleted, and the evaluation names 0 candidates | the unset short-circuit disabled: `Expected 0 / Actual 4` candidates |
 | `A_pinned_build_is_exempt_from_both_rules_and_pinning_is_a_member_action` | the pin POST (member + antiforgery) pins the oldest build under keep=1 **and** days=0; the sweep keeps it and deletes the middle one; unpinning alone deletes nothing, the next sweep does | the `run.Pinned` exemption removed: `Expected 1 deleted / Actual 2` |
 | `A_queued_or_running_build_is_never_deleted` | keep=0/days=0 deletes the two old terminal builds and leaves the queued, the running and the newest | the `IsTerminal` filter dropped: `Expected 2 / Actual 4` deleted |
-| `The_newest_build_of_a_project_survives_the_day_rule` | TC-003: one run from ten days ago with days=1 is kept, `NewestPerBranch == 1`, 0 candidates | the newest-of-branch protection removed: `Expected 1 / Actual 0` |
+| `The_newest_build_of_a_project_survives_the_day_rule` | TC-003: one run from ten days ago (the age is read back and asserted, not assumed) with days=1 is kept, `NewestPerBranch == 1`, 0 candidates | the newest-of-branch protection removed: `Expected 1 / Actual 0` |
 | `A_deleted_build_takes_its_rows_its_bytes_and_its_links` | the deleted run's row, step, log, artifact row and store directory are gone; the kept build's are not | the store-directory delete removed: "the artifact directory of the deleted run survived" |
 | `A_second_sweep_deletes_nothing_and_an_orphaned_directory_is_retried` | idempotent second sweep; and rows-without-bytes (the crash between the halves) is closed by F-016's sweeper | the orphan retry disabled (`rows.Count >= 0`): `Assert.True` fails, the directory stays |
 | `A_swept_build_leaves_no_ghost_on_any_surface` | AC-5: the runs list and overview do not name it, `/runs/{guid}` and `/projects/{id}/runs/{number}` answer 404, the kept run answers 200 | the run row not removed: the permalink stops being a 404 |
@@ -149,9 +149,17 @@ downstream run's `TriggeredByRunId` - keep their row but stop naming the deleted
 | `An_old_run_tree_is_removed_and_a_young_one_is_kept` / `A_run_this_worker_is_executing_is_never_removed_even_when_its_tree_looks_old` / `Only_run_trees_are_swept` / `A_zero_window_turns_the_sweep_off` | the worker half: old trees go, young and live ones stay, `probes/`/`validations/`/stray directories are never touched, and 0 turns it off | window ignored -> young tree removed; active-set guard removed -> live tree removed; the GUID check removed -> `probes/` removed; `Enabled => true` -> `Assert.False` fails |
 | `Zero_disables_the_work_directory_sweep_and_garbage_is_a_configuration_error` | `ZENKINS_WORK_RETENTION_HOURS=0` is legal, `-1`/`8761`/`seven` are configuration errors that name the variable | the bounds check removed: `Assert.NotNull` fails (no error) |
 | `Retention_and_pin_endpoints_cannot_reach_another_tenants_rows` | Q-006: the policy save and both pin routes answer a bare 404 for another organization's project/run, leave the rows untouched, and work on the caller's own rows (positive control) | the pin lookup without the tenant filter: `Expected NotFound / Actual InternalServerError` (the data layer's write guard is the second line) |
+| `A_build_inside_the_day_window_is_kept_by_the_day_rule` | the day rule in the keeping direction: a ten-day-old build inside a 30-day window survives, and it is deliberately **not** the branch's newest, so the newest-build exemption cannot be the reason | the day comparison replaced by `false`: the candidate list grows to 1 and the sweep deletes it |
+| `A_build_older_than_the_day_window_is_deleted` | the day rule in the deleting direction: the same ten-day-old seed under days=1 is a candidate named "older than 1 day(s)", is deleted, and the newest build stays | the day comparison replaced by `true`: `Expected 1 / Actual 0` deleted |
+| `A_run_that_still_owes_a_downstream_trigger_is_spared_until_the_obligation_settles` | F-026's exactly-once against trimming: a run with a real pending `OutboxMessages` row is not a candidate and is not deleted; settling the row lets the same policy take the run, and the settled row goes with it | the `owed.Contains(run.Id)` guard removed: `Expected 0 / Actual 1` candidates on the first sweep |
+| `A_deleted_build_clears_the_rows_that_name_it_instead_of_taking_them` | a `WebhookDelivery` and a `ScheduleOccurrence` naming the deleted build both survive with `RunId == null` (the premise - both name the run before the sweep - is asserted first) | the delivery's clear replaced by a delete: `Assert.NotNull(keptDelivery)` fails; the occurrence's, the same at its own assertion |
+| `Saving_a_policy_as_a_non_member_is_forbidden_and_leaves_the_row_alone` | the save answers `Forbidden` for a caller who is not a member of the active organization and both rules stay unset; the owner's identical call is stored (positive control) | the membership guard short-circuited (`false && ...`): `Expected Forbidden / Actual Success` |
+| `Pinning_a_run_as_a_non_member_is_forbidden_and_leaves_the_row_alone` | the pin toggle answers `Forbidden` for a non-member and `Pinned` stays false; the owner's identical call pins | the same guard mutation: `Expected Forbidden / Actual Success` |
 
 Q-006's inventory carries the three new rows (`POST /projects/{id}/retention`, `POST /runs/{id}/pin`,
-`POST /runs/{id}/unpin`), all naming `Retention_and_pin_endpoints_cannot_reach_another_tenants_rows`. No new
+`POST /runs/{id}/unpin`), all naming `Retention_and_pin_endpoints_cannot_reach_another_tenants_rows` for the
+foreign-id 404; the 403 half of those rows is pinned at the service by the two non-member facts (see the review
+patch below), because the HTTP surface cannot reach it. No new
 tenant-owned entity, so `TenantIsolationProbes.CoveredEntityTypes` is unchanged and the reflection guard stays green.
 
 **Decisions worth knowing:**
@@ -196,3 +204,41 @@ this card works at all.
   itself a fact.
 - **Counts.** fast 1577 -> 1592 measured on the merged tree, Postgres stays 9, the slow categories 24,
   everything 1625. The single batch run at the end of the series verifies the full suite and Postgres.
+
+## Review patch (2026-11-18) - three claims the facts did not measure
+
+A re-check of the merged card found three of its statements green for the wrong reason or unbacked. This patch
+adds the missing facts and touches **no product code**: `RetentionService` and `ZenkinsDbContext` are unchanged.
+
+- **The date rule had no coverage, and one fact asserted something untrue.** `SeedRunAsync(daysOld: 10)` never
+  made a run ten days old: `ZenkinsDbContext.StampTimestamps` overwrites `CreatedAt` on every added row, so the
+  seed set the value and the insert replaced it with "now". `The_newest_build_of_a_project_survives_the_day_rule`
+  therefore passed for the wrong reason (the row was brand new, inside every window) and stayed green when only
+  the newest-build guard was removed. The seed now writes the two instants back with `ExecuteUpdateAsync` after
+  the insert, and the date facts read `CreatedAt` back and assert the age, so the wrong reason cannot return
+  unnoticed. Two new facts make the day comparison load-bearing in both directions:
+  `A_build_inside_the_day_window_is_kept_by_the_day_rule` and `A_build_older_than_the_day_window_is_deleted`.
+  Breaking the comparison to `false` reddens the first, to `true` the second, and removing the seed's backdate
+  reddens all three on the premise assertion (`the seeded build is not ten days old: CreatedAt=...`).
+- **"A run whose downstream obligation is still pending is spared" had no fact.** Deleting
+  `if (owed.Contains(run.Id)) continue;` left the whole class green, because nothing ever wrote an
+  `OutboxMessages` row. `A_run_that_still_owes_a_downstream_trigger_is_spared_until_the_obligation_settles`
+  seeds a real pending obligation (due in an hour, so the background dispatcher keeps its hands off while the
+  fact runs), asserts the run is neither a candidate nor deleted, settles the row, then asserts the next sweep
+  takes the run and the settled row cascades with it.
+- **"Clears the reference, does not delete the row" had no fact either**: turning either
+  `ExecuteUpdate(RunId = null)` into a delete stayed green.
+  `A_deleted_build_clears_the_rows_that_name_it_instead_of_taking_them` seeds a `WebhookDelivery` and a
+  `ScheduleOccurrence` that name the run, asserts that they do, sweeps, and asserts both rows are still there
+  with `RunId == null`.
+- **Q-006's "a non-member gets 403" claimed more than the named probe measured.** The HTTP probe pins the
+  foreign-id 404 only. The 403 is real but not reachable over HTTP - the active organization is chosen from the
+  caller's own memberships - so it is now pinned where it lives, at the service:
+  `Saving_a_policy_as_a_non_member_is_forbidden_and_leaves_the_row_alone` and
+  `Pinning_a_run_as_a_non_member_is_forbidden_and_leaves_the_row_alone`, each with the owner's identical call as
+  the positive control. The three inventory rows now say exactly that instead of "a non-member gets 403".
+
+Verification for this patch: `dotnet build -c Release` 0/0, and the targeted filters
+`~Retention|~TenantIsolation|~ModelSnapshot` pass (158 facts). Six facts are new, so the counts in the close-out
+above move by six; they are not re-measured here, because this patch deliberately runs neither the full suite
+nor Postgres.
