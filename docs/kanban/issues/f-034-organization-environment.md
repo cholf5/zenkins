@@ -4,7 +4,7 @@ title: Organization environment variables — one shared env layer for every pro
 type: feature
 priority: P2
 size: S
-status: review
+status: done
 created: 2026-11-16
 updated: 2026-11-17
 blocked: none
@@ -328,3 +328,52 @@ Five findings, all applied; nothing else in the card's substance changed.
   Making the map itself `OrdinalIgnoreCase` would collapse two differently-cased Lua keys into one and
   change merge semantics for every layer, which is a larger question than this card; recorded here
   rather than fixed.
+
+## Close-out verification (2026-11-17)
+
+Two review rounds. The card's own layering change turned out to be a **reorder of the base**, not an
+insertion: the shipped order was `inherited < pipeline < step < (parameters ∪ ZENKINS_*)`, and the
+acceptance criteria ask for `ZENKINS_* < organization < parameters < pipeline < step`. The review found
+that and said so before any implementation was read, which is why the work was rebuilt rather than
+patched.
+
+- **The metadata guarantee moved from ordering to refusal.** `ZENKINS_*` was protected only by being
+  overwritten last; under the new order a parameter or a step `env` naming it would have won. It is now
+  refused at save for organization variables and for parameters, and dropped with a logged diagnostic for
+  pipeline and step `env` — the two existing facts (`A_parameter_or_organization_variable_cannot_overwrite_the_build_metadata`
+  and `StepConditionTests`' `RunEnvironmentWins`) still assert the same thing, but they are now true by
+  filtering rather than by order.
+- **The one major defect was Windows-only, and the Windows host is what found it.** The reserved-name
+  predicate existed twice: the server's compared `OrdinalIgnoreCase`, the worker's `Ordinal`. A Lua
+  `env = { zenkins_run_id = "x" }` therefore survived `Compose` and, on Windows, overwrote the real
+  `ZENKINS_RUN_ID` because `ProcessStartInfo.Environment` is case-insensitive there. The rule now lives
+  once in `Shared/Pipelines/ServerEnvironmentNames.cs`, the worker's copy is a one-line delegation with
+  its constant deleted, and a `Compose` fact with a lower-case reserved name pins it — that fact failed
+  1/1 before the predicate changed (expected 2 dropped, actual 0) and passed after.
+- **Nothing was taken on trust.** The reviewer re-applied thirteen mutations of its own (13 red, 0
+  vacuous) and closed the major defect in the *revert* direction — restoring the worker's `Ordinal`
+  comparison reddens the new fact. It also split the headless question into three mutations to show
+  which half of the snapshot fact actually carries it: M11/M11b die on the foreign-tenant half, and only
+  M11c (silently returning an empty layer when there is no request tenant) reaches the headless
+  assertion. Both properties hold; that one fact has a single failure point is recorded as a
+  nice-to-have, not a gap.
+- **The secret boundary is now proven rather than argued.** One name is simultaneously organization
+  configuration and a secret with a different value; the configuration step prints it, the secret step
+  prints `***`, and the secret's plaintext appears in no log line, page or log download — which is what
+  distinguishes "two stores" from "one store that happens to look like two".
+- **The full suite could not run here.** 1368 tests in one process, each building a Blazor host, turn
+  `WebApplicationFactory`'s five-minute host-build timeout into spurious failures on this 8 GB machine
+  (post-reboot the same class that had timed out passes in 6 s). It ran on a 20-core/64 GB Windows host:
+  **1368 total, 1362 passed, 3 failed, 3 skipped, 9m47s**, and the three failures are exactly main's own
+  Windows baseline (`GitLfsTests` ×2 against this machine's git-lfs, and `ProcessRunnerTests`' process-
+  handle race) — set difference against main is empty. The three skips are the POSIX-only facts.
+- **The Windows run also caught a defect in F-022**, not in this card: that card's inline-definition fact
+  hand-wrote `run = { "echo", "hi" }`, and `echo` is not an executable on Windows, so it ended
+  `step-failed`. Fixed separately in `b31f84e` by using the file's existing `PipelineTestData.Step`
+  helper; it is green on both platforms now.
+- **`Category=Postgres` ran here on the final tree: 6/6, 0 skipped, 7.9 s** against a disposable PG 16
+  instance.
+- Recorded rather than fixed, in §11: the count cap is a `COUNT(*)` pre-check; the value cap counts
+  UTF-16 code units against a `varchar(4096)` column; and the composed map is `Ordinal`, so a
+  case-collision coming from the worker host's own environment on Windows would be decided by
+  enumeration order.

@@ -18,7 +18,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-031](issues/f-031-post-actions.md) | Post actions: always / on-success / on-failure steps after the last step | P2 | M | | F-030, F-009 |
 | [F-032](issues/f-032-step-timeout-retry.md) | Step-level timeout and retry: a hung or flaky step is the pipeline's problem | P2 | M | | F-009 |
 | [F-033](issues/f-033-step-worker-requirements.md) | Per-step worker requirements and label expressions (the runs_on the PRD promises) | P2 | M | | Q-010, Q-005 |
-| [F-034](issues/f-034-organization-environment.md) | Organization environment variables: one shared env layer for every project | P2 | S | | F-021 |
 | [F-038](issues/f-038-build-retention.md) | Build retention: keep N builds and/or D days, delete the rest for real | P2 | M | | F-016, F-036 |
 | [F-039](issues/f-039-completion-notifications.md) | Completion notifications: signed outbound webhooks on failure, success and recovery | P2 | M | | F-026, F-036, F-037 |
 | [F-040](issues/f-040-credential-types.md) | More credential types: username/password pairs and secret files, bindable per step | P2 | M | | F-012, D-006 |
@@ -105,3 +104,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-006](issues/b-006-choice-duplication-and-freestyle-pipeline-path.md) | Two small inconsistencies the F-020/F-021 review found — duplicate choice entries and a Freestyle row's inherited pipeline path | P3 | 2026-11-17 |
 | [F-022](issues/f-022-inline-pipeline-script.md) | Inline pipeline script: a Pipeline project whose pipeline.lua lives on the Server | P1 | 2026-11-17 |
 | [F-023](issues/f-023-multibranch-jobs.md) | Multibranch jobs: one branch job per branch, with its own history and last status | P1 | 2026-11-17 |
+| [F-034](issues/f-034-organization-environment.md) | Organization environment variables: one shared env layer for every project | P2 | 2026-11-17 |
