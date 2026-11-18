@@ -370,11 +370,13 @@ public sealed class PipelineDefinitionRunner
 
         void AddFrom(string? value)
         {
-            foreach (var name in StepReference.SecretNamesIn(value))
+            // F-040: the exact reference, not just the name - `NAME.password` and `file:NAME` must reach the
+            // record, or the Secrets page would claim a pipeline that reads a pair's password does not use it.
+            foreach (var recorded in StepReference.ReferencesIn(value))
             {
-                if (PipelineSpecSchema.IsSecretReferenceName(name))
+                if (SecretReference.TryParseRecorded(recorded, out var reference))
                 {
-                    names.Add(name);
+                    names.Add(reference.Recorded);
                 }
             }
         }

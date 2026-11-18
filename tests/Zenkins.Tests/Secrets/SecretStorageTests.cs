@@ -55,10 +55,13 @@ public sealed class SecretStorageTests
         var properties = typeof(Secret).GetProperties().Select(property => property.Name).ToArray();
 
         Assert.DoesNotContain(properties, forbidden.Contains);
+
+        // Card F-040 added `Kind`: what the secret *is*, not what its value is - a label the reference grammar
+        // reads, which is why the forbidden-name guard above still has nothing to do with it.
         Assert.Equal(
             new[]
             {
-                "Ciphertext", "CreatedAt", "CreatedByUserId", "Id", "Name", "OrganizationId",
+                "Ciphertext", "CreatedAt", "CreatedByUserId", "Id", "Kind", "Name", "OrganizationId",
                 "RotatedAt", "RotatedByUserId", "UpdatedAt",
             },
             properties.OrderBy(name => name, StringComparer.Ordinal).ToArray());

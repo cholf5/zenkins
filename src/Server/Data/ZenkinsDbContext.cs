@@ -17,6 +17,7 @@ using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Probes;
 using Zenkins.Shared.Projects;
+using Zenkins.Shared.Secrets;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Data;
@@ -1159,6 +1160,13 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         {
             entity.HasKey(secret => secret.Id);
             entity.Property(secret => secret.Name).IsRequired().HasMaxLength(SecretValidation.MaxNameLength);
+
+            // F-040: the kind. The database default is `text` on purpose - it is the backfill, so every row
+            // written before this column existed reads as today's single-string behaviour without a data
+            // update, and a row inserted by an older build still lands as a text secret instead of nothing.
+            entity.Property(secret => secret.Kind).IsRequired()
+                .HasMaxLength(SecretKinds.MaxKindLength)
+                .HasDefaultValue(SecretKinds.Default);
 
             // No max length on purpose: the ciphertext's length follows the plaintext (Data
             // Protection output), and the form limit - not the column - bounds the value.

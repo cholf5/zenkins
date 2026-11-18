@@ -116,6 +116,9 @@ public sealed class ServerSecretSource(
         var response = await api.FetchRunSecretAsync(workerToken, runId, name, cancellationToken);
         return response is null
             ? RunSecretResult.NotFound()
-            : RunSecretResult.Found(response.Value);
+            : RunSecretResult.Found(
+                // An older server does not send the kind; text is what that server could have stored.
+                response.Kind ?? Zenkins.Shared.Secrets.SecretKinds.Default,
+                response.Value);
     }
 }

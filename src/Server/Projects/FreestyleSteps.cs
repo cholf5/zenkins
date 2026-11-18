@@ -142,14 +142,17 @@ public static class FreestyleSteps
                 RunsOn: string.IsNullOrWhiteSpace(runsOn) ? null : runsOn,
                 Requirement: requirement?.StorageForm);
 
-            // The Server-side capture (D-006's semantics): names only, never values - scanned from the
-            // same fields the Worker will substitute (the script text and the step's env values).
-            secretNames.AddRange(StepReference.SecretNamesIn(draft.Script));
+            // The Server-side capture (D-006's semantics, extended by F-040): the exact reference form and
+            // never a value - scanned from the same fields the Worker will substitute (the script text and the
+            // step's env values). The form matters: a step that reads ${secretFile:KEY} or a pair's .password
+            // is a use of that secret, and recording only the bare name would make the Secrets page's "which
+            // pipelines use this" either lie or lose the half that was used.
+            secretNames.AddRange(StepReference.ReferencesIn(draft.Script));
             if (env is not null)
             {
                 foreach (var (_, value) in env)
                 {
-                    secretNames.AddRange(StepReference.SecretNamesIn(value));
+                    secretNames.AddRange(StepReference.ReferencesIn(value));
                 }
             }
         }

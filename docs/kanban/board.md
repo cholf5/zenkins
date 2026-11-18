@@ -17,7 +17,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-031](issues/f-031-post-actions.md) | Post actions: always / on-success / on-failure steps after the last step | P2 | M | | F-030, F-009 |
 | [F-038](issues/f-038-build-retention.md) | Build retention: keep N builds and/or D days, delete the rest for real | P2 | M | | F-016, F-036 |
 | [F-039](issues/f-039-completion-notifications.md) | Completion notifications: signed outbound webhooks on failure, success and recovery | P2 | M | | F-026, F-036, F-037 |
-| [F-040](issues/f-040-credential-types.md) | More credential types: username/password pairs and secret files, bindable per step | P2 | M | | F-012, D-006 |
 | [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | M | | F-021 |
 | [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
@@ -106,3 +105,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-032](issues/f-032-step-timeout-retry.md) | Step-level timeout and retry: a hung or flaky step is the pipeline's problem | P2 | 2026-11-18 |
 | [F-025](issues/f-025-scm-polling-trigger.md) | SCM polling: queue a run when the remote head moves, for hosts without webhooks | P2 | 2026-11-18 |
 | [F-033](issues/f-033-step-worker-requirements.md) | Per-step worker requirements and label expressions (the runs_on the PRD promises) | P2 | 2026-11-18 |
+| [F-040](issues/f-040-credential-types.md) | More credential types: username/password pairs and secret files, bindable per step | P2 | 2026-11-18 |

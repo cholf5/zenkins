@@ -373,6 +373,13 @@ public static class PipelineSpecSchema
     /// metadata must never fail a whole run - the definition already produced a valid step list, and the
     /// reference list is advisory metadata about names, not a value channel.
     /// <para>
+    /// <b>A recorded entry is a reference, not a bare name (card F-040).</b> <c>NAME</c>, <c>NAME.username</c>,
+    /// <c>NAME.password</c> and <c>file:NAME</c> are the four forms, and the exact form is what gets stored - so
+    /// the Secrets page can say which half a pipeline used, and a file secret is not recorded as if it were a
+    /// plain value. The grammar lives in <see cref="SecretReference.TryParseRecorded"/>; this method only
+    /// normalises the list.
+    /// </para>
+    /// <para>
     /// <see langword="null"/> stays <see langword="null"/>, because that is the answer "this spec predates
     /// capture" - it must never be rewritten into "captured, nothing" (TC-003).
     /// </para>
@@ -385,16 +392,16 @@ public static class PipelineSpecSchema
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var names = new List<string>(secretReferences.Length);
-        foreach (var name in secretReferences)
+        var references = new List<string>(secretReferences.Length);
+        foreach (var entry in secretReferences)
         {
-            if (IsSecretReferenceName(name) && seen.Add(name))
+            if (SecretReference.TryParseRecorded(entry, out var reference) && seen.Add(reference.Recorded))
             {
-                names.Add(name);
+                references.Add(reference.Recorded);
             }
         }
 
-        return [.. names];
+        return [.. references];
     }
 }
 

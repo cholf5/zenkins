@@ -77,7 +77,7 @@ public static class SecretEndpoints
             // keep a copy of it.
             RunSecretFetchStatus.Success => WithNoStore(
                 httpContext,
-                Results.Json(new RunSecretResponse(result.Name!, result.Value!))),
+                Results.Json(new RunSecretResponse(result.Name!, result.Kind!, result.Value!))),
 
             // A bad token is authentication, answered before any run or name lookup: the 401 reveals only
             // that the credential was not accepted, never whether a run or a name exists.
@@ -209,14 +209,33 @@ public static class SecretEndpoints
         return result;
     }
 
-    /// <summary>Create form: the name identity plus the value. No id: the server assigns it.</summary>
+    /// <summary>
+    /// Create form: the name identity, the kind, and that kind's fields. No id: the server assigns it.
+    /// <para>
+    /// All three field shapes are on one form (card F-040) because the page renders one create card; the
+    /// service reads only the fields the chosen kind requires, so a browser that posts all of them cannot
+    /// smuggle a half into a text secret. A body with no <c>Kind</c> at all is a text secret - the shape
+    /// every caller written before the kinds existed sends.
+    /// </para>
+    /// </summary>
     public sealed class CreateSecretForm
     {
         public string? Name { get; set; }
 
+        public string? Kind { get; set; }
+
         public string? Value { get; set; }
 
-        public SecretInput ToInput() => new(Name, Value);
+        public string? Username { get; set; }
+
+        public string? Password { get; set; }
+
+        public SecretInput ToInput() => new(Name, Value)
+        {
+            Kind = Kind,
+            Username = Username,
+            Password = Password,
+        };
     }
 
     /// <summary>
@@ -228,18 +247,35 @@ public static class SecretEndpoints
         public string? Name { get; set; }
     }
 
-    /// <summary>The worker fetch's answer: the name it asked for and the decrypted value.</summary>
-    public sealed record RunSecretResponse(string Name, string Value);
+    /// <summary>The worker fetch's answer: the name it asked for, the payload's kind, and the decrypted
+    /// payload (card F-015, extended by F-040). The kind travels because the shape of <c>Value</c> depends on
+    /// it: a pair is the length-prefixed pair document and a file is its bytes, so a worker that guessed would
+    /// read a password as the whole document.</summary>
+    public sealed record RunSecretResponse(string Name, string Kind, string Value);
 
     /// <summary>
     /// Rotate form: the new value only. There is deliberately no <c>Name</c> field - a rotation cannot
     /// rename (that is delete + create), and the route id is the target.
+    /// <para>
+    /// <b>No <c>Kind</c> field either (card F-040).</b> The stored kind decides what a rotation accepts, so a
+    /// posted kind is ignored rather than honoured: switching a text secret to a pair in place would change
+    /// what every existing reference to it means. The pair's two halves have their own fields because the row
+    /// the page renders knows which kind it is rotating.
+    /// </para>
     /// </summary>
     public sealed class RotateSecretForm
     {
         public string? Value { get; set; }
 
-        public SecretInput ToInput() => new(Name: null, Value);
+        public string? Username { get; set; }
+
+        public string? Password { get; set; }
+
+        public SecretInput ToInput() => new(Name: null, Value)
+        {
+            Username = Username,
+            Password = Password,
+        };
     }
 
     /// <summary>

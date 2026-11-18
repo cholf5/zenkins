@@ -620,7 +620,12 @@ public sealed class PipelineRunner
             Dictionary<string, string?> childEnvironment;
             try
             {
-                var resolver = new StepValueResolver(_options.Redactor, _options.Secrets);
+                // F-040: file secrets are materialised inside this run's own temp tree, so the run's existing
+                // temp cleanup removes them and no other run can read them.
+                var resolver = new StepValueResolver(
+                    _options.Redactor,
+                    _options.Secrets,
+                    new RunSecretFiles(_options.Work.SecretsPath));
                 childEnvironment = await ResolveEnvironmentAsync(resolver, environment, cancellationToken);
                 argv = step.IsScript
                     ? ScriptCommand(WriteScriptFile(i, await resolver.ResolveAsync(step.Script!, environment, cancellationToken)))

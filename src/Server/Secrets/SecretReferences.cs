@@ -150,7 +150,18 @@ internal static class SecretReferenceIndex
                 continue;
             }
 
-            var referenced = new HashSet<string>(spec.SecretReferences, StringComparer.Ordinal);
+            // F-040: a recorded entry is a reference, not a bare name. `NAME.password` and `file:NAME` count as
+            // uses of NAME - the page answers "which pipelines use this secret", not "which pipelines spell it
+            // exactly like this".
+            var referenced = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in spec.SecretReferences)
+            {
+                if (Zenkins.Shared.Pipelines.SecretReference.TryParseRecorded(entry, out var parsed))
+                {
+                    referenced.Add(parsed.Name);
+                }
+            }
+
             referenced.IntersectWith(wanted);
             foreach (var name in referenced)
             {

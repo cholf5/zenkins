@@ -9,6 +9,7 @@ using Zenkins.Server.Organizations;
 using Zenkins.Server.Secrets;
 using Zenkins.Tests.Auth;
 using Zenkins.Tests.Organizations;
+using Zenkins.Shared.Secrets;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Tests.Secrets;
@@ -163,6 +164,24 @@ public sealed class SecretsTestHost : IDisposable
 
     public async Task<IReadOnlyList<Secret>> ReadSecretsAsync(Guid organizationId) =>
         await Host.InScopeAsync(services => ReadAcrossTenantsAsync(services, organizationId));
+
+    /// <summary>
+    /// Decrypts one secret's stored payload exactly as a reader does (card F-040): the row's kind plus the
+    /// plaintext the ciphertext holds, decoded by <see cref="SecretPayload.Decode"/>. The tests assert on the
+    /// payload because "stored as a pair" is a claim about the shape inside the envelope, not about the column.
+    /// </summary>
+    public async Task<SecretPayload> ReadPayloadAsync(Guid organizationId, string name) =>
+        await Host.InScopeAsync(async services =>
+        {
+            var systemDataScope = services.GetRequiredService<ISystemDataScope>();
+            await using var context = await CreateContextAsync(services);
+            using var scope = systemDataScope.BeginScope();
+            var secret = (await context.SystemQueryAsync<Secret>(
+                    candidate => candidate.OrganizationId == organizationId && candidate.Name == name))
+                .Single();
+            var protector = services.GetRequiredService<SecretProtector>();
+            return SecretPayload.Decode(secret.Kind, protector.Unprotect(secret.Ciphertext));
+        });
 
     /// <summary>
     /// Decrypts one secret through the internal run-execution seam (F-013/F-015) with the given tenant

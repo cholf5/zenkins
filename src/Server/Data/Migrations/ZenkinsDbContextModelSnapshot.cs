@@ -1104,6 +1104,13 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(450)
                         .HasColumnType("character varying(450)");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("text");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(64)

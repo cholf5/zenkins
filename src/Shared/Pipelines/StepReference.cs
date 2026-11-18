@@ -33,6 +33,12 @@ public static class StepReference
     /// <summary>The prefix of an environment reference (<c>${env:NAME}</c>).</summary>
     public const string EnvironmentPrefix = "${env:";
 
+    /// <summary>The prefix of a file secret reference (card F-040): the step receives a path, not material.</summary>
+    public const string SecretFilePrefix = "${secretFile:";
+
+    /// <summary>The separator between a pair secret's name and the half a reference wants.</summary>
+    public const char PartSeparator = '.';
+
     /// <summary>The terminator of either reference.</summary>
     public const char Terminator = '}';
 
@@ -55,9 +61,53 @@ public static class StepReference
     public static bool IsValidName(string? name) => PipelineSpecSchema.IsReferenceNameShape(name);
 
     /// <summary>
+    /// The exact references a value makes, in order of first appearance and in the form the resolution used -
+    /// <c>NAME</c>, <c>NAME.username</c>, <c>NAME.password</c>, or <c>file:NAME</c> for a file secret (card
+    /// F-040: the Secrets page's "which pipelines use this" must not lie about which half was used).
+    /// </summary>
+    public static IReadOnlyList<string> ReferencesIn(string? value)
+    {
+        if (value is null
+            || (!value.Contains(SecretPrefix, StringComparison.Ordinal)
+                && !value.Contains(SecretFilePrefix, StringComparison.Ordinal)))
+        {
+            return [];
+        }
+
+        var references = new List<string>();
+        var position = 0;
+        while (position < value.Length)
+        {
+            var (prefix, nameStart) = Match(value, position);
+            if (prefix is not (SecretPrefix or SecretFilePrefix))
+            {
+                position++;
+                continue;
+            }
+
+            var end = value.IndexOf(Terminator, nameStart);
+            if (end < 0)
+            {
+                break;
+            }
+
+            var inner = value[nameStart..end];
+            if (SecretReference.TryParse(prefix, inner, out var reference))
+            {
+                references.Add(reference.Recorded);
+            }
+
+            position = end + 1;
+        }
+
+        return references;
+    }
+
+    /// <summary>
     /// The secret names a value references, in order of first appearance (card D-006 uses it to record what
     /// a frozen spec can resolve; the resolver uses it to fetch). Shape only: a name no stored secret could
     /// have is filtered where the record is built, not here - the resolver's behaviour is unchanged.
+    /// File references are included: their name is fetched exactly like a text secret's.
     /// </summary>
     public static IReadOnlyList<string> SecretNamesIn(string? value)
     {
@@ -83,10 +133,54 @@ public static class StepReference
                 break;
             }
 
-            var name = value[nameStart..end];
-            if (kind == SecretPrefix && IsValidName(name))
+            var inner = value[nameStart..end];
+            if (kind is SecretPrefix or SecretFilePrefix
+                && SecretReference.TryParse(kind, inner, out var reference)
+                && IsValidName(reference.Name))
             {
-                names.Add(name);
+                names.Add(reference.Name);
+            }
+
+            position = end + 1;
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// The secret names a value makes the resolver fetch, in order and with repeats - a pair referenced as
+    /// <c>.username</c> and <c>.password</c> is one fetch it uses twice, which is why this is the list the
+    /// resolver walks and <see cref="SecretNamesIn"/> is the list the record holds.
+    /// </summary>
+    public static IReadOnlyList<string> NamesFor(string? value)
+    {
+        if (value is null)
+        {
+            return [];
+        }
+
+        var names = new List<string>();
+        var position = 0;
+        while (position < value.Length)
+        {
+            var (prefix, nameStart) = Match(value, position);
+            if (prefix is not (SecretPrefix or SecretFilePrefix))
+            {
+                position++;
+                continue;
+            }
+
+            var end = value.IndexOf(Terminator, nameStart);
+            if (end < 0)
+            {
+                break;
+            }
+
+            if (prefix is SecretPrefix or SecretFilePrefix
+                && SecretReference.TryParse(prefix, value[nameStart..end], out var reference)
+                && IsValidName(reference.Name))
+            {
+                names.Add(reference.Name);
             }
 
             position = end + 1;
@@ -99,6 +193,7 @@ public static class StepReference
     public static bool Contains(string? value) =>
         value is not null
         && (value.Contains(SecretPrefix, StringComparison.Ordinal)
+            || value.Contains(SecretFilePrefix, StringComparison.Ordinal)
             || value.Contains(EnvironmentPrefix, StringComparison.Ordinal));
 
     /// <summary>
@@ -109,6 +204,15 @@ public static class StepReference
     /// </summary>
     public static (string? Prefix, int NameStart) Match(string value, int position)
     {
+        // The file prefix is tested first for readability, not for correctness: "${secretFile:" and
+        // "${secret:" already differ inside the shorter one (its ninth character is ':' where the file form has
+        // 'F'), so a position can never match both and the order is unobservable. The order would only start to
+        // matter if one prefix became a prefix of the other; SecretReferenceTests pins that they do not.
+        if (string.CompareOrdinal(value, position, SecretFilePrefix, 0, SecretFilePrefix.Length) == 0)
+        {
+            return (SecretFilePrefix, position + SecretFilePrefix.Length);
+        }
+
         if (string.CompareOrdinal(value, position, SecretPrefix, 0, SecretPrefix.Length) == 0)
         {
             return (SecretPrefix, position + SecretPrefix.Length);

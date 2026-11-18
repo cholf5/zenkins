@@ -312,23 +312,51 @@ internal sealed class StepsRun : IDisposable
 
     /// <summary>
     /// Creates an organization secret through the real Owner form (card F-012's endpoint), so the fetch the
-    /// executor performs goes through the real decryption path.
+    /// executor performs goes through the real decryption path. Card F-040 adds the kind and the pair's halves:
+    /// the kind is what the worker decodes the payload with, so a test that only posted a value would exercise
+    /// nothing but the text path.
     /// </summary>
-    public async Task CreateSecretAsync(string name, string value)
+    public async Task CreateSecretAsync(
+        string name,
+        string value,
+        string kind = Zenkins.Shared.Secrets.SecretKinds.Text,
+        string? username = null,
+        string? password = null)
     {
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Name"] = name,
+            ["Kind"] = kind,
+            ["Value"] = value,
+        };
+
+        if (username is not null)
+        {
+            fields["Username"] = username;
+        }
+
+        if (password is not null)
+        {
+            fields["Password"] = password;
+        }
+
         using var response = await OrganizationTestHost.PostFormAsync(
             Owner,
             "/secrets",
             "/secrets/create",
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["Name"] = name,
-                ["Value"] = value,
-            });
+            fields);
         Assert.True(
             (int)response.StatusCode is 302 or 303,
             $"Creating secret '{name}' failed with {(int)response.StatusCode}.");
     }
+
+    /// <summary>
+    /// Runs the run's own temp cleanup through the product's type (card F-040 asserts that a materialised file
+    /// secret is inside the tree the cleanup owns, so the cleanup must be the product's, not a <c>Directory.Delete</c>
+    /// in the test).
+    /// </summary>
+    public void CleanupTemp() =>
+        new WorkDirectoryService(Path.GetDirectoryName(Work.RootPath)!).CleanupTemp(Work);
 
     /// <summary>The run row as the server recorded it.</summary>
     public Task<BuildRun> ReadRunAsync() => Host.ReadRunAsync(RunId);

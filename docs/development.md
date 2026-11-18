@@ -343,10 +343,10 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1462 fast / 1494 all seven.** The fast figure is a run of
-the tree that carries F-033 on the Windows host that now runs the full suite (`--list-tests` reports the
+**The current baseline is counted, and it is 1521 fast / 1553 all seven.** The fast figure is a run of
+the tree that carries F-040 on the Windows host that now runs the full suite (`--list-tests` reports the
 same number, so the two agree); the all-seven figure is that count plus the other harnesses as last
-counted - 12 + 4 + 2 + 2 + 3 + 9 = 32, and 1462 + 32 = 1494. Every per-card note in this file quotes the
+counted - 12 + 4 + 2 + 2 + 3 + 9 = 32, and 1521 + 32 = 1553. Every per-card note in this file quotes the
 counts of *its own* tree and they are history, not a target: F-034's "1341 -> 1366" and this file's own
 earlier "1341 / 1370" re-baseline were both accurate when written and are both behind HEAD now. When a
 card changes the count, re-baseline here in the same breath rather than leaving the next reader to
@@ -450,7 +450,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1462 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1521 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -460,7 +460,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1494 on the tree that carries F-033, by the arithmetic below) but
+filter runs **all seven** (1553 on the tree that carries F-040, by the arithmetic below) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

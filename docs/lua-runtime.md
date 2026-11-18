@@ -495,9 +495,42 @@ Two more limitations of the substitution, recorded so nobody discovers them by s
   run's redaction filter is not yet armed). Nothing leaks — the literal is a reference, not a value
   — but the value is not what a reader might expect. Put the `secret()` reference in the argv entry
   or in the `env` value directly instead of nesting it.
-- **Only whole references are recognised.** A reference is `${secret:NAME}` / `${env:NAME}` with an
-  environment-variable-shaped name; anything malformed (`${secret:}`, `${env:1abc}`) is left verbatim
-  as an ordinary string rather than becoming an empty value.
+- **Only whole references are recognised.** A reference is `${secret:NAME}`, `${secret:NAME.username}`,
+  `${secret:NAME.password}`, `${secretFile:NAME}` or `${env:NAME}` with an environment-variable-shaped
+  name; anything malformed (`${secret:}`, `${env:1abc}`, `${secretFile:a.b}`) is left verbatim as an
+  ordinary string rather than becoming an empty value.
+
+### 6.0.2 The three credential kinds (F-040)
+
+A stored secret has exactly one **kind**, chosen when it is created and never changed afterwards (a
+different kind is a different secret). The kind decides which reference reads it, so a step that asks
+for the wrong shape is refused instead of receiving something half-right:
+
+| Kind | Stored as | Read with | The step receives |
+|---|---|---|---|
+| `text` | one string | `${secret:NAME}` | the value |
+| `usernamePassword` | a username and a password, encrypted together | `${secret:NAME.username}` / `${secret:NAME.password}` | that half, each resolvable on its own (`docker login` wants one in an argument and the other on stdin) |
+| `file` | one file's contents, at most 64 KiB | `${secretFile:NAME}` | a **path** inside this run's own directory |
+
+The rules behind the table:
+
+- **`secret("NAME")` is the text form.** The SDK call yields `${secret:NAME}`; the `.username` /
+  `.password` and `${secretFile:…}` forms are written literally in an argv entry or an `env` value.
+  There is deliberately no `withCredentials`-style block: the reference already names the variable
+  inside the script, and a second binding vocabulary for the same thing would only be something else
+  to keep in agreement.
+- **A wrong part is a failed step, not an empty value.** `${secret:registry}` on a pair, or
+  `${secret:text.password}` on a text secret, fails the step with a message naming the reference and
+  what the secret actually is; nothing is substituted and no process starts.
+- **A file secret becomes a path, and the material lives in the run's tree.** The worker writes
+  `work/{run-id}/temp/secrets/{NAME}` with owner-only permissions (`0600`, directory `0700`) on Unix,
+  and the run's existing temp cleanup removes it — never an OS-wide temp directory, which would leak
+  between runs on a busy worker. The path is what the command reads (`--key-file ${secretFile:KEY}`),
+  so it is substituted like any other value.
+- **Redaction covers the material, not the location.** A pair's password and a file's contents are
+  registered with the run's redaction filter (§7) the instant they are fetched; a pair's *username*
+  and a file's *path* are not registered, because they are not secret and printing them is how a
+  script explains itself.
 
 ### 6.1 Execution form: declarative by default
 

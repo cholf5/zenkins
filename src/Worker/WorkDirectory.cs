@@ -176,6 +176,14 @@ public sealed record RunWorkDirectory(
     /// frozen spec, and preparation is idempotent like every directory here.
     /// </summary>
     public string WorkspacePath => Path.Combine(RootPath, "workspace");
+
+    /// <summary>
+    /// Where this run's <b>file</b> secrets are materialised (card F-040): <c>temp/secrets</c>. Under
+    /// <c>temp/</c> on purpose - that is the tree <see cref="WorkDirectoryService.CleanupTemp"/> already
+    /// deletes, so a file secret cannot outlive the run that was given it, and it is this run's own tree so no
+    /// other run on the worker can read it.
+    /// </summary>
+    public string SecretsPath => Path.Combine(TempPath, "secrets");
 }
 
 /// <summary>One definition-only validation's scratch tree (card F-022): no repository, no artifacts.</summary>

@@ -24,14 +24,23 @@ public enum RunSecretFetchStatus
     NotFound = 2,
 }
 
-/// <summary>The answer of a worker's fetch: the name it asked for and the value, on success only.</summary>
+/// <summary>
+/// The answer of a worker's fetch: the name it asked for, the payload's <b>kind</b> and the decrypted payload,
+/// on success only (card F-040).
+/// <para>
+/// The kind is part of the answer because the payload's shape depends on it - a pair is the length-prefixed
+/// pair document and a file is its bytes. The worker already has <c>SecretPayload.Decode</c> for that; a server
+/// that withheld the kind would force the worker to guess, and a guess reads a password as a whole document.
+/// </para>
+/// </summary>
 public sealed record RunSecretFetchResult(
     RunSecretFetchStatus Status,
     string? Name = null,
+    string? Kind = null,
     string? Value = null)
 {
-    public static RunSecretFetchResult Success(string name, string value) =>
-        new(RunSecretFetchStatus.Success, name, value);
+    public static RunSecretFetchResult Success(string name, string kind, string value) =>
+        new(RunSecretFetchStatus.Success, name, kind, value);
 
     public static RunSecretFetchResult InvalidToken() => new(RunSecretFetchStatus.InvalidToken);
 
@@ -113,12 +122,14 @@ public sealed class RunSecretService(
             return RunSecretFetchResult.NotFound();
         }
 
-        var ciphertext = await context.Secrets
+        // F-040: the kind travels with the ciphertext, because it decides the payload's shape. A row written
+        // before the kind column exists reads 'text' from the column's default, which is what it always was.
+        var stored = await context.Secrets
             .AsNoTracking()
             .Where(secret => secret.Name == trimmedName)
-            .Select(secret => secret.Ciphertext)
+            .Select(secret => new { secret.Kind, secret.Ciphertext })
             .SingleOrDefaultAsync(cancellationToken);
-        if (ciphertext is null)
+        if (stored is null)
         {
             LogMiss(runId, worker.Id);
             return RunSecretFetchResult.NotFound();
@@ -127,7 +138,7 @@ public sealed class RunSecretService(
         string value;
         try
         {
-            value = protector.Unprotect(ciphertext);
+            value = protector.Unprotect(stored.Ciphertext);
         }
         catch (CryptographicException failure)
         {
@@ -143,14 +154,16 @@ public sealed class RunSecretService(
             throw;
         }
 
-        // The name is logged; the value never is.
+        // The name and the kind are logged; the payload never is.
         logger.LogInformation(
-            "Run secret delivered. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Name={Name}",
+            "Run secret delivered. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Name={Name} "
+            + "Kind={Kind}",
             run.OrganizationId,
             runId,
             worker.Id,
-            trimmedName);
-        return RunSecretFetchResult.Success(trimmedName, value);
+            trimmedName,
+            stored.Kind);
+        return RunSecretFetchResult.Success(trimmedName, stored.Kind, value);
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using Zenkins.Shared.Secrets;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Data.Entities;
@@ -36,6 +37,21 @@ public sealed class Secret : ITenantOwned
     /// variable name F-015 exposes, which is why the validator is an env-var-compatible allow-list.
     /// </summary>
     public required string Name { get; set; }
+
+    /// <summary>
+    /// What this secret <em>is</em> (card F-040): one of <see cref="SecretKinds"/>. The kind decides which
+    /// reference syntax may read it and how <see cref="Ciphertext"/>'s plaintext is shaped - it is never
+    /// inferred from the payload, because an empty password or a file whose bytes happen to look like a name
+    /// must not change what a secret is.
+    /// <para>
+    /// <b>It defaults to <c>text</c>, and that is the migration.</b> Every row written before card F-040 held
+    /// one string, so the column's database default is <c>text</c> and an old row reads as today's behaviour
+    /// without a data update. The form never offers a way to change the kind afterwards: a different kind is
+    /// a different secret (delete + create), which keeps a run from silently picking up a differently shaped
+    /// value.
+    /// </para>
+    /// </summary>
+    public string Kind { get; set; } = SecretKinds.Text;
 
     /// <summary>
     /// Data Protection ciphertext (<c>SecretProtector</c>, purpose <c>Zenkins.Secrets.v1</c>).

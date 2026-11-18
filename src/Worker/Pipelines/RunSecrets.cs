@@ -11,11 +11,22 @@ public enum RunSecretLookup
     NotFound = 1,
 }
 
-/// <summary>The answer of one secret fetch: the decrypted value on success, nothing otherwise.</summary>
-public sealed record RunSecretResult(RunSecretLookup Outcome, string? Value = null)
+/// <summary>
+/// The answer of one secret fetch: the decrypted payload and its <b>kind</b> on success, nothing otherwise
+/// (card F-040). The kind is what <see cref="Zenkins.Shared.Secrets.SecretPayload.Decode"/> needs: the payload
+/// of a pair is the length-prefixed pair document and the payload of a file is its bytes.
+/// </summary>
+public sealed record RunSecretResult(RunSecretLookup Outcome, string? Kind = null, string? Value = null)
 {
-    /// <summary>The value of a hit.</summary>
-    public static RunSecretResult Found(string value) => new(RunSecretLookup.Found, value);
+    /// <summary>The payload of a hit, with the kind the server said it has.</summary>
+    public static RunSecretResult Found(string kind, string value) => new(RunSecretLookup.Found, kind, value);
+
+    /// <summary>
+    /// The payload of a hit whose kind was not stated. Only a source written before card F-040 answers this
+    /// way, and <c>text</c> is exactly what it means - the one shape a secret could have then.
+    /// </summary>
+    public static RunSecretResult Found(string value) =>
+        new(RunSecretLookup.Found, Zenkins.Shared.Secrets.SecretKinds.Default, value);
 
     /// <summary>Every miss collapses here.</summary>
     public static RunSecretResult NotFound() => new(RunSecretLookup.NotFound);
@@ -51,7 +62,7 @@ public sealed class RunSecretCache(IRunSecretSource source) : IRunSecretSource
 {
     private readonly IRunSecretSource _source = source;
     private readonly object _gate = new();
-    private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RunSecretResult> _values = new(StringComparer.Ordinal);
 
     /// <summary>How many distinct secrets this run has cached (asserted by the caching test).</summary>
     public int Count
@@ -74,7 +85,7 @@ public sealed class RunSecretCache(IRunSecretSource source) : IRunSecretSource
         {
             if (_values.TryGetValue(name, out var cached))
             {
-                return RunSecretResult.Found(cached);
+                return cached;
             }
         }
 
@@ -83,7 +94,9 @@ public sealed class RunSecretCache(IRunSecretSource source) : IRunSecretSource
         {
             lock (_gate)
             {
-                _values[name] = result.Value;
+                // The kind is cached with the payload: a second reference to the same name must decode it the
+                // same way the first one did (card F-040).
+                _values[name] = result;
             }
         }
 

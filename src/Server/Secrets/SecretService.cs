@@ -1,8 +1,9 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Auth;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Data.Tenancy;
+using Zenkins.Shared.Secrets;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Secrets;
@@ -29,15 +30,17 @@ public enum SecretMutationStatus
 public sealed record SecretFieldError(string Field, string Code);
 
 /// <summary>
-/// A secret as the page displays it: name, timestamps, attribution and - for the names only - which
+/// A secret as the page displays it: name, kind, timestamps, attribution and - for the names only - which
 /// recorded definitions reference it. The record deliberately has no value or ciphertext member, so a
 /// component cannot accidentally render one.
 /// </summary>
+/// <param name="Kind">The secret's kind (card F-040): what the reference syntax must look like.</param>
 /// <param name="CreatedByDisplay">The creator's display name, or the user id when the account is gone.</param>
 /// <param name="RotatedByDisplay">The last rotator's display name, null when no rotation is recorded.</param>
 public sealed record SecretView(
     Guid Id,
     string Name,
+    string Kind,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset? RotatedAt,
@@ -49,8 +52,22 @@ public sealed record SecretView(
     string? RotatedByEmail,
     SecretUsage Usage);
 
-/// <summary>The raw form values, before trimming and validation.</summary>
-public sealed record SecretInput(string? Name, string? Value);
+/// <summary>
+/// The raw form values, before trimming and validation. <see cref="Kind"/> is optional and absent means
+/// <c>text</c>, so every caller written before card F-040 keeps meaning exactly what it used to; a pair's
+/// two halves travel in their own fields so the form can label them.
+/// </summary>
+public sealed record SecretInput(string? Name, string? Value)
+{
+    /// <summary>The kind (card F-040), or <see langword="null"/> for today's text secret.</summary>
+    public string? Kind { get; init; }
+
+    /// <summary>The username half, for <see cref="SecretKinds.UsernamePassword"/>.</summary>
+    public string? Username { get; init; }
+
+    /// <summary>The password half, for <see cref="SecretKinds.UsernamePassword"/>.</summary>
+    public string? Password { get; init; }
+}
 
 /// <summary>
 /// Result of reading the secret list: the rows for an Owner, or the reason there are none. A record
@@ -205,7 +222,7 @@ public sealed class SecretService(
             return SecretMutationResult.Forbidden("Only an organization Owner can manage secrets.");
         }
 
-        var errors = Validate(input, requiresName: true, out var name, out var value);
+        var errors = Validate(input, requiresName: true, out var name, out var kind, out var payload);
         if (errors.Count > 0)
         {
             return SecretMutationResult.Invalid([.. errors]);
@@ -216,7 +233,11 @@ public sealed class SecretService(
             // The tenant comes from the active request; the data layer rejects anything else.
             OrganizationId = activeOrganizationId.Value,
             Name = name,
-            Ciphertext = protector.Protect(value),
+
+            // F-040: the kind is stored beside the ciphertext, and the ciphertext holds the shape that kind
+            // implies (one string, a pair document, or a file's bytes). Only Encode() defines the payload.
+            Kind = kind,
+            Ciphertext = protector.Protect(payload.Encode()),
             CreatedByUserId = actingUserId,
         };
         context.Secrets.Add(secret);
@@ -230,12 +251,14 @@ public sealed class SecretService(
             return DuplicateName();
         }
 
-        // The value and the ciphertext are deliberately absent from this log line.
+        // The value, the kind's halves and the ciphertext are deliberately absent from this log line.
         logger.LogInformation(
-            "Secret created. OrganizationId={OrganizationId} SecretId={SecretId} Name={Name} ByUserId={UserId}",
+            "Secret created. OrganizationId={OrganizationId} SecretId={SecretId} Name={Name} Kind={Kind} "
+            + "ByUserId={UserId}",
             secret.OrganizationId,
             secret.Id,
             secret.Name,
+            secret.Kind,
             actingUserId);
         return SecretMutationResult.Success(secret.Id);
     }
@@ -275,7 +298,10 @@ public sealed class SecretService(
             return SecretMutationResult.NotFound();
         }
 
-        var errors = Validate(input, requiresName: false, out _, out var value);
+        // F-040: a rotation replaces the value of the secret's <b>existing</b> kind. The kind is never taken
+        // from the form - a different kind is a different secret (delete + create), because switching a text
+        // secret to a pair in place would change what every existing reference to it means.
+        var errors = Validate(input, requiresName: false, out _, out _, out var payload, secret.Kind);
         if (errors.Count > 0)
         {
             return SecretMutationResult.Invalid([.. errors]);
@@ -284,7 +310,7 @@ public sealed class SecretService(
         // Rotation replaces the ciphertext: the previous value's blob is gone, so the old ciphertext
         // can never be decrypted again by any path. RotatedAt is the domain event; CreatedAt/UpdatedAt
         // stay the data layer's.
-        secret.Ciphertext = protector.Protect(value);
+        secret.Ciphertext = protector.Protect(payload.Encode());
         secret.RotatedAt = DateTimeOffset.UtcNow;
 
         // D-006: rotation attribution is recorded so the page can say who last rotated it. Still write-only:
@@ -293,10 +319,12 @@ public sealed class SecretService(
         await context.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(
-            "Secret rotated. OrganizationId={OrganizationId} SecretId={SecretId} Name={Name} ByUserId={UserId}",
+            "Secret rotated. OrganizationId={OrganizationId} SecretId={SecretId} Name={Name} Kind={Kind} "
+            + "ByUserId={UserId}",
             activeOrganizationId,
             secret.Id,
             secret.Name,
+            secret.Kind,
             actingUserId);
         return SecretMutationResult.Success(secret.Id);
     }
@@ -370,15 +398,25 @@ public sealed class SecretService(
         return ciphertext is null ? null : protector.Unprotect(ciphertext);
     }
 
+    /// <summary>
+    /// Validates one submission and turns it into the payload the ciphertext will hold (card F-040). The
+    /// kind decides which fields are required: a text or file secret needs one value, a pair needs both
+    /// halves. <paramref name="kindOverride"/> is the stored kind on a rotation - the form cannot change it.
+    /// </summary>
     private static List<SecretFieldError> Validate(
         SecretInput input,
         bool requiresName,
         out string name,
-        out string value)
+        out string kind,
+        out SecretPayload payload,
+        string? kindOverride = null)
     {
         var errors = new List<SecretFieldError>();
 
         name = string.Empty;
+        payload = SecretPayload.ForText(string.Empty);
+        kind = SecretKinds.Default;
+
         if (requiresName)
         {
             var nameError = SecretValidation.ValidateName(input.Name, out name);
@@ -388,10 +426,66 @@ public sealed class SecretService(
             }
         }
 
-        var valueError = SecretValidation.ValidateValue(input.Value, out value);
-        if (valueError is not null)
+        if (kindOverride is null)
         {
-            errors.Add(new SecretFieldError(SecretFields.Value, valueError));
+            // An absent kind is text (every pre-F-040 caller); an unknown one is refused, never guessed.
+            var kindError = SecretValidation.ValidateKind(input.Kind, out kind);
+            if (kindError is not null)
+            {
+                errors.Add(new SecretFieldError(SecretFields.Kind, kindError));
+                kind = SecretKinds.Default;
+            }
+        }
+        else
+        {
+            kind = kindOverride;
+        }
+
+        switch (kind)
+        {
+            case SecretKinds.UsernamePassword:
+            {
+                var usernameError = SecretValidation.ValidatePairHalf(
+                    input.Username, SecretErrorCodes.UsernameRequired, out var username);
+                if (usernameError is not null)
+                {
+                    errors.Add(new SecretFieldError(SecretFields.Username, usernameError));
+                }
+
+                var passwordError = SecretValidation.ValidatePairHalf(
+                    input.Password, SecretErrorCodes.PasswordRequired, out var password);
+                if (passwordError is not null)
+                {
+                    errors.Add(new SecretFieldError(SecretFields.Password, passwordError));
+                }
+
+                payload = SecretPayload.ForPair(username, password);
+                break;
+            }
+
+            case SecretKinds.File:
+            {
+                var contentError = SecretValidation.ValidateFileContent(input.Value, out var content);
+                if (contentError is not null)
+                {
+                    errors.Add(new SecretFieldError(SecretFields.Value, contentError));
+                }
+
+                payload = SecretPayload.ForFile(content);
+                break;
+            }
+
+            default:
+            {
+                var valueError = SecretValidation.ValidateValue(input.Value, out var value);
+                if (valueError is not null)
+                {
+                    errors.Add(new SecretFieldError(SecretFields.Value, valueError));
+                }
+
+                payload = SecretPayload.ForText(value);
+                break;
+            }
         }
 
         return errors;
@@ -425,6 +519,7 @@ public sealed class SecretService(
         return new SecretView(
             secret.Id,
             secret.Name,
+            secret.Kind,
             secret.CreatedAt,
             secret.UpdatedAt,
             secret.RotatedAt,

@@ -173,7 +173,12 @@ public sealed record WorkerStepResponse(Guid StepId, string Status, string RunSt
 public sealed record WorkerSecretRequest(string Name);
 
 /// <summary>The fetched value, for the worker's per-run in-memory cache only - never written to disk.</summary>
-public sealed record WorkerSecretResponse(string Name, string Value);
+/// <summary>
+/// The answer of the run-scoped fetch (card F-015, extended by F-040). <see cref="Kind"/> is the payload's kind:
+/// absent from an older server, in which case <c>text</c> is what it could have stored. <see cref="Value"/> is
+/// the decrypted payload, whose shape the kind decides - never a raw value the caller may use directly.
+/// </summary>
+public sealed record WorkerSecretResponse(string Name, string Value, string? Kind = null);
 
 /// <summary>
 /// A Git remote probe leased to this worker (card I-005): the probe's id, the repository snapshot to run
