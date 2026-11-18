@@ -152,6 +152,20 @@ Schema: `20261118125809_AddRunProtectedParameters` (`ProtectedParametersJson`, `
 `20261118131532_AddRunParameterFiles` (`ParameterFilesJson`), both generated with
 `Database__Provider=Postgres`, both `text`, no SQLite store types in the snapshot.
 
+## Follow-up: the cross-tenant fact, and the two layers that refuse a foreign run (2026-11-18)
+
+The review's tenth mutation stayed green: adding `.IgnoreQueryFilters()` to the parameter-file route
+refused nothing, because the fact's "other worker" was same-tenant and its "unknown run" was a fresh Guid.
+The tenant half of the refusal contract was unguarded, and `TwoOrgsFixture` already carried a real run id
+for the other organisation that nothing used.
+
+The fact now exists (`TenantIsolationParameterFileProbeTests`), and building it produced a structural
+detail worth recording: the route refuses a foreign run **twice** - a tenant filter and a
+"this run belongs to the calling worker" check - so removing either one alone still refuses, and only
+removing both lets another organisation's bytes through (`Expected: NotFound / Actual: OK`). A fact that
+reddens on one layer would have been a fact about that layer, not about the boundary; both are now pinned,
+one per layer, and the two sentences in the Q-006 row match what is actually asserted.
+
 ## Close-out verification (2026-11-18)
 
 Three types landed in one pass, the fourth in a second, and the merge of the two branches produced the kind

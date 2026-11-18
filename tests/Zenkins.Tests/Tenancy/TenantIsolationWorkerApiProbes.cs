@@ -125,6 +125,27 @@ public static class TenantIsolationWorkerApiProbes
         return (HttpStatusCode.OK, payload.RootElement.GetProperty("value").GetString() ?? "");
     }
 
+    /// <summary>
+    /// One run-scoped parameter-file fetch (card F-041); the raw bytes only for a 200. The probe reads them as a
+    /// byte array on purpose: the route answers octets, and the contract it ships is the one the worker decodes.
+    /// </summary>
+    public static async Task<(HttpStatusCode Status, byte[] Bytes)> FetchRunParameterFileAsync(
+        HttpClient workerClient, Guid runId, string name)
+    {
+        using var response = await workerClient.PostAsync(
+            $"/api/workers/runs/{runId}/parameter-files",
+            new StringContent($$"""{"name":"{{name}}"}""", System.Text.Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        if ((int)response.StatusCode != 200)
+        {
+            return (response.StatusCode, []);
+        }
+
+        return (
+            HttpStatusCode.OK,
+            await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken));
+    }
+
     /// <summary>One run-scoped Git credential fetch; the material JSON only for a 200.</summary>
     public static async Task<(HttpStatusCode Status, JsonElement Material)> FetchGitCredentialAsync(
         HttpClient workerClient, Guid runId)
