@@ -54,6 +54,12 @@ public sealed record PipelineSpec(
 /// <see cref="Env"/>, <see cref="ContinueOnError"/> and <see cref="When"/> are frozen by the definition
 /// phase and honoured by the C# executor (F-015): the step list is data, so a script cannot skip the
 /// sequencing, the conditions or the environment composition.
+/// <para>
+/// <b>Two optional knobs, both additive (card F-032).</b> <see cref="TimeoutSeconds"/> bounds the step on
+/// its own and <see cref="Retry"/> lets a failed or timed-out attempt run again; both are absent by default,
+/// which is exactly the pre-F-032 behaviour, and the schema version stays put because a reader that does
+/// not know them simply executes the step as it always did.
+/// </para>
 /// </para>
 /// </summary>
 public sealed record PipelineStep(
@@ -64,8 +70,31 @@ public sealed record PipelineStep(
     SortedDictionary<string, string>? Env = null,
     bool ContinueOnError = false,
     PipelineCondition? When = null,
-    string[]? Artifacts = null)
+    string[]? Artifacts = null,
+    int? TimeoutSeconds = null,
+    int? Retry = null)
 {
+    /// <summary>
+    /// Whether this step declares its own execution-time limit (card F-032). The limit itself is
+    /// <see cref="TimeoutSeconds"/>; an absent value means the step has none of its own and is bounded only
+    /// by the run's deadline, exactly as before this card.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasOwnTimeout => TimeoutSeconds is not null;
+
+    /// <summary>
+    /// How many attempts this step may make (card F-032): <see cref="Retry"/> when declared, otherwise one.
+    /// A failed or timed-out attempt is retried up to this count inside <b>one</b> step record; a
+    /// cancellation is never retried.
+    /// </summary>
+    [JsonIgnore]
+    public int AttemptCount => Retry ?? 1;
+
+    /// <summary>This step's own limit as a span, or <see langword="null"/> when it declares none.</summary>
+    [JsonIgnore]
+    public TimeSpan? OwnTimeout =>
+        TimeoutSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null;
+
     /// <summary>Whether the step declares an execution-time condition (<c>when = { … }</c>).</summary>
     [JsonIgnore]
     public bool HasCondition => When is { } condition && !condition.IsEmpty;
@@ -170,6 +199,30 @@ public static class PipelineSpecSchema
 
     /// <summary>An upper bound on the steps of one pipeline (§6.1's 1..200).</summary>
     public const int MaxSteps = 200;
+
+    /// <summary>
+    /// The lower bound of a step's own timeout (card F-032): one second. Below that the platform's own
+    /// process start-up dominates the measurement, so the limit would kill steps that never had a chance.
+    /// </summary>
+    public const int MinStepTimeoutSeconds = 1;
+
+    /// <summary>
+    /// The upper bound of a step's own timeout (card F-032): one day. A step bounded by anything longer is
+    /// not the step's problem any more - the run's own deadline is minutes.
+    /// </summary>
+    public const int MaxStepTimeoutSeconds = 86_400;
+
+    /// <summary>
+    /// The lower bound of a declared retry count (card F-032): one attempt, which is also what an absent
+    /// <c>retry</c> means. Declaring one would be a step that never runs at all.
+    /// </summary>
+    public const int MinStepRetry = 1;
+
+    /// <summary>
+    /// The upper bound of a declared retry count (card F-032): five attempts. A flaky step is not a rebuild
+    /// loop, and the executor's attempt loop must stay bounded.
+    /// </summary>
+    public const int MaxStepRetry = 5;
 
     /// <summary>An upper bound on the argv length of one step.</summary>
     public const int MaxArguments = 64;
@@ -413,6 +466,26 @@ public static class PipelineSpecJson
             {
                 return false;
             }
+
+            // F-032: the two step knobs are bounded here too. The Worker's definition phase refuses them
+            // with the same bounds and a field path; this is the Server's defensive gate, so a buggy or
+            // hostile worker cannot freeze a limit the executor would have to guess about (a zero-second
+            // timeout, or a six-thousand-attempt loop).
+            if (!TryReadStepLimit(
+                    step.TimeoutSeconds,
+                    PipelineSpecSchema.MinStepTimeoutSeconds,
+                    PipelineSpecSchema.MaxStepTimeoutSeconds,
+                    $"{path}.timeoutSeconds",
+                    out error)
+                || !TryReadStepLimit(
+                    step.Retry,
+                    PipelineSpecSchema.MinStepRetry,
+                    PipelineSpecSchema.MaxStepRetry,
+                    $"{path}.retry",
+                    out error))
+            {
+                return false;
+            }
         }
 
         // D-006: the recorded secret references are names only. They are normalised, never refused: a bad
@@ -423,6 +496,28 @@ public static class PipelineSpecJson
         spec = secretReferences is null
             ? parsed
             : parsed with { SecretReferences = secretReferences };
+        return true;
+    }
+
+    /// <summary>
+    /// The envelope check of one of a step's two numeric knobs (card F-032). Absent is the default (no own
+    /// timeout, one attempt); a declared value must be inside its bounds - a limit the executor could not
+    /// honour is a definition mistake, never data stored for later interpretation.
+    /// </summary>
+    internal static bool TryReadStepLimit(int? value, int min, int max, string path, out string? error)
+    {
+        error = null;
+        if (value is null)
+        {
+            return true;
+        }
+
+        if (value.Value < min || value.Value > max)
+        {
+            error = $"{path} must be between {min} and {max} (got {value.Value}).";
+            return false;
+        }
+
         return true;
     }
 

@@ -158,6 +158,57 @@ internal static class PipelineTestData
     }
 
     /// <summary>
+    /// One step that also declares its own knobs (card F-032): <paramref name="timeoutSeconds"/> and
+    /// <paramref name="retry"/>, either of which may be <see langword="null"/> (absent = pre-F-032
+    /// behaviour). Same argv shape as <see cref="Step"/>, so the retry/timeout facts run the same real child.
+    /// </summary>
+    public static string StepWith(string name, int? timeoutSeconds, int? retry, params string[] modeAndArgs) =>
+        RenderStep(name, timeoutSeconds, retry, continueOnError: false, modeAndArgs);
+
+    /// <summary>The same, with <c>continue_on_error = true</c>: a step that fails must not stop the run.</summary>
+    public static string StepWithContinueOnError(
+        string name,
+        int? timeoutSeconds,
+        int? retry,
+        params string[] modeAndArgs) =>
+        RenderStep(name, timeoutSeconds, retry, continueOnError: true, modeAndArgs);
+
+    private static string RenderStep(
+        string name,
+        int? timeoutSeconds,
+        int? retry,
+        bool continueOnError,
+        string[] modeAndArgs)
+    {
+        var arguments = string.Join(
+            ", ",
+            new[] { $"[[{DotNet}]]", $"[[{ArgvEcho}]]" }.Concat(
+                modeAndArgs.Select(argument => $"\"{LuaString(argument)}\"")!));
+        var knobs = string.Concat(
+            timeoutSeconds is { } timeout ? $", timeout = {timeout}" : string.Empty,
+            retry is { } attempts ? $", retry = {attempts}" : string.Empty,
+            continueOnError ? ", continue_on_error = true" : string.Empty);
+        return $"{{ name = \"{name}\", run = {{ {arguments} }}{knobs} }}";
+    }
+
+    /// <summary>
+    /// A step that declares a retry count and one secret reference in its <c>env</c> (card F-032's
+    /// "resolved once per step" fact). The reference lives in the environment, not in argv, so the child's
+    /// argument list stays exactly what its mode expects - and the environment is resolved once per step,
+    /// before the first attempt.
+    /// </summary>
+    public static string StepWithSecretEnv(string name, int retry, string secretName, params string[] modeAndArgs)
+    {
+        var arguments = string.Join(
+            ", ",
+            new[] { $"[[{DotNet}]]", $"[[{ArgvEcho}]]" }.Concat(
+                modeAndArgs.Select(argument => $"\"{LuaString(argument)}\"")!));
+        var reference = "${secret:" + secretName + "}";
+        return "{ name = \"" + name + "\", run = { " + arguments + " }, env = { "
+            + secretName + " = \"" + reference + "\" }, retry = " + retry + " }";
+    }
+
+    /// <summary>
     /// One argument as the inside of a Lua string literal: backslash and quote escaped, and a newline
     /// spelled <c>\n</c> (a literal newline is not legal inside a Lua string). Used where a step has to
     /// carry a whole file's content as one argument.

@@ -299,6 +299,13 @@
                                     {
                                         <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.FormatDuration(duration)</span>
                                     }
+                                    @* F-032: how many attempts the step made, when it made more than one -
+                                       the count lives on the one row the step has, so the page never grows a
+                                       second row per attempt (the frozen spec's step identity stays 1:1). *@
+                                    @if (step.Attempts > 1)
+                                    {
+                                        <span id="@($"run-step-attempts-{step.Name}")" class="bb:text-xs bb:text-muted-foreground">attempts @step.Attempts</span>
+                                    }
                                     @if (step.FailureReason is { } reason)
                                     {
                                         <span class="bb:text-xs bb:text-muted-foreground">@StepReasonText(reason)</span>
@@ -778,6 +785,7 @@
         PipelineStepFailureReasons.RunCanceled => "the run was canceled before this step",
         PipelineStepFailureReasons.Canceled => "the run was canceled by a user",
         PipelineStepFailureReasons.TimedOut => "the run's deadline passed",
+        PipelineStepFailureReasons.StepTimeout => "its own timeout passed",
         PipelineStepFailureReasons.NotStarted => "the process could not be started",
         PipelineStepFailureReasons.SecretUnavailable => "a secret could not be resolved",
         PipelineStepFailureReasons.ArtifactPathRejected => "an artifact path was refused",

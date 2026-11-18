@@ -29,6 +29,10 @@
                 envLines: fieldValue(row, "env-lines"),
                 continueOnError: fieldValue(row, "continue-on-error") === "true",
                 artifactsText: fieldValue(row, "artifacts-text"),
+                // F-032: the two step knobs travel as the editor's raw text; the server parses and bounds
+                // them (a "" is "not declared"), exactly like envLines and artifactsText above.
+                timeoutSeconds: fieldValue(row, "timeout-seconds"),
+                retry: fieldValue(row, "retry"),
             };
         });
 

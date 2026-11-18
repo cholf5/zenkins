@@ -341,12 +341,13 @@ public sealed class RunTestHost : IDisposable
         string name,
         string status,
         int? exitCode = null,
-        string? failureReason = null) =>
+        string? failureReason = null,
+        int? attempts = null) =>
         WorkerTestHost.SendWorkerJsonAsync(
             client,
             workerToken,
             $"/api/workers/runs/{runId}/steps",
-            new { index, name, status, exitCode, failureReason });
+            new { index, name, status, exitCode, failureReason, attempts });
 
     public static Task<HttpResponseMessage> CompleteAsync(
         HttpClient client,

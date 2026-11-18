@@ -343,14 +343,14 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1377 fast / 1406 all seven.** The fast figure is a run of
-the tree that carries Q-022 on the Windows host that now runs the full suite (`--list-tests` reports the
-same number, so the two agree); the all-seven figure is that count plus the five other harnesses and
-Postgres as last counted - 12 + 4 + 2 + 2 + 3 + 6 = 29, and 1377 + 29 = 1406. Every per-card note in
-this file quotes the counts of *its own* tree and they are history, not a target: F-034's "1341 -> 1366"
-and this file's own earlier "1341 / 1370" re-baseline were both accurate when written and are both
-behind HEAD now. When a card changes the count, re-baseline here in the same breath rather than leaving
-the next reader to notice - that is what went wrong twice.
+**The current baseline is counted, and it is 1407 fast / 1437 all seven.** The fast figure is a run of
+the tree that carries F-032 on the Windows host that now runs the full suite (`--list-tests` reports the
+same number, so the two agree); the all-seven figure is that count plus the other harnesses as last
+counted - 12 + 4 + 2 + 2 + 3 + 7 = 30, and 1407 + 30 = 1437. Every per-card note in this file quotes the
+counts of *its own* tree and they are history, not a target: F-034's "1341 -> 1366" and this file's own
+earlier "1341 / 1370" re-baseline were both accurate when written and are both behind HEAD now. When a
+card changes the count, re-baseline here in the same breath rather than leaving the next reader to
+notice - that is what went wrong twice.
 
 ### Six suites: the fast one, and five acceptance harnesses
 
@@ -450,17 +450,17 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~6 min on the reference machine, ~9 min on a slow one (1377 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~6 min on the reference machine, ~9.5 min on a slow one (1407 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
 | PublishAot | `Category=PublishAot` | the same as PublishSmoke, plus the OS's native AOT toolchain (§1; it publishes the AOT Worker, the JIT Server and the JIT Worker for the local RID) | ~1 min warm (2 tests); the AOT compile is minutes on a cold `obj/` tree |
 | GitSshd | `Category=GitSshd` | the same as Milestone, plus the OpenSSH tools of §1 (`sshd` + `ssh-keygen`; without them the facts skip with the recorded reason) | ~20 s (3 tests) |
-| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus the migration runs on a fresh schema (6 tests) |
+| Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus the migration runs on a fresh schema (7 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1406 on the tree that carries Q-022, by the arithmetic below) but
+filter runs **all seven** (1437 on the tree that carries F-032, by the arithmetic below) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

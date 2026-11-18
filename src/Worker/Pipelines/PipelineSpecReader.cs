@@ -47,7 +47,7 @@ public static class PipelineSpecReader
 
     private static readonly string[] PipelineKeys = ["name", "env", "steps", "triggers"];
     private static readonly string[] StepKeys =
-        ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts"];
+        ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts", "timeout", "retry"];
     private static readonly string[] WhenKeys = ["branch", "platform", "env"];
     private static readonly string[] TriggerKeys = ["branches"];
 
@@ -144,6 +144,18 @@ public static class PipelineSpecReader
             var continueOnError = ReadContinueOnError(table, path);
             var when = ReadWhen(table, path);
             var artifactPaths = ReadArtifactPaths(table, path);
+            var stepTimeout = ReadStepLimit(
+                table,
+                "timeout",
+                path,
+                PipelineSpecSchema.MinStepTimeoutSeconds,
+                PipelineSpecSchema.MaxStepTimeoutSeconds);
+            var stepRetry = ReadStepLimit(
+                table,
+                "retry",
+                path,
+                PipelineSpecSchema.MinStepRetry,
+                PipelineSpecSchema.MaxStepRetry);
 
             steps[i] = new PipelineStep(
                 stepName,
@@ -152,7 +164,9 @@ public static class PipelineSpecReader
                 Env: stepEnv,
                 ContinueOnError: continueOnError,
                 When: when,
-                Artifacts: artifactPaths);
+                Artifacts: artifactPaths,
+                TimeoutSeconds: stepTimeout,
+                Retry: stepRetry);
         }
 
         return steps;
@@ -309,6 +323,34 @@ public static class PipelineSpecReader
         }
 
         return env.Count == 0 ? null : env;
+    }
+
+    /// <summary>
+    /// Reads one of a step's two numeric knobs (card F-032): <c>timeout = 600</c> (seconds) and
+    /// <c>retry = 2</c> (attempts). Both are optional and bounded; an out-of-range or non-integer value is a
+    /// definition error with the field path, exactly like every other declared field - the executor must
+    /// never have to guess at a limit.
+    /// </summary>
+    private static int? ReadStepLimit(LuaHostTable table, string key, string path, int min, int max)
+    {
+        if (!TryGet(table, key, out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        var limitPath = $"{path}.{key}";
+        if (value.Kind != LuaHostValueKind.Number)
+        {
+            throw Invalid($"{limitPath} must be an integer, got {Describe(value)}.");
+        }
+
+        var number = value.Number;
+        if (number != Math.Floor(number) || number < min || number > max)
+        {
+            throw Invalid($"{limitPath} must be a whole number between {min} and {max}, got {number}.");
+        }
+
+        return (int)number;
     }
 
     private static bool ReadContinueOnError(LuaHostTable table, string path)

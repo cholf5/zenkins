@@ -340,9 +340,32 @@ Rules that follow:
 ### 5.3 Time and resource budgets
 
 - **Wall clock** is the host's: the driver compares `stopwatch.Elapsed` against the run's remaining
-  budget (`BuildRun.DeadlineAt`, frozen at accept time by F-009) and the step's own limit. On
-  expiry: stop resuming, kill the process tree, report a terminal state with `FailureReason`
-  (`timeout` / `canceled-by-user`), never a retry.
+  budget (`BuildRun.DeadlineAt`, frozen at accept time by F-009). When the *definition* phase expires
+  it stops resuming and reports `pipeline-timeout` — never a retry: there is no verdict to retry, and
+  the run's own deadline is what ran out.
+- **A step's own budget (F-032).** A step may declare `timeout` (seconds, 1..86 400) and `retry`
+  (attempts, 1..5). Both are optional and absent by default, and a step that declares neither runs
+  exactly as it did before this card.
+  - **The earlier limit governs.** The executor compares the step's limit with the run's remaining
+    time: if the step's own limit is the earlier one, it starts a per-attempt timer linked to the run's
+    cancellation token, and the process tree is killed by the same path a cancel uses (F-007/F-009 —
+    there is no second kill path). If the run's deadline is earlier, no step timer is installed at all:
+    F-009's cancel is what fires, and the step records `timed-out` with the run's own `timeout`. The run
+    log states which of the two governed *before* the step starts, so a killed step is never
+    unexplained, and the stored reasons keep the two apart: `step-timeout` is the step's own limit,
+    `timed-out` is the run's deadline.
+  - **Killed at the step's own limit, the run goes on.** Other steps keep their budget; the run fails
+    (or continues, with `continue_on_error`) like any failed step, and its reason is `step-timeout`,
+    not the run's `timeout`.
+  - **Retries are per step, not per attempt.** A failed or timed-out attempt is repeated up to the
+    declared count; a **cancellation is never retried**. Each attempt appends a delimited section to
+    the step's log, and the step keeps **one** record carrying `Attempts` and the final attempt's exit
+    code (a row per attempt would break "step N of the frozen spec", which artifacts, conditions and
+    the page index by). A step that used its attempts and still failed records
+    `step-retry-exhausted` on the run when the last attempt was a plain non-zero exit.
+  - **Secrets are resolved once per step.** References are resolved before the first attempt, so a
+    retry re-runs the process with the values it already has — never a second fetch, never a
+    mid-step rotation, never a second redaction registration.
 - **Cancellation** reuses `RunCancelSignal`: the loop checks it at every yield point (every 10k
   instructions), so a script honours a cancel within milliseconds even if it never calls an SDK
   function.
@@ -357,8 +380,9 @@ Rules that follow:
     Accepted and recorded: on macOS the worker's memory bound is "the machine", which is why the
     worker should not be the only thing running there. A run killed by the OS is reported `Failed`,
     never silently retried.
-- **Nesting**: a step's budget is the smaller of its own limit and the run's remaining wall clock.
-  A single `run()` is bounded by F-009's per-run timeout independently of Lua.
+- **Nesting**: a step's budget is the smaller of its own limit and the run's remaining wall clock
+  (the clamping rule above). A single `run()` is bounded by F-009's per-run timeout independently of
+  Lua.
 
 ## 6. Layering: a small C# kernel, a Lua prelude
 
@@ -497,6 +521,11 @@ validates it, serialises it, and executes the steps **in C#**:
   the Worker re-checks the envelope and executes it without a clone or a definition phase. The
   envelope accepts **v1 and v2** — every spec frozen before F-020 stays readable — and refuses
   anything newer.
+- **Two optional step fields bound a step on its own** (card F-032): `timeout = 600` and `retry = 2`
+  are additive, optional and defaulted to "no limit of its own" / "one attempt", so the schema version
+  stays where it is — a reader that does not know them executes the step exactly as before. The
+  executor's rules for the pair (clamping, the `step-timeout` vs `timed-out` split, delimited attempts
+  and one step record) are §5.3's.
 - **The frozen spec records which secret names the definition referenced** (card D-006): the sandbox
   sees every `secret("NAME")` call, and every `${secret:NAME}` marker that ends up in a step's argv or
   in a pipeline/step `env` value is collected too, because those are exactly what the C# executor

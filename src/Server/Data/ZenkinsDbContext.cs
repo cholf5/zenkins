@@ -1056,6 +1056,11 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             entity.Property(step => step.Status).IsRequired().HasMaxLength(16);
             entity.Property(step => step.FailureReason).HasMaxLength(64);
 
+            // F-032: one attempt by default - the value every step row written before this card really
+            // had. The database default is 1 so adding the column to a populated table backfills the
+            // honest answer instead of a zero the check constraint below would then refuse.
+            entity.Property(step => step.Attempts).HasDefaultValue(PipelineSpecSchema.MinStepRetry);
+
             entity.HasIndex(step => new { step.RunId, step.Index }).IsUnique();
 
             entity.HasOne<Organization>().WithMany().HasForeignKey(step => step.OrganizationId)
@@ -1069,6 +1074,14 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
                 "CK_BuildSteps_Status",
                 $"\"Status\" IN ('{PipelineStepStatus.Running}', '{PipelineStepStatus.Success}', "
                 + $"'{PipelineStepStatus.Failed}', '{PipelineStepStatus.Skipped}')"));
+
+            // F-032: the attempt count is bounded by the same cap the schema enforces (1..5), so a row can
+            // never claim an attempt loop the executor could not have run. The column exists because one
+            // step record survives its attempts - the alternative (a row per attempt) would break "step N
+            // of the frozen spec", which artifacts and conditions index by.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_BuildSteps_Attempts",
+                $"\"Attempts\" BETWEEN {PipelineSpecSchema.MinStepRetry} AND {PipelineSpecSchema.MaxStepRetry}"));
 
             entity.HasQueryFilter(step => step.OrganizationId == CurrentOrganizationId);
         });

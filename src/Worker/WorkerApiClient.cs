@@ -159,7 +159,8 @@ public sealed record WorkerStepRequest(
     string Name,
     string Status,
     int? ExitCode = null,
-    string? FailureReason = null);
+    string? FailureReason = null,
+    int? Attempts = null);
 
 /// <summary>The step report's answer: the recorded row's id (stamped on the step's log lines), its state
 /// and the run's.</summary>

@@ -40,7 +40,8 @@ public sealed class ServerStepSink(
                         report.Name,
                         report.Status,
                         report.ExitCode,
-                        report.FailureReason),
+                        report.FailureReason,
+                        report.Attempts),
                     cancellationToken);
                 return PipelineStepReceipt.Recorded(response.StepId);
             }

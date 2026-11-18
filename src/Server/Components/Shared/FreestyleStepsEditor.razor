@@ -1,3 +1,4 @@
+@using System.Globalization
 @using Zenkins.Shared.Pipelines
 @* Card F-020's Freestyle steps editor. A plain HTML form posting to the real endpoint (antiforgery
    like every other form): the rows below render the saved spec's steps, and js/freestyle-steps.js
@@ -84,6 +85,34 @@
                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                         </div>
                     </div>
+                    <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
+                        <div>
+                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-timeout-@(stepIndex)">
+                                Timeout (seconds, blank = no limit)
+                            </label>
+                            <input data-freestyle-field="timeout-seconds"
+                                   id="step-timeout-@(stepIndex)"
+                                   type="number"
+                                   min="@MinStepTimeoutSeconds"
+                                   max="@MaxStepTimeoutSeconds"
+                                   value="@(step.TimeoutSeconds?.ToString(CultureInfo.InvariantCulture))"
+                                   autocomplete="off"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                        </div>
+                        <div>
+                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-retry-@(stepIndex)">
+                                Attempts (blank = 1)
+                            </label>
+                            <input data-freestyle-field="retry"
+                                   id="step-retry-@(stepIndex)"
+                                   type="number"
+                                   min="@MinStepRetry"
+                                   max="@MaxStepRetry"
+                                   value="@(step.Retry?.ToString(CultureInfo.InvariantCulture))"
+                                   autocomplete="off"
+                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                        </div>
+                    </div>
                     <label class="bb:flex bb:items-center bb:gap-2">
                         <input type="checkbox"
                                data-freestyle-field="continue-on-error"
@@ -149,6 +178,30 @@
                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                     </div>
                 </div>
+                <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
+                    <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="timeout-seconds">
+                            Timeout (seconds, blank = no limit)
+                        </label>
+                        <input data-freestyle-field="timeout-seconds"
+                               type="number"
+                               min="@MinStepTimeoutSeconds"
+                               max="@MaxStepTimeoutSeconds"
+                               autocomplete="off"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                    </div>
+                    <div>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="retry">
+                            Attempts (blank = 1)
+                        </label>
+                        <input data-freestyle-field="retry"
+                               type="number"
+                               min="@MinStepRetry"
+                               max="@MaxStepRetry"
+                               autocomplete="off"
+                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+                    </div>
+                </div>
                 <label class="bb:flex bb:items-center bb:gap-2">
                     <input type="checkbox" data-freestyle-field="continue-on-error" />
                     <span class="bb:text-xs">Continue on error: a failure here does not stop the run.</span>
@@ -179,6 +232,15 @@
     /// <summary>The stable validation code from the redirect query, if any.</summary>
     [Parameter]
     public string? ErrorCode { get; set; }
+
+    /// <summary>Card F-032: the two step knobs' bounds, so the inputs' min/max match the server's rules.</summary>
+    private const int MinStepTimeoutSeconds = PipelineSpecSchema.MinStepTimeoutSeconds;
+
+    private const int MaxStepTimeoutSeconds = PipelineSpecSchema.MaxStepTimeoutSeconds;
+
+    private const int MinStepRetry = PipelineSpecSchema.MinStepRetry;
+
+    private const int MaxStepRetry = PipelineSpecSchema.MaxStepRetry;
 
     /// <summary>The step's environment rendered back into the editor's NAME=value lines, so editing
     /// what is stored round-trips through exactly one representation.</summary>

@@ -79,6 +79,22 @@ public static class PipelineFailureReasons
     /// <summary>A step exited non-zero; its exit code is recorded on the run, nothing is invented.</summary>
     public const string StepFailed = "step-failed";
 
+    /// <summary>
+    /// Card F-032: a step exceeded the timeout <b>it declared</b> and was killed (its process tree
+    /// included). Deliberately separate from <c>step-failed</c> and from the server-owned <c>timeout</c>: the
+    /// step was stopped at its own limit, not at the run's deadline, and the rest of the run's budget is
+    /// still there. The same word is the step record's reason (<see cref="PipelineStepFailureReasons"/>), so
+    /// the run and the step cannot tell two different stories about one kill.
+    /// </summary>
+    public const string StepTimeout = "step-timeout";
+
+    /// <summary>
+    /// Card F-032: a step used every attempt its <c>retry</c> declared and the last one failed without being
+    /// killed by its own timeout. Recorded instead of a bare <c>step-failed</c> so the run page can say
+    /// "retried N times and still failed" - which is a different next step for the reader than "failed once".
+    /// </summary>
+    public const string StepRetryExhausted = "step-retry-exhausted";
+
     /// <summary>Every reason a worker may report through the <c>completed</c> endpoint.</summary>
     public static readonly string[] WorkerReportable =
     [
@@ -98,6 +114,8 @@ public static class PipelineFailureReasons
         PipelineInvalid,
         PipelineTimeout,
         StepFailed,
+        StepTimeout,
+        StepRetryExhausted,
     ];
 
     /// <summary>Whether <paramref name="reason"/> is one of <see cref="WorkerReportable"/>.</summary>

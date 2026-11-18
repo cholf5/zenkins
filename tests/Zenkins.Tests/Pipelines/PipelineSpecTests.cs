@@ -146,6 +146,14 @@ public sealed class PipelineSpecTests
     [InlineData("pipeline { name = \"x\", env = { K = 1 }, steps = { { name = \"a\", run = { \"x\" } } } }", "pipeline.env.K must be a string")]
     [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, env = { K = true } } } }", "pipeline.steps[1].env.K must be a string")]
     [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, continue_on_error = \"yes\" } } }", "pipeline.steps[1].continue_on_error must be true or false")]
+    // F-032's two knobs: bounded, whole numbers
+    [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, timeout = 0 } } }", "pipeline.steps[1].timeout must be a whole number between 1 and 86400")]
+    [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, timeout = 86401 } } }", "pipeline.steps[1].timeout must be a whole number between 1 and 86400")]
+    [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, timeout = 1.5 } } }", "pipeline.steps[1].timeout must be a whole number between 1 and 86400")]
+    [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, timeout = \"600\" } } }", "pipeline.steps[1].timeout must be an integer")]
+    [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, retry = 0 } } }", "pipeline.steps[1].retry must be a whole number between 1 and 5")]
+    [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, retry = 6 } } }", "pipeline.steps[1].retry must be a whole number between 1 and 5")]
+    [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" }, retry = true } } }", "pipeline.steps[1].retry must be an integer")]
     // triggers rules
     [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" } } }, triggers = { tags = { \"a\" } } }", "pipeline.triggers has an unknown key 'tags'")]
     [InlineData("pipeline { name = \"x\", steps = { { name = \"a\", run = { \"x\" } } }, triggers = { branches = { 1 } } }", "pipeline.triggers.branches[1] must be a non-empty string")]
@@ -257,6 +265,90 @@ public sealed class PipelineSpecTests
         Assert.NotNull(read);
         Assert.Equal(1, read!.Version);
         Assert.Equal(["dotnet", "--info"], read.Steps[0].Run!);
+    }
+
+    [Fact]
+    public void The_step_timeout_and_retry_are_optional_bounded_knobs_the_frozen_record_carries()
+    {
+        // Card F-032: `timeout = 600, retry = 2` on one step, nothing on the other. Both are additive
+        // optional fields - the schema version does not move, and an absent one means "no limit of its
+        // own" / "one attempt", which is exactly the pre-F-032 behaviour.
+        using var run = new LuaRuntimeTestDefinition(
+            """
+            pipeline {
+              name = "Knobs",
+              steps = {
+                { name = "Flaky", run = { "dotnet", "--info" }, timeout = 600, retry = 2 },
+                { name = "Plain", run = { "dotnet", "--info" } },
+              },
+            }
+            """);
+
+        var result = run.Run();
+
+        Assert.Equal(PipelineSpecSchema.Version, result.Spec.Version);
+        Assert.Equal(600, result.Spec.Steps[0].TimeoutSeconds);
+        Assert.Equal(2, result.Spec.Steps[0].Retry);
+        Assert.Equal(TimeSpan.FromMinutes(10), result.Spec.Steps[0].OwnTimeout);
+        Assert.Equal(2, result.Spec.Steps[0].AttemptCount);
+        Assert.True(result.Spec.Steps[0].HasOwnTimeout);
+
+        // The step that declared neither keeps the pre-F-032 shape...
+        Assert.Null(result.Spec.Steps[1].TimeoutSeconds);
+        Assert.Null(result.Spec.Steps[1].Retry);
+        Assert.Equal(1, result.Spec.Steps[1].AttemptCount);
+        Assert.False(result.Spec.Steps[1].HasOwnTimeout);
+
+        // ...and the frozen JSON round-trips both, omitting the absent pair entirely (nulls are not
+        // serialised), so an older reader sees exactly the document it always did.
+        Assert.True(PipelineSpecJson.TryRead(result.SpecJson, out var frozen, out var error), error);
+        Assert.Equal(600, frozen!.Steps[0].TimeoutSeconds);
+        Assert.Equal(2, frozen.Steps[0].Retry);
+        Assert.Null(frozen.Steps[1].TimeoutSeconds);
+        var plainDocument = result.SpecJson[result.SpecJson.IndexOf("Plain", StringComparison.Ordinal)..];
+        Assert.DoesNotContain("timeoutSeconds", plainDocument, StringComparison.Ordinal);
+        Assert.DoesNotContain("retry", plainDocument, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("timeout = 1", 1, null)]
+    [InlineData("timeout = 86400", 86400, null)]
+    [InlineData("retry = 1", null, 1)]
+    [InlineData("retry = 5", null, 5)]
+    public void The_bounds_of_the_two_knobs_are_inclusive(string knobs, int? timeoutSeconds, int? retry)
+    {
+        // The other half of the bound: exactly 1 and exactly 86400 / 5 must be ACCEPTED. A `<=`/`>=` written
+        // the wrong way round would silently make a legal extreme unusable, and the out-of-range rows above
+        // would not notice (they only ever test one past the edge).
+        using var run = new LuaRuntimeTestDefinition(
+            $"pipeline {{ name = \"x\", steps = {{ {{ name = \"a\", run = {{ \"x\" }}, {knobs} }} }} }}");
+
+        var result = run.Run();
+
+        Assert.Equal(timeoutSeconds, result.Spec.Steps[0].TimeoutSeconds);
+        Assert.Equal(retry, result.Spec.Steps[0].Retry);
+
+        // ...and the Server's envelope accepts the same extremes, so the two gates agree on the bound.
+        Assert.True(PipelineSpecJson.TryRead(result.SpecJson, out var frozen, out var error), error);
+        Assert.Equal(timeoutSeconds, frozen!.Steps[0].TimeoutSeconds);
+        Assert.Equal(retry, frozen.Steps[0].Retry);
+    }
+
+    [Theory]
+    [InlineData("\"timeoutSeconds\": 0", "pipeline.steps[1].timeoutSeconds must be between 1 and 86400")]
+    [InlineData("\"timeoutSeconds\": 86401", "pipeline.steps[1].timeoutSeconds must be between 1 and 86400")]
+    [InlineData("\"retry\": 0", "pipeline.steps[1].retry must be between 1 and 5")]
+    [InlineData("\"retry\": 6", "pipeline.steps[1].retry must be between 1 and 5")]
+    public void The_envelope_gate_refuses_a_step_knob_outside_its_bounds(string knob, string expected)
+    {
+        // Card F-032: the Worker refuses these with a field path; this is the Server's own gate, so a buggy
+        // or hostile worker cannot freeze a limit the executor would have to guess about.
+        var json = SpecJson(
+            version: PipelineSpecSchema.Version,
+            steps: $$"""{ "name": "a", "run": [ "x" ], {{knob}} }""");
+
+        Assert.False(PipelineSpecJson.TryRead(json, out _, out var error));
+        Assert.Contains(expected, error, StringComparison.Ordinal);
     }
 
     [Fact]

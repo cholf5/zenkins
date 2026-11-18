@@ -515,6 +515,11 @@ namespace Zenkins.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int>("Attempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -562,6 +567,8 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.ToTable("BuildSteps", t =>
                         {
+                            t.HasCheckConstraint("CK_BuildSteps_Attempts", "\"Attempts\" BETWEEN 1 AND 5");
+
                             t.HasCheckConstraint("CK_BuildSteps_Status", "\"Status\" IN ('Running', 'Success', 'Failed', 'Skipped')");
                         });
                 });

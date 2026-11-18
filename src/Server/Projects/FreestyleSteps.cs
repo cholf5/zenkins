@@ -20,12 +20,19 @@ namespace Zenkins.Server.Projects;
 /// <param name="ContinueOnError">Whether the run continues when this step fails (F-015).</param>
 /// <param name="ArtifactsText">The comma-separated paths this step publishes after exiting 0 (F-016),
 /// resolved inside the run's workspace for a Freestyle run.</param>
+/// <param name="TimeoutSeconds">The step's own limit in seconds as the editor's text field carries it
+/// (card F-032); blank means "no limit of its own". Parsed and bounded server-side, never trusted to the
+/// browser - the same discipline <paramref name="EnvLines"/> and <paramref name="ArtifactsText"/> get.</param>
+/// <param name="Retry">The step's attempt count as the editor's text field carries it (card F-032); blank
+/// means one attempt.</param>
 public sealed record FreestyleStepDraft(
     string? Name,
     string? Script,
     string? EnvLines,
     bool ContinueOnError,
-    string? ArtifactsText);
+    string? ArtifactsText,
+    string? TimeoutSeconds = null,
+    string? Retry = null);
 
 /// <summary>The steps editor's form payload: the drafts, serialized as JSON by the page.</summary>
 public sealed record FreestyleStepsInput(string? StepsJson);
@@ -82,13 +89,32 @@ public static class FreestyleSteps
             }
 
             var artifacts = ParseArtifactsText(draft.ArtifactsText);
+            if (!ParseStepLimit(
+                    draft.TimeoutSeconds,
+                    $"{path}.timeoutSeconds",
+                    PipelineSpecSchema.MinStepTimeoutSeconds,
+                    PipelineSpecSchema.MaxStepTimeoutSeconds,
+                    out var timeoutSeconds,
+                    out error)
+                || !ParseStepLimit(
+                    draft.Retry,
+                    $"{path}.retry",
+                    PipelineSpecSchema.MinStepRetry,
+                    PipelineSpecSchema.MaxStepRetry,
+                    out var retry,
+                    out error))
+            {
+                return null;
+            }
 
             steps[i] = new PipelineStep(
                 draft.Name?.Trim() ?? string.Empty,
                 Script: draft.Script ?? string.Empty,
                 Env: env,
                 ContinueOnError: draft.ContinueOnError,
-                Artifacts: artifacts);
+                Artifacts: artifacts,
+                TimeoutSeconds: timeoutSeconds,
+                Retry: retry);
 
             // The Server-side capture (D-006's semantics): names only, never values - scanned from the
             // same fields the Worker will substitute (the script text and the step's env values).
@@ -198,6 +224,39 @@ public static class FreestyleSteps
             .Where(path => path.Length > 0)
             .ToArray();
         return paths.Length == 0 ? null : paths;
+    }
+
+    /// <summary>
+    /// Parses one of the editor's two numeric fields (card F-032). A blank field is "not declared"; anything
+    /// else must be a whole number inside the bounds, refused with the same field path and phrasing the
+    /// envelope uses, so the editor's error and a worker's definition error read the same way.
+    /// </summary>
+    private static bool ParseStepLimit(
+        string? text,
+        string path,
+        int min,
+        int max,
+        out int? value,
+        out string? error)
+    {
+        value = null;
+        error = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+
+        if (!int.TryParse(text.Trim(), System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            || parsed < min
+            || parsed > max)
+        {
+            error = $"{path} must be a whole number between {min} and {max} (got '{text.Trim()}').";
+            return false;
+        }
+
+        value = parsed;
+        return true;
     }
 
     private static FreestyleStepDraft[]? TryDeserialize(string? json, out string? error)

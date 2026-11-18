@@ -130,6 +130,13 @@ public static class RunDisplay
                 "The pipeline's definition phase ran past the run's deadline and was abandoned.",
             PipelineFailureReasons.StepFailed =>
                 "A step exited non-zero, so the run failed.",
+            PipelineFailureReasons.StepTimeout =>
+                "A step exceeded the timeout it declares for itself and was killed there - the run's own "
+                + "deadline (and the steps after it) still had time left. Open the step's log: it says which "
+                + "limit fired.",
+            PipelineFailureReasons.StepRetryExhausted =>
+                "A step failed and then failed again on every attempt it declared; the run stopped there. "
+                + "Each attempt's output is its own delimited section in the step's log.",
             _ => string.Empty,
         };
     }

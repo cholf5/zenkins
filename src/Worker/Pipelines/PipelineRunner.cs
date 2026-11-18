@@ -181,6 +181,15 @@ public sealed record PipelineRunOutcome(
         new(exitCode, PipelineFailureReasons.StepFailed, commit);
 
     /// <summary>
+    /// A failing step whose reason is typed rather than the generic <c>step-failed</c> (card F-032): a step
+    /// killed by its own timeout (<paramref name="exitCode"/> null - nothing exited) or a step whose
+    /// declared attempts were all used up (<paramref name="exitCode"/> is the last attempt's). The code is
+    /// always a real one; nothing here invents a number.
+    /// </summary>
+    public static PipelineRunOutcome StepFailedWith(int? exitCode, string reason, string? commit) =>
+        new(exitCode, reason, commit);
+
+    /// <summary>
     /// The server refused a report for this run (409/410: another worker owns it, it was canceled, or it
     /// is already terminal). Steps must not run and nothing may be reported - the server owns the state.
     /// </summary>
@@ -559,6 +568,10 @@ public sealed class PipelineRunner
         int? failedIndex = null;
         int? failedExitCode = null;
 
+        // F-032: the run-level reason the first failing step produced (a step's own timeout, exhausted
+        // retries, or the pre-F-032 `step-failed` when neither applies). Null means "no typed reason".
+        string? failedReason = null;
+
         for (var i = 0; i < steps.Length; i++)
         {
             var step = steps[i];
@@ -649,169 +662,265 @@ public sealed class PipelineRunner
 
             SetCurrentStep(running);
 
-            // F-020: a script step's header echoes the script verbatim (references stay references -
-            // names are not values) instead of the useless "shell + temp file" command line. The file
-            // that actually runs holds the resolved text; the redactor covers the resolved lines here
-            // as it covers everything else.
-            if (step.IsScript)
+            // F-032: the step's own limit, clamped by what the run has left. The earlier of the two
+            // governs, and the line below is how the log (and therefore the operator) learns which one
+            // it was: a declared timeout longer than the remaining run can never fire first, so no step
+            // timer is installed at all and F-009's deadline (the run's cancellation token) enforces its
+            // own - the step then dies as `timed-out`, exactly as it did before this card.
+            var ownTimeout = step.OwnTimeout;
+            var runRemaining = _options.Deadline - DateTimeOffset.UtcNow;
+            var ownTimeoutGoverns = ownTimeout is { } own
+                && runRemaining > TimeSpan.Zero
+                && own <= runRemaining;
+            if (ownTimeout is { } declared)
             {
-                Log($"zenkins: step {position} \"{step.Name}\" started: script ({step.Script!.Length} "
-                    + $"characters, {(OperatingSystem.IsWindows() ? "cmd" : "sh")}).");
-                LogScript(step.Script);
-            }
-            else
-            {
-                Log($"zenkins: step {position} \"{step.Name}\" started: {Render(argv)}");
+                Log(ownTimeoutGoverns
+                    ? $"zenkins: step {position} \"{step.Name}\" declares its own {Seconds(declared)}s timeout "
+                        + $"and the run has {Seconds(runRemaining)}s left; the earlier limit is the step's own."
+                    : $"zenkins: step {position} \"{step.Name}\" declares a {Seconds(declared)}s timeout but the "
+                        + $"run has {Seconds(runRemaining)}s left; the earlier limit is the run's deadline, and "
+                        + "it governs this step.");
             }
 
-            var stopwatch = Stopwatch.StartNew();
-            int exitCode;
-            try
+            // F-032's attempt loop. One step record (AC-5): every attempt is a delimited section of this
+            // step's log, and only the last attempt decides what the record says. The run's token is
+            // checked before any attempt timer, so a cancellation is never retried (AC-4).
+            var attemptsAllowed = step.AttemptCount;
+            int? exitCode = null;
+            string? stepFailureReason = null;
+            var attempt = 0;
+            while (true)
             {
-                using var runner = new ProcessRunner(
-                    new ProcessRunnerOptions
-                    {
-                        FileName = argv[0],
-                        Arguments = [.. argv.Skip(1)],
+                attempt++;
 
-                        // F-020/F-022: a Freestyle or inline run's steps execute in the run's workspace -
-                        // there is no checkout, so the repository directory stays empty and unused.
-                        WorkingDirectory = string.Equals(
-                            _options.DefinitionSource,
-                            RunDefinitionSources.Repository,
-                            StringComparison.Ordinal)
-                                ? _options.Work.RepositoryPath
-                                : _options.Work.WorkspacePath,
-
-                        // The composed environment, in full: the child sees exactly the map env() reports, so
-                        // the two can never disagree about a value or its precedence.
-                        EnvironmentVariables = childEnvironment,
-                    },
-                    OnProcessOutput);
-                exitCode = await runner.RunAsync(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                // F-015: the killed step records *why* it died - a user cancel or the run's deadline - so the
-                // run page does not have to infer it from the run's own reason.
-                var cancellationReason = _options.CancellationFailureReason?.Invoke()
-                    ?? PipelineStepFailureReasons.Canceled;
-                Log($"zenkins: step {position} \"{step.Name}\" was killed by the run's cancellation.");
-                await ReportStepAsync(
-                    i + 1,
-                    step.Name,
-                    PipelineStepStatus.Failed,
-                    failureReason: cancellationReason,
-                    cancellationToken: CancellationToken.None);
-                SetCurrentStep(null);
-                await SkipRemainingAsync(
-                    steps, i + 1, PipelineStepFailureReasons.RunCanceled, CancellationToken.None);
-                return PipelineRunOutcome.Cancellation(commit);
-            }
-            catch (Exception failure)
-            {
-                // The process never started (bad argv[0], unusable working directory...). No exit code
-                // exists, so none is recorded - the log line says what happened.
-                Log($"zenkins: step {position} \"{step.Name}\" could not be started: {failure.Message}");
-                await ReportStepAsync(
-                    i + 1,
-                    step.Name,
-                    PipelineStepStatus.Failed,
-                    failureReason: PipelineStepFailureReasons.NotStarted,
-                    cancellationToken: cancellationToken);
-                SetCurrentStep(null);
-                if (!step.ContinueOnError)
+                // Attempt one's lines are exactly what they were before this card (AC-7). A later attempt
+                // is prefixed by its own delimiter and does not repeat the script echo: the text is in the
+                // log once, the delimiter is what separates the sections.
+                if (attempt > 1)
                 {
-                    await SkipRemainingAsync(
-                        steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
-                    return PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
+                    Log($"zenkins: step {position} \"{step.Name}\" --- attempt {attempt}/{attemptsAllowed} ---");
                 }
 
-                failedIndex ??= i + 1;
-                continue;
-            }
+                // F-020: a script step's header echoes the script verbatim (references stay references -
+                // names are not values) instead of the useless "shell + temp file" command line. The file
+                // that actually runs holds the resolved text; the redactor covers the resolved lines here
+                // as it covers everything else.
+                if (step.IsScript)
+                {
+                    Log($"zenkins: step {position} \"{step.Name}\" started: script ({step.Script!.Length} "
+                        + $"characters, {(OperatingSystem.IsWindows() ? "cmd" : "sh")}).");
+                    if (attempt == 1)
+                    {
+                        LogScript(step.Script);
+                    }
+                }
+                else
+                {
+                    Log($"zenkins: step {position} \"{step.Name}\" started: {Render(argv)}");
+                }
 
-            stopwatch.Stop();
-            var duration = stopwatch.Elapsed.TotalSeconds.ToString("0.0#", CultureInfo.InvariantCulture);
-            Log($"zenkins: step {position} \"{step.Name}\" exited with code {exitCode} after {duration}s.");
+                // The attempt's own limit, and only when it is the earlier one: the linked source turns a
+                // cancel into the same OperationCanceledException the run's token produces, and
+                // ProcessRunner's cancellation path kills the whole process tree (F-007/F-009's mechanism,
+                // reused - no second kill path exists).
+                var attemptTimeout = ownTimeoutGoverns ? ownTimeout : null;
+                using var attemptCancellation = attemptTimeout is not null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                    : null;
+                attemptCancellation?.CancelAfter(attemptTimeout!.Value);
 
-            // F-016: a step that succeeded publishes what it declared. A failing step publishes nothing, and a
-            // refused path or a breached cap fails the step with the closed artifact reason (the log line names
-            // the path or the limit) - the artifact is never truncated and never silently skipped.
-            if (exitCode == 0 && step.ArtifactPaths.Length > 0)
-            {
-                string? artifactFailure;
+                var stopwatch = Stopwatch.StartNew();
+                exitCode = null;
+                stepFailureReason = null;
+                var killedByItsOwnTimeout = false;
                 try
                 {
-                    artifactFailure = await PublishArtifactsAsync(step, position, cancellationToken);
+                    using var runner = new ProcessRunner(
+                        new ProcessRunnerOptions
+                        {
+                            FileName = argv[0],
+                            Arguments = [.. argv.Skip(1)],
+
+                            // F-020/F-022: a Freestyle or inline run's steps execute in the run's workspace -
+                            // there is no checkout, so the repository directory stays empty and unused.
+                            WorkingDirectory = string.Equals(
+                                _options.DefinitionSource,
+                                RunDefinitionSources.Repository,
+                                StringComparison.Ordinal)
+                                    ? _options.Work.RepositoryPath
+                                    : _options.Work.WorkspacePath,
+
+                            // The composed environment, in full: the child sees exactly the map env() reports, so
+                            // the two can never disagree about a value or its precedence.
+                            EnvironmentVariables = childEnvironment,
+                        },
+                        OnProcessOutput);
+                    exitCode = await runner.RunAsync(attemptCancellation?.Token ?? cancellationToken);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    // The run was canceled (or its deadline passed) while the upload was in flight: the server's
-                    // upload was aborted with this token, the step records why, and the run reports through
-                    // F-009's canceled endpoint. No Ready row is left behind - the reserved row stays Pending and
-                    // the sweeper closes it.
+                    // F-015: the killed step records *why* it died - a user cancel or the run's deadline - so the
+                    // run page does not have to infer it from the run's own reason. F-032: a cancellation is
+                    // never retried - the run is not the step's to continue.
                     var cancellationReason = _options.CancellationFailureReason?.Invoke()
                         ?? PipelineStepFailureReasons.Canceled;
-                    Log($"zenkins: step {position} \"{step.Name}\" was killed while publishing its artifact.");
+                    Log($"zenkins: step {position} \"{step.Name}\" was killed by the run's cancellation.");
                     await ReportStepAsync(
                         i + 1,
                         step.Name,
                         PipelineStepStatus.Failed,
                         failureReason: cancellationReason,
+                        attempts: attempt,
                         cancellationToken: CancellationToken.None);
                     SetCurrentStep(null);
                     await SkipRemainingAsync(
                         steps, i + 1, PipelineStepFailureReasons.RunCanceled, CancellationToken.None);
                     return PipelineRunOutcome.Cancellation(commit);
                 }
-
-                if (artifactFailure is not null)
+                catch (OperationCanceledException)
                 {
-                    await ReportStepAsync(
-                        i + 1,
-                        step.Name,
-                        PipelineStepStatus.Failed,
-                        failureReason: artifactFailure,
-                        cancellationToken: cancellationToken);
-                    SetCurrentStep(null);
-                    if (!step.ContinueOnError)
-                    {
-                        await SkipRemainingAsync(
-                            steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
-                        return PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
-                    }
+                    // Only this attempt's timer can have fired here (the run's token is the filter above),
+                    // so the step hit the limit it declared itself.
+                    stopwatch.Stop();
+                    killedByItsOwnTimeout = true;
+                    stepFailureReason = PipelineStepFailureReasons.StepTimeout;
+                    Log($"zenkins: step {position} \"{step.Name}\" hit its own {Seconds(attemptTimeout!.Value)}s "
+                        + $"timeout and was killed after {Seconds(stopwatch.Elapsed)}s "
+                        + $"(attempt {attempt}/{attemptsAllowed}).");
+                }
+                catch (Exception failure)
+                {
+                    // The process never started (bad argv[0], unusable working directory...). No exit code
+                    // exists, so none is recorded - the log line says what happened.
+                    stopwatch.Stop();
+                    stepFailureReason = PipelineStepFailureReasons.NotStarted;
+                    Log($"zenkins: step {position} \"{step.Name}\" could not be started: {failure.Message}");
+                }
 
-                    Log($"zenkins: step {position} \"{step.Name}\" failed but continue_on_error is set; "
-                        + "running the remaining step(s).");
-                    failedIndex ??= i + 1;
+                if (!killedByItsOwnTimeout && stepFailureReason is null)
+                {
+                    stopwatch.Stop();
+                    var duration = stopwatch.Elapsed.TotalSeconds.ToString("0.0#", CultureInfo.InvariantCulture);
+                    Log($"zenkins: step {position} \"{step.Name}\" exited with code {exitCode} after {duration}s.");
+                    if (exitCode == 0)
+                    {
+                        break;
+                    }
+                }
+
+                // A failed or timed-out attempt: retry while the step declared attempts left and the run
+                // itself is still wanted. The delimiter line for the next attempt is written at the top of
+                // the loop, so each attempt's output is one delimited section (AC-4).
+                if (attempt < attemptsAllowed && !cancellationToken.IsCancellationRequested)
+                {
+                    Log(stepFailureReason is { } attemptReason
+                        ? $"zenkins: step {position} \"{step.Name}\" attempt {attempt}/{attemptsAllowed} ended "
+                            + $"({attemptReason}); retrying."
+                        : $"zenkins: step {position} \"{step.Name}\" attempt {attempt}/{attemptsAllowed} exited "
+                            + $"with code {exitCode}; retrying.");
                     continue;
                 }
+
+                break;
             }
 
-            await ReportStepAsync(
-                i + 1,
-                step.Name,
-                exitCode == 0 ? PipelineStepStatus.Success : PipelineStepStatus.Failed,
-                exitCode: exitCode,
-                cancellationToken: cancellationToken);
-            SetCurrentStep(null);
-
-            if (exitCode == 0)
+            if (exitCode == 0 && stepFailureReason is null)
             {
+                // F-016: a step that succeeded publishes what it declared. A failing step publishes nothing, and a
+                // refused path or a breached cap fails the step with the closed artifact reason (the log line names
+                // the path or the limit) - the artifact is never truncated and never silently skipped.
+                if (step.ArtifactPaths.Length > 0)
+                {
+                    string? artifactFailure;
+                    try
+                    {
+                        artifactFailure = await PublishArtifactsAsync(step, position, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // The run was canceled (or its deadline passed) while the upload was in flight: the server's
+                        // upload was aborted with this token, the step records why, and the run reports through
+                        // F-009's canceled endpoint. No Ready row is left behind - the reserved row stays Pending and
+                        // the sweeper closes it.
+                        var cancellationReason = _options.CancellationFailureReason?.Invoke()
+                            ?? PipelineStepFailureReasons.Canceled;
+                        Log($"zenkins: step {position} \"{step.Name}\" was killed while publishing its artifact.");
+                        await ReportStepAsync(
+                            i + 1,
+                            step.Name,
+                            PipelineStepStatus.Failed,
+                            failureReason: cancellationReason,
+                            attempts: attempt,
+                            cancellationToken: CancellationToken.None);
+                        SetCurrentStep(null);
+                        await SkipRemainingAsync(
+                            steps, i + 1, PipelineStepFailureReasons.RunCanceled, CancellationToken.None);
+                        return PipelineRunOutcome.Cancellation(commit);
+                    }
+
+                    if (artifactFailure is not null)
+                    {
+                        await ReportStepAsync(
+                            i + 1,
+                            step.Name,
+                            PipelineStepStatus.Failed,
+                            failureReason: artifactFailure,
+                            attempts: attempt,
+                            cancellationToken: cancellationToken);
+                        SetCurrentStep(null);
+                        if (!step.ContinueOnError)
+                        {
+                            await SkipRemainingAsync(
+                                steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
+                            return PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
+                        }
+
+                        Log($"zenkins: step {position} \"{step.Name}\" failed but continue_on_error is set; "
+                            + "running the remaining step(s).");
+                        failedIndex ??= i + 1;
+                        continue;
+                    }
+                }
+
+                await ReportStepAsync(
+                    i + 1,
+                    step.Name,
+                    PipelineStepStatus.Success,
+                    exitCode: 0,
+                    attempts: attempt,
+                    cancellationToken: cancellationToken);
+                SetCurrentStep(null);
                 continue;
             }
 
-            // The failing step's own code is the record; nothing else is claimed about why. The line names
-            // the step explicitly, so the log says which step failed whether or not the run continues.
-            Log($"zenkins: step {position} \"{step.Name}\" failed with exit code {exitCode}.");
+            // The terminal record of a step that never succeeded: the final attempt's exit code (null when
+            // it was killed or never started) and, when nothing exited, why - one row, not one per attempt.
+            await ReportStepAsync(
+                i + 1,
+                step.Name,
+                PipelineStepStatus.Failed,
+                exitCode: exitCode,
+                failureReason: stepFailureReason,
+                attempts: attempt,
+                cancellationToken: cancellationToken);
+            SetCurrentStep(null);
+
+            if (exitCode is { } failedCode)
+            {
+                // The failing step's own code is the record; nothing else is claimed about why. The line names
+                // the step explicitly, so the log says which step failed whether or not the run continues.
+                Log($"zenkins: step {position} \"{step.Name}\" failed with exit code {failedCode}.");
+            }
+
             failedIndex ??= i + 1;
             failedExitCode ??= exitCode;
+            failedReason ??= RunFailureReasonForStep(step, stepFailureReason, attempt);
             if (!step.ContinueOnError)
             {
                 await SkipRemainingAsync(
                     steps, i + 1, PipelineStepFailureReasons.PreviousStepFailed, cancellationToken);
-                return PipelineRunOutcome.StepFailed(exitCode, commit);
+                return PipelineRunOutcome.StepFailedWith(
+                    exitCode, failedReason!, commit);
             }
 
             Log($"zenkins: step {position} \"{step.Name}\" failed but continue_on_error is set; "
@@ -827,10 +936,12 @@ public sealed class PipelineRunner
 
             // F-016: a step that failed only because its artifact could not be published never exited
             // non-zero, so no exit code exists to record - the reason carries it (the same rule the other
-            // "nothing ran" failures follow: never invent a code).
+            // "nothing ran" failures follow: never invent a code). F-032: the reason is the first failing
+            // step's own typed one when it has one (`step-timeout`, `step-retry-exhausted`).
+            var runFailureReason = failedReason ?? PipelineFailureReasons.StepFailed;
             return failedExitCode is { } failedCode
-                ? PipelineRunOutcome.StepFailed(failedCode, commit)
-                : PipelineRunOutcome.Failed(PipelineFailureReasons.StepFailed, commit);
+                ? PipelineRunOutcome.StepFailedWith(failedCode, runFailureReason, commit)
+                : PipelineRunOutcome.Failed(runFailureReason, commit);
         }
 
         return PipelineRunOutcome.Succeeded(commit);
@@ -868,10 +979,11 @@ public sealed class PipelineRunner
         string status,
         int? exitCode = null,
         string? failureReason = null,
+        int? attempts = null,
         CancellationToken cancellationToken = default)
     {
         var receipt = await _options.StepSink.ReportAsync(
-            new PipelineStepReport(index, name, status, exitCode, failureReason),
+            new PipelineStepReport(index, name, status, exitCode, failureReason, attempts),
             cancellationToken);
         if (!receipt.Accepted)
         {
@@ -1011,6 +1123,26 @@ public sealed class PipelineRunner
             return PipelineStepFailureReasons.ArtifactFailed;
         }
     }
+
+    /// <summary>
+    /// Card F-032: the run-level reason a failed step produces. The last attempt's cause names the reason
+    /// when it is a typed one; otherwise a step that declared a retry and used more than one attempt says
+    /// its attempts were exhausted (a different next step for the reader than a plain one-shot failure),
+    /// and a step without the knob keeps the pre-F-032 word.
+    /// </summary>
+    private static string RunFailureReasonForStep(
+        PipelineStep step,
+        string? stepFailureReason,
+        int attempts) =>
+        stepFailureReason == PipelineStepFailureReasons.StepTimeout
+            ? PipelineFailureReasons.StepTimeout
+            : step.Retry is not null && attempts > 1
+                ? PipelineFailureReasons.StepRetryExhausted
+                : PipelineFailureReasons.StepFailed;
+
+    /// <summary>A duration for a log line, in seconds with one optional decimal (culture-invariant).</summary>
+    private static string Seconds(TimeSpan value) =>
+        value.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture);
 
     private static string Render(IReadOnlyList<string> argv)
     {

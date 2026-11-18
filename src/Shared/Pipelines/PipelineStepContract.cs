@@ -66,6 +66,14 @@ public static class PipelineStepFailureReasons
     /// </summary>
     public const string TimedOut = "timed-out";
 
+    /// <summary>
+    /// Failed: the step's <b>own</b> declared timeout (<c>timeout = 600</c>) was exceeded, so its process tree
+    /// was killed (card F-032). Deliberately a different value from <see cref="TimedOut"/>: "this step hit its
+    /// own limit" is not "the run ran out of time", and the run's page and log must be able to say which of
+    /// the two fired.
+    /// </summary>
+    public const string StepTimeout = "step-timeout";
+
     /// <summary>Failed: the process could not be started at all (bad argv[0], unusable work directory).</summary>
     public const string NotStarted = "not-started";
 
@@ -102,8 +110,8 @@ public static class PipelineStepFailureReasons
     /// <summary>Every reason a report may carry.</summary>
     public static IReadOnlyList<string> All { get; } =
         [
-            Canceled, TimedOut, NotStarted, SecretUnavailable, ArtifactPathRejected, ArtifactFailed,
-            WhenNotMatched, PreviousStepFailed, RunCanceled,
+            Canceled, TimedOut, StepTimeout, NotStarted, SecretUnavailable, ArtifactPathRejected,
+            ArtifactFailed, WhenNotMatched, PreviousStepFailed, RunCanceled,
         ];
 
     /// <summary>The reasons a <see cref="PipelineStepStatus.Skipped"/> report may carry.</summary>
@@ -111,7 +119,7 @@ public static class PipelineStepFailureReasons
 
     /// <summary>The reasons a <see cref="PipelineStepStatus.Failed"/> report may carry.</summary>
     public static IReadOnlyList<string> FailReasons { get; } =
-        [Canceled, TimedOut, NotStarted, SecretUnavailable, ArtifactPathRejected, ArtifactFailed];
+        [Canceled, TimedOut, StepTimeout, NotStarted, SecretUnavailable, ArtifactPathRejected, ArtifactFailed];
 
     /// <summary>Whether <paramref name="status"/> with <paramref name="failureReason"/> is a legal pair.</summary>
     public static bool IsLegal(string status, string? failureReason) => status switch

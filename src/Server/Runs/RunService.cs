@@ -436,7 +436,8 @@ public sealed record RunStepView(
     DateTimeOffset? StartedAt,
     DateTimeOffset? EndedAt,
     int? ExitCode,
-    string? FailureReason)
+    string? FailureReason,
+    int Attempts = 1)
 {
     /// <summary>Whether the step is declared but not reached (no row recorded).</summary>
     public bool IsPending => Status == PipelineStepStatus.Pending;
@@ -577,7 +578,8 @@ public sealed record RunStepReport(
     string? Name,
     string? Status,
     int? ExitCode = null,
-    string? FailureReason = null);
+    string? FailureReason = null,
+    int? Attempts = null);
 
 /// <summary>The answer of a step report: the recorded row's id (which the worker stamps on the step's
 /// log lines), its state and the run's state.</summary>
@@ -2681,6 +2683,16 @@ public sealed class RunService(
                 return RunStepResult.Invalid(RunErrorCodes.FieldInvalid);
             }
 
+            // F-032: the attempt count is bounded by the schema's own retry cap, and only a terminal report
+            // carries one ("Running" has no attempt to count yet). Null means the default, one attempt.
+            if (report.Attempts is { } reportedAttempts
+                && (reportedAttempts < PipelineSpecSchema.MinStepRetry
+                    || reportedAttempts > PipelineSpecSchema.MaxStepRetry
+                    || status == PipelineStepStatus.Running))
+            {
+                return RunStepResult.Invalid(RunErrorCodes.FieldInvalid);
+            }
+
             // 2. The run: this worker's, still Running, and carrying the frozen spec the step belongs to.
             //    The lookup goes through the tenant query filter, so a foreign run id is the same 404.
             var run = await context.BuildRuns
@@ -2752,6 +2764,9 @@ public sealed class RunService(
                     ExitCode = report.ExitCode,
                     FailureReason = report.FailureReason,
 
+                    // F-032: the attempt count rides on the terminal report; absent means one attempt.
+                    Attempts = report.Attempts ?? 1,
+
                     // A skipped step never ran, so it has no start instant; a coalesced terminal report
                     // (a single Success/Failed without a preceding Running) starts and ends now.
                     StartedAt = status == PipelineStepStatus.Skipped ? null : now,
@@ -2776,6 +2791,7 @@ public sealed class RunService(
                 row.Status = status!;
                 row.ExitCode = report.ExitCode;
                 row.FailureReason = report.FailureReason;
+                row.Attempts = report.Attempts ?? row.Attempts;
                 row.StartedAt ??= status == PipelineStepStatus.Skipped ? null : now;
                 if (PipelineStepStatus.IsTerminal(status))
                 {
@@ -2808,13 +2824,14 @@ public sealed class RunService(
             }
 
             logger.LogInformation(
-                "Run step recorded. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} StepIndex={StepIndex} StepStatus={StepStatus} ExitCode={ExitCode}",
+                "Run step recorded. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} StepIndex={StepIndex} StepStatus={StepStatus} ExitCode={ExitCode} Attempts={Attempts}",
                 run.OrganizationId,
                 runId,
                 worker.Id,
                 report.Index,
                 row.Status,
-                row.ExitCode);
+                row.ExitCode,
+                row.Attempts);
             return RunStepResult.Success(row.Id, row.Status, run.Status);
         }
         finally
@@ -3729,7 +3746,8 @@ public sealed class RunService(
         step.StartedAt,
         step.EndedAt,
         step.ExitCode,
-        step.FailureReason);
+        step.FailureReason,
+        step.Attempts);
 
     /// <summary>
     /// The frozen spec as the page reads it (card F-014). A row whose JSON no longer parses is rendered

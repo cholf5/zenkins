@@ -3,6 +3,7 @@ using System.Text;
 using Xunit;
 using Xunit.Sdk;
 using Zenkins.Shared.Pipelines;
+using Zenkins.Shared.RunCancellation;
 using Zenkins.Worker;
 using Zenkins.Worker.Git;
 using Zenkins.Worker.Lua;
@@ -579,6 +580,383 @@ public sealed class PipelineRunnerTests
         Assert.StartsWith("zenkins: pipeline.lua:(", line, StringComparison.Ordinal);
         Assert.Matches(@"^zenkins: pipeline\.lua:\(1,\d+\)", line);
     }
+    // ------------------------------------------------------------------
+    // F-032: step-level timeout and retry
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_hanging_step_is_killed_at_its_own_timeout_with_its_process_tree()
+    {
+        // TC-001. The step declares two seconds while the run has two minutes, so the step's own limit is
+        // the earlier one - and the child it spawned must die with it (the same tree kill a cancel uses).
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "hanging",
+                PipelineTestData.StepWith("Sleeps", timeoutSeconds: 2, retry: null, "spawn", "30000"),
+                PipelineTestData.Step("After", "append", "marker.txt", "after")));
+        using var run = new PipelineRunHarness(repository);
+
+        var clock = Stopwatch.StartNew();
+        var outcome = await run.ExecuteAsync(CancellationToken);
+        clock.Stop();
+
+        // The typed reason is the step's own limit, not the run's deadline - and the run recorded no exit
+        // code, because nothing exited: the tree was killed.
+        Assert.Equal(PipelineFailureReasons.StepTimeout, outcome.FailureReason);
+        Assert.Null(outcome.ExitCode);
+        Assert.True(
+            clock.Elapsed < TimeSpan.FromSeconds(40),
+            $"the step was not stopped by its own limit: the run took {clock.Elapsed.TotalSeconds:0.#}s");
+
+        // The step after it never ran (default stop), and the run failed on the step's own limit.
+        Assert.False(File.Exists(Path.Combine(run.Work.RepositoryPath, "marker.txt")));
+        var killed = Terminal(run, 1);
+        Assert.Equal(PipelineStepStatus.Failed, killed.Status);
+        Assert.Equal(PipelineStepFailureReasons.StepTimeout, killed.FailureReason);
+        Assert.Null(killed.ExitCode);
+        Assert.Equal(1, killed.Attempts);
+        Assert.Equal(PipelineStepStatus.Skipped, Terminal(run, 2).Status);
+
+        // The log says which limit fired, and nothing claims the run's deadline did.
+        Assert.Contains(run.LogLines, line => line.Contains(
+            "the earlier limit is the step's own", StringComparison.Ordinal));
+        Assert.Contains(run.LogLines, line => line.Contains(
+            "hit its own 2s timeout and was killed", StringComparison.Ordinal));
+        Assert.DoesNotContain(run.LogLines, line => line.Contains(
+            "killed by the run's cancellation", StringComparison.Ordinal));
+
+        // The process tree, not just the child: the grandchild the step spawned is gone too.
+        var grandchildLine = Assert.Single(run.OutputLines, line => line.StartsWith("grandchild-pid ", StringComparison.Ordinal));
+        var grandchildPid = int.Parse(
+            grandchildLine["grandchild-pid ".Length..],
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.True(
+            await WaitForProcessExitAsync(grandchildPid, TimeSpan.FromSeconds(15)),
+            "the step's grandchild survived the step timeout (orphan)");
+    }
+
+    [Fact]
+    public async Task A_step_timeout_with_continue_on_error_is_a_normal_failure_and_the_run_goes_on()
+    {
+        // AC-2's other half: the kill is this step's failure, not the run's cancellation. With
+        // continue_on_error the next step still runs - and the run still ends Failed, naming the limit that
+        // fired (a failure is never laundered into a success).
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "continue-after-timeout",
+                PipelineTestData.StepWithContinueOnError("Slow", timeoutSeconds: 2, retry: null, "stream", "30000"),
+                PipelineTestData.Step("After", "append", "marker.txt", "after")));
+        using var run = new PipelineRunHarness(repository);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        // The step after the killed one really ran (its own marker is the proof).
+        Assert.Equal(["after"], File.ReadAllLines(Path.Combine(run.Work.RepositoryPath, "marker.txt")));
+        Assert.Equal(PipelineStepStatus.Failed, Terminal(run, 1).Status);
+        Assert.Equal(PipelineStepFailureReasons.StepTimeout, Terminal(run, 1).FailureReason);
+        Assert.Equal(PipelineStepStatus.Success, Terminal(run, 2).Status);
+
+        // The run failed on the step's own limit, with no invented exit code.
+        Assert.Equal(PipelineFailureReasons.StepTimeout, outcome.FailureReason);
+        Assert.Null(outcome.ExitCode);
+    }
+
+    [Fact]
+    public async Task A_step_without_a_timeout_gets_no_implicit_one()
+    {
+        // AC-7(b): a step that declares no limit must have none. Six and a half seconds of real work is
+        // the assertion - a default of "?? 5s" (or any other invented limit) kills it, and the suite before
+        // this fact could not tell the difference because no step ran longer than a second.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "no-limit",
+                PipelineTestData.StepWith("Slow", timeoutSeconds: null, retry: null, "stream", "6500")));
+        using var run = new PipelineRunHarness(repository);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+        var step = Terminal(run, 1);
+        Assert.Equal(PipelineStepStatus.Success, step.Status);
+        Assert.Equal(0, step.ExitCode);
+
+        // And nothing in the log claims a limit (there is none to name).
+        Assert.DoesNotContain(run.LogLines, line => line.Contains("declares its own", StringComparison.Ordinal));
+        Assert.DoesNotContain(run.LogLines, line => line.Contains("declares a", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_user_cancel_beats_a_long_step_timeout_because_the_attempt_is_linked_to_the_run()
+    {
+        // AC-3's link: the attempt's timer is a source linked to the run's token. The step's own limit must
+        // be the EARLIER one (300 s against a 10-minute run), otherwise the clamp installs no timer at all
+        // and this fact would pass without ever building the linked source. With the timer installed and
+        // cancellation requested, the step must die at once - an attempt that watched only its own limit
+        // would sit for the child's whole 30-second sleep.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "cancel-with-limit",
+                PipelineTestData.StepWith("Long", timeoutSeconds: 300, retry: 3, "stream", "30000")));
+        using var run = new PipelineRunHarness(repository) { Deadline = DateTimeOffset.UtcNow.AddMinutes(10) };
+        using var cancellation = new CancellationTokenSource();
+
+        var clock = Stopwatch.StartNew();
+        var execution = run.ExecuteAsync(cancellation.Token);
+
+        await WaitForConditionAsync(
+            () => run.StepReports.Any(report => report.Index == 1 && report.Status == PipelineStepStatus.Running),
+            TimeSpan.FromSeconds(15));
+        cancellation.Cancel();
+
+        var outcome = await execution.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken);
+        clock.Stop();
+
+        Assert.True(outcome.Canceled);
+        Assert.True(
+            clock.Elapsed < TimeSpan.FromSeconds(15),
+            $"the cancel took {clock.Elapsed.TotalSeconds:0.#}s: the attempt did not observe the run's token");
+
+        var killed = Terminal(run, 1);
+        Assert.Equal(PipelineStepFailureReasons.Canceled, killed.FailureReason);
+        Assert.NotEqual(PipelineStepFailureReasons.StepTimeout, killed.FailureReason);
+        Assert.Equal(1, killed.Attempts);
+        Assert.DoesNotContain(run.LogLines, line => line.Contains("--- attempt 2/3 ---", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_flaky_step_is_retried_and_still_succeeds_in_one_step_record()
+    {
+        // TC-002: the first attempt exits 3, the second one succeeds. One record, Attempts = 2, exit 0 - and
+        // the attempt sections are delimited in the step's log.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "flaky",
+                PipelineTestData.StepWith("Unstable", timeoutSeconds: null, retry: 2, "flaky", "attempts.txt", "1"),
+                PipelineTestData.Step("After", "append", "marker.txt", "after")));
+        using var run = new PipelineRunHarness(repository);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+
+        // The child really ran twice (its own counter file says so), and the run continued past the step.
+        Assert.Equal(
+            ["2"],
+            File.ReadAllLines(Path.Combine(run.Work.RepositoryPath, "attempts.txt")).Select(line => line.Trim()));
+        Assert.True(File.Exists(Path.Combine(run.Work.RepositoryPath, "marker.txt")));
+
+        // One record for the step, carrying the final exit code and the attempt count.
+        var reports = run.StepReports.Where(report => report.Index == 1).ToArray();
+        Assert.Equal(2, reports.Length); // one Running + one terminal: not one per attempt
+        var terminal = Assert.Single(reports, report => report.Status != PipelineStepStatus.Running);
+        Assert.Equal(PipelineStepStatus.Success, terminal.Status);
+        Assert.Equal(0, terminal.ExitCode);
+        Assert.Equal(2, terminal.Attempts);
+
+        // Two delimited attempt sections in this step's log: the first attempt's failure, then the delimiter.
+        Assert.Contains(run.LogLines, line => line.Contains("attempt 1/2 exited with code 3; retrying", StringComparison.Ordinal));
+        Assert.Contains(run.LogLines, line => line.Contains("--- attempt 2/2 ---", StringComparison.Ordinal));
+        Assert.Equal(
+            2,
+            run.LogLines.Count(line => line.Contains("\"Unstable\" started:", StringComparison.Ordinal)));
+
+        // The next step declared neither knob: one attempt, no delimiter, unchanged behaviour.
+        var after = Assert.Single(run.StepReports, report => report.Index == 2 && report.Status == PipelineStepStatus.Success);
+        Assert.Equal(1, after.Attempts);
+        Assert.DoesNotContain(run.LogLines, line => line.Contains("attempt 1/1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_cancellation_is_never_retried_even_when_the_step_declares_attempts()
+    {
+        // TC-003: retry = 3, cancelled during the first attempt. No second attempt starts.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "cancelled",
+                PipelineTestData.StepWith("Long", timeoutSeconds: null, retry: 3, "stream", "30000")));
+        using var run = new PipelineRunHarness(repository);
+        using var cancellation = new CancellationTokenSource();
+
+        var execution = run.ExecuteAsync(cancellation.Token);
+
+        // Cancel once the step is really running (the executor reported Running), so the attempt exists.
+        await WaitForConditionAsync(
+            () => run.StepReports.Any(report => report.Index == 1 && report.Status == PipelineStepStatus.Running),
+            TimeSpan.FromSeconds(15));
+        cancellation.Cancel();
+
+        var outcome = await execution.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken);
+
+        Assert.True(outcome.Canceled);
+        var killed = Terminal(run, 1);
+        Assert.Equal(PipelineStepStatus.Failed, killed.Status);
+        Assert.Equal(PipelineStepFailureReasons.Canceled, killed.FailureReason);
+        Assert.Equal(1, killed.Attempts);
+
+        // No retry happened: no delimiter, and no second "started" line.
+        Assert.DoesNotContain(run.LogLines, line => line.Contains("--- attempt 2/3 ---", StringComparison.Ordinal));
+        Assert.Single(run.LogLines, line => line.Contains("\"Long\" started:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_step_limit_is_clamped_by_the_runs_remaining_deadline_and_the_log_says_which_fired()
+    {
+        // AC-3, both directions. The earlier of the two limits governs, and which one it was is readable
+        // from the log and from the two stored reasons (`step-timeout` vs `timed-out`).
+
+        // (a) The run's deadline is earlier: a 3600s step limit cannot fire first, so no step timer is
+        // installed, F-009's cancel stops the step, and the record says the run's deadline did it.
+        using (var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "deadline-governs",
+                PipelineTestData.StepWith("Long", timeoutSeconds: 3600, retry: null, "stream", "30000"))))
+        using (var run = new PipelineRunHarness(repository)
+               {
+                   Deadline = DateTimeOffset.UtcNow.AddSeconds(2),
+                   CancellationFailureReason = () => StepCancellationReason.For(RunCancelReasons.Timeout),
+               })
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+        {
+            var outcome = await run.ExecuteAsync(cancellation.Token);
+
+            Assert.True(outcome.Canceled);
+            var step = Terminal(run, 1);
+            Assert.Equal(PipelineStepStatus.Failed, step.Status);
+            Assert.Equal(PipelineStepFailureReasons.TimedOut, step.FailureReason);
+            Assert.NotEqual(PipelineStepFailureReasons.StepTimeout, step.FailureReason);
+
+            Assert.Contains(run.LogLines, line => line.Contains(
+                "the earlier limit is the run's deadline, and it governs", StringComparison.Ordinal));
+            Assert.DoesNotContain(run.LogLines, line => line.Contains(
+                "hit its own", StringComparison.Ordinal));
+        }
+
+        // (b) The step's limit is earlier: it fires, and the log says so - the reverse sentence.
+        using (var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "step-governs",
+                PipelineTestData.StepWith("Short", timeoutSeconds: 2, retry: null, "stream", "30000"))))
+        using (var run = new PipelineRunHarness(repository) { Deadline = DateTimeOffset.UtcNow.AddMinutes(2) })
+        {
+            var outcome = await run.ExecuteAsync(CancellationToken);
+
+            Assert.Equal(PipelineFailureReasons.StepTimeout, outcome.FailureReason);
+            Assert.Contains(run.LogLines, line => line.Contains(
+                "the earlier limit is the step's own", StringComparison.Ordinal));
+            Assert.DoesNotContain(run.LogLines, line => line.Contains(
+                "the earlier limit is the run's deadline", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task A_retry_does_not_resolve_the_steps_secrets_a_second_time()
+    {
+        // AC-6: secrets are resolved once per step, before the first attempt - a retry re-runs the process
+        // with the values it already has. Two independent assertions, because "resolved again" has two
+        // shapes: the source is asked once (a real second fetch would be visible), AND the value the second
+        // attempt received is the FIRST attempt's value - the source hands out a different value per fetch
+        // (v1, v2, ...), so a re-resolution that produced a fresh value shows up in the child's own file.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "secret-retry",
+                PipelineTestData.StepWithSecretEnv(
+                    "UsesSecret", retry: 2, "TOKEN", "flaky-env", "attempts.txt", "1", "TOKEN", "attempt-env.txt")));
+        var secrets = new CountingSecretSource();
+        using var run = new PipelineRunHarness(repository) { Secrets = secrets };
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Equal(2, Terminal(run, 1).Attempts);
+
+        // One fetch, for one name.
+        Assert.Equal(1, secrets.Fetches);
+        Assert.Equal(["TOKEN"], secrets.Names);
+
+        // Both attempts saw "v1": the text is written by the child itself, into a file (the log would have
+        // been redacted), so this is the value the second process really ran with.
+        Assert.Equal(
+            ["1 TOKEN=v1", "2 TOKEN=v1"],
+            File.ReadAllLines(Path.Combine(run.Work.RepositoryPath, "attempt-env.txt"))
+                .Select(line => line.Trim()));
+    }
+
+    /// <summary>
+    /// A secret source that counts how often it is asked and by which names (card F-032's "resolved once
+    /// per step" fact). The value is registered with the run's redactor by the resolver, exactly as a real
+    /// fetch's would be.
+    /// </summary>
+    private sealed class CountingSecretSource : IRunSecretSource
+    {
+        public int Fetches { get; private set; }
+
+        public List<string> Names { get; } = [];
+
+        public Task<RunSecretResult> FetchAsync(string name, CancellationToken cancellationToken)
+        {
+            Fetches++;
+            Names.Add(name);
+
+            // A different value per fetch: "v1", "v2", ... A step that resolved twice would then visibly run
+            // the second attempt with a different value, not merely with the same one twice.
+            return Task.FromResult(RunSecretResult.Found($"v{Fetches}"));
+        }
+    }
+
+    /// <summary>The terminal report of one step position (the record the run's step row would become).</summary>
+    private static PipelineStepReport Terminal(PipelineRunHarness run, int index) =>
+        Assert.Single(
+            run.StepReports,
+            report => report.Index == index && report.Status != PipelineStepStatus.Running);
+
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(50, CancellationToken);
+        }
+
+        Assert.Fail("the condition was not met within the timeout.");
+    }
+
+    private static async Task<bool> WaitForProcessExitAsync(int pid, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (IsProcessGone(pid))
+            {
+                return true;
+            }
+
+            await Task.Delay(100, CancellationToken);
+        }
+
+        return IsProcessGone(pid);
+    }
+
+    private static bool IsProcessGone(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            // No such process: already gone (and reaped by whoever owns it).
+            return true;
+        }
+    }
+
     private sealed class PipelineRunHarness : IDisposable
     {
         private readonly string _workRoot = Path.Combine(
@@ -652,6 +1030,23 @@ public sealed class PipelineRunnerTests
         /// <summary>Runs between the definition report and the first step (TC-004's "the branch moved").</summary>
         public Action? BeforeFirstStep { get; init; }
 
+        /// <summary>
+        /// Card F-032: the run's secret source. The default has none, so a <c>secret()</c> reference fails
+        /// the step; the retry fact passes a counting one to prove a retry does not fetch again.
+        /// </summary>
+        public IRunSecretSource Secrets { get; init; } = EmptyRunSecretSource.Instance;
+
+        /// <summary>
+        /// Card F-032: why the run's cancellation fired, asked when a step is killed. The clamp fact sets
+        /// it to the deadline's answer, exactly as the worker loop does in production.
+        /// </summary>
+        public Func<string?>? CancellationFailureReason { get; init; }
+
+        /// <summary>The step reports the executor sent, in order (one Running and one terminal per step).</summary>
+        public IReadOnlyList<PipelineStepReport> StepReports => StepSink.Reports;
+
+        private RecordingStepSink StepSink { get; } = new();
+
         /// <summary>Answers the commit report with a definitive refusal (409/410 in production).</summary>
         public bool RejectCommitReport { get; init; }
 
@@ -708,6 +1103,9 @@ public sealed class PipelineRunnerTests
                     GitEnvironment = GitEnvironment,
                     Log = Emit,
                     OnProcessOutput = line => _outputLines.Add(line.Line),
+                    Secrets = Secrets,
+                    CancellationFailureReason = CancellationFailureReason,
+                    StepSink = StepSink,
                 },
                 definitions,
                 _ => Task.FromResult<GitCredentialMaterial?>(null),
@@ -754,6 +1152,31 @@ public sealed class PipelineRunnerTests
             // Q-011: a failed delete used to be swallowed (IOException-only) and the root was left in
             // the system temp forever; TempRootCleanup retries the transient failures instead.
             TempRootCleanup.DeleteDirectory(_workRoot);
+        }
+    }
+
+    /// <summary>
+    /// A step sink that records every report (card F-032: the attempt count travels on the terminal one) and
+    /// mints one id per position, the way the server's row does.
+    /// </summary>
+    private sealed class RecordingStepSink : IPipelineStepSink
+    {
+        private readonly Dictionary<int, Guid> _ids = [];
+
+        public List<PipelineStepReport> Reports { get; } = [];
+
+        public Task<PipelineStepReceipt> ReportAsync(
+            PipelineStepReport report,
+            CancellationToken cancellationToken)
+        {
+            if (!_ids.TryGetValue(report.Index, out var id))
+            {
+                id = Guid.NewGuid();
+                _ids[report.Index] = id;
+            }
+
+            Reports.Add(report);
+            return Task.FromResult(PipelineStepReceipt.Recorded(id));
         }
     }
 

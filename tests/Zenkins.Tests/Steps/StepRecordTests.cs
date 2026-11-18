@@ -646,6 +646,203 @@ public sealed class StepRecordTests
         step.TrimEnd()[..^1] + ", continue_on_error = true }";
 
     /// <summary>A step that appends its name to the marker file (the tree is the proof that it ran).</summary>
+    // ------------------------------------------------------------------
+    // F-032: the attempt count on the one step row
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_step_record_carries_the_attempt_count_and_the_final_exit_code()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "attempts",
+                MarkerStep("Restore", "restore"),
+                MarkerStep("Build", "build")));
+        using var host = await RunTestHost.CreateAsync();
+        using var run = await StepsRun.StartAsync(host, repository);
+
+        using (var definition = await RunTestHost.ReportDefinitionAsync(
+            run.WorkerClient,
+            run.WorkerToken,
+            run.RunId,
+            PipelineSpecJson.Serialize(new PipelineSpec(
+                PipelineSpecSchema.Version,
+                "attempts",
+                [new PipelineStep("Restore", Run: ["echo"]), new PipelineStep("Build", Run: ["echo"])]))))
+        {
+            Assert.Equal(HttpStatusCode.OK, definition.StatusCode);
+        }
+
+        // The attempt count is bounded by the schema's own cap, and only a terminal report has one.
+        using (var running = await RunTestHost.ReportStepAsync(
+            run.WorkerClient, run.WorkerToken, run.RunId, 1, "Restore", PipelineStepStatus.Running))
+        {
+            Assert.Equal(HttpStatusCode.OK, running.StatusCode);
+        }
+
+        using (var runningWithAttempts = await RunTestHost.ReportStepAsync(
+            run.WorkerClient, run.WorkerToken, run.RunId, 1, "Restore", PipelineStepStatus.Running,
+            attempts: 2))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, runningWithAttempts.StatusCode);
+            Assert.Equal(RunErrorCodes.FieldInvalid, await ReadErrorPropertyAsync(runningWithAttempts));
+        }
+
+        using (var tooMany = await RunTestHost.ReportStepAsync(
+            run.WorkerClient, run.WorkerToken, run.RunId, 1, "Restore", PipelineStepStatus.Failed,
+            exitCode: 3, attempts: 6))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, tooMany.StatusCode);
+            Assert.Equal(RunErrorCodes.FieldInvalid, await ReadErrorPropertyAsync(tooMany));
+        }
+
+        using (var zero = await RunTestHost.ReportStepAsync(
+            run.WorkerClient, run.WorkerToken, run.RunId, 1, "Restore", PipelineStepStatus.Failed,
+            exitCode: 3, attempts: 0))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, zero.StatusCode);
+        }
+
+        // Nothing above was recorded.
+        var beforeTerminal = Assert.Single(await run.ReadStepsAsync());
+        Assert.Equal(PipelineStepStatus.Running, beforeTerminal.Status);
+
+        // A real retried step: one record, the third attempt's exit code, and the attempt count.
+        using (var terminal = await RunTestHost.ReportStepAsync(
+            run.WorkerClient, run.WorkerToken, run.RunId, 1, "Restore", PipelineStepStatus.Failed,
+            exitCode: 3, attempts: 3))
+        {
+            Assert.Equal(HttpStatusCode.OK, terminal.StatusCode);
+        }
+
+        // And a step that declares nothing stays at the default, one.
+        using (var plain = await RunTestHost.ReportStepAsync(
+            run.WorkerClient, run.WorkerToken, run.RunId, 2, "Build", PipelineStepStatus.Success,
+            exitCode: 0))
+        {
+            Assert.Equal(HttpStatusCode.OK, plain.StatusCode);
+        }
+
+        var steps = await run.ReadStepsAsync();
+        Assert.Equal(2, steps.Count);
+        Assert.Equal(3, steps.Single(step => step.Index == 1).Attempts);
+        Assert.Equal(3, steps.Single(step => step.Index == 1).ExitCode);
+        Assert.Equal(1, steps.Single(step => step.Index == 2).Attempts);
+
+        // The page renders the count only when there was more than one attempt.
+        var page = await Zenkins.Tests.Auth.AuthTestHost.GetStringAsync(
+            run.Owner, $"/runs/{run.RunId}");
+        Assert.Contains("attempts 3", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("attempts 1", page, StringComparison.Ordinal);
+
+        // AC-5 on the view side (card F-032): the page lists one <li> per DECLARED step - two here, even
+        // though one of them made three attempts. A page that rendered one row per attempt (or one per
+        // report) would show four here, and every earlier assertion in this fact would still pass.
+        Assert.Equal(
+            2,
+            System.Text.RegularExpressions.Regex.Matches(page, """<li id="run-step-""").Count);
+    }
+
+    [Fact]
+    public async Task A_retried_step_crosses_the_real_step_endpoint_as_one_accepted_record()
+    {
+        // Card F-032, AC-5 through the PRODUCT path: the executor's retry loop talks to the real
+        // `/api/workers/runs/{id}/steps` endpoint (no offline sink), so the server's own index/name/order
+        // rules see both attempts. Two attempts, one row - and the row says both things (Attempts = 2, the
+        // final attempt's exit code).
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "server-retry",
+                PipelineTestData.StepWith("Unstable", timeoutSeconds: null, retry: 2, "flaky", "attempts.txt", "1"),
+                MarkerStep("After", "after")));
+        using var host = await RunTestHost.CreateAsync();
+        using var run = await StepsRun.StartAsync(host, repository);
+
+        var outcome = await run.ExecuteAsync();
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.False(outcome.Canceled);
+        Assert.False(outcome.Abandoned);
+
+        // The child ran twice (its own counter), the server recorded one row for that step, and the row
+        // carries the attempt count plus the final exit code.
+        Assert.Equal(
+            ["2"],
+            File.ReadAllLines(Path.Combine(run.Work.RepositoryPath, "attempts.txt"))
+                .Select(line => line.Trim()));
+
+        var steps = await run.ReadStepsAsync();
+        Assert.Equal(2, steps.Count);
+        var retried = steps.Single(step => step.Index == 1);
+        Assert.Equal(PipelineStepStatus.Success, retried.Status);
+        Assert.Equal(2, retried.Attempts);
+        Assert.Equal(0, retried.ExitCode);
+        Assert.Equal(1, steps.Single(step => step.Index == 2).Attempts);
+
+        // Both transitions went through: the harness's sink appends the report it was handed and *then*
+        // forwards it, so this count is what the executor asked for, not what the server accepted. The
+        // acceptance is what the assertions above already prove - a 400/409 on the second attempt (a stale
+        // index, a duplicated name, an out-of-order position) makes the sink answer Refused, the executor
+        // give the run up, and `Assert.False(outcome.Abandoned)` plus the one-row assertion fail.
+        Assert.Equal(2, run.Reports.Count(report => report.Index == 1));
+
+        // And the page still lists the two declared steps, not the three process runs.
+        var page = await Zenkins.Tests.Auth.AuthTestHost.GetStringAsync(run.Owner, $"/runs/{run.RunId}");
+        Assert.Equal(
+            2,
+            System.Text.RegularExpressions.Regex.Matches(page, """<li id="run-step-""").Count);
+        Assert.Contains("attempts 2", page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_step_whose_retries_are_exhausted_ends_one_failed_record_with_the_last_exit_code()
+    {
+        // Card F-032, the terminal half of AC-5 through the real endpoint: `retry = 2` and a child that fails
+        // EVERY time, so the attempt loop ends on the exhausted branch - the one the success fact can never
+        // reach. Still one row for the declared step (not one per attempt), Attempts = 2, Failed, and the
+        // exit code of the LAST attempt.
+        using var repository = PipelineRepository.Create(
+            PipelineTestData.Pipeline(
+                "exhausted",
+                PipelineTestData.StepWith("AlwaysFails", timeoutSeconds: null, retry: 2, "flaky", "attempts.txt", "99"),
+                MarkerStep("After", "after")));
+        using var host = await RunTestHost.CreateAsync();
+        using var run = await StepsRun.StartAsync(host, repository);
+
+        var outcome = await run.ExecuteAsync();
+
+        // Both attempts really ran, and the run is a failure that names the exhausted retries.
+        Assert.Equal(
+            ["2"],
+            File.ReadAllLines(Path.Combine(run.Work.RepositoryPath, "attempts.txt"))
+                .Select(line => line.Trim()));
+        Assert.Equal(PipelineFailureReasons.StepRetryExhausted, outcome.FailureReason);
+        Assert.Equal(3, outcome.ExitCode);
+        Assert.False(outcome.Abandoned);
+
+        // One record for the step - the same row both attempts' reports addressed.
+        var steps = await run.ReadStepsAsync();
+        Assert.Equal(2, steps.Count);
+        var failed = steps.Single(step => step.Index == 1);
+        Assert.Equal(PipelineStepStatus.Failed, failed.Status);
+        Assert.Equal(2, failed.Attempts);
+        Assert.Equal(3, failed.ExitCode);
+        Assert.Null(failed.FailureReason);
+
+        // The step after a failing step without continue_on_error never ran, and its record says so.
+        Assert.Equal(PipelineStepStatus.Skipped, steps.Single(step => step.Index == 2).Status);
+
+        // Two reports for that one step (Running + terminal), both addressed at index 1.
+        Assert.Equal(2, run.Reports.Count(report => report.Index == 1));
+
+        // And the page still lists the two declared steps, with the attempt count on the failed one.
+        var page = await Zenkins.Tests.Auth.AuthTestHost.GetStringAsync(run.Owner, $"/runs/{run.RunId}");
+        Assert.Equal(
+            2,
+            System.Text.RegularExpressions.Regex.Matches(page, """<li id="run-step-""").Count);
+        Assert.Contains("attempts 2", page, StringComparison.Ordinal);
+    }
+
     private static string MarkerStep(string name, string marker) =>
         PipelineTestData.Step(name, "append", "marker.txt", marker);
 

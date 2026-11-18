@@ -387,7 +387,8 @@ public static class RunEndpoints
                 request.Name,
                 request.Status,
                 request.ExitCode,
-                request.FailureReason),
+                request.FailureReason,
+                request.Attempts),
             httpContext.RequestAborted));
 
     private static IResult MapStepReport(RunStepResult result) => result.Status switch
@@ -560,6 +561,12 @@ public static class RunEndpoints
 
         /// <summary>A <see cref="PipelineStepFailureReasons"/> value, or null.</summary>
         public string? FailureReason { get; set; }
+
+        /// <summary>
+        /// How many attempts the step made (card F-032): absent means one. The Server bounds it by the
+        /// schema's own retry cap, and refuses the field on a <c>Running</c> report (nothing to count yet).
+        /// </summary>
+        public int? Attempts { get; set; }
     }
 
     /// <param name="Commit">

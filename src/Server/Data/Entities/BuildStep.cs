@@ -63,6 +63,15 @@ public sealed class BuildStep : ITenantOwned
     public int? ExitCode { get; set; }
 
     /// <summary>
+    /// How many attempts this step made (card F-032). <b>One</b> unless the step declared <c>retry</c>, in
+    /// which case a failed or timed-out attempt was repeated inside this one row - the step list stays 1:1
+    /// with the definition, so "step N of the frozen spec" keeps its identity for artifacts, conditions and
+    /// the page. The stored exit code is the <b>final</b> attempt's; a cancelled step records the attempt it
+    /// died in.
+    /// </summary>
+    public int Attempts { get; set; } = 1;
+
+    /// <summary>
     /// A <see cref="PipelineStepFailureReasons"/> value, or null. A non-zero exit needs no reason - the
     /// code is the record - so this covers "never exited" (canceled, not started, secret unavailable)
     /// and why a step was skipped.

@@ -16,7 +16,8 @@ public sealed record PipelineStepReport(
     string Name,
     string Status,
     int? ExitCode = null,
-    string? FailureReason = null);
+    string? FailureReason = null,
+    int? Attempts = null);
 
 /// <summary>
 /// What a step report was answered with: whether the server accepted it, and - for a step that now has a

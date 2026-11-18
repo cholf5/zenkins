@@ -151,6 +151,65 @@ public sealed class FreestyleStepsTests
         Assert.Contains("declared twice", Error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_editors_two_numeric_fields_are_parsed_and_bounded_server_side()
+    {
+        // Card F-032: the step's timeout and attempt count travel as the editor's raw text, are parsed here
+        // (never in the browser) and land on the frozen step - blank means "not declared".
+        var json = Build(
+            "knobs",
+            [
+                new FreestyleStepDraft(
+                    Name: "Flaky",
+                    Script: "dotnet test",
+                    EnvLines: null,
+                    ContinueOnError: false,
+                    ArtifactsText: null,
+                    TimeoutSeconds: " 600 ",
+                    Retry: "2"),
+                new FreestyleStepDraft(
+                    Name: "Plain",
+                    Script: "dotnet build",
+                    EnvLines: null,
+                    ContinueOnError: false,
+                    ArtifactsText: null,
+                    TimeoutSeconds: "",
+                    Retry: null),
+            ]);
+
+        Assert.NotNull(json);
+        Assert.True(PipelineSpecJson.TryRead(json, out var spec, out var error), error);
+        Assert.Equal(600, spec!.Steps[0].TimeoutSeconds);
+        Assert.Equal(2, spec.Steps[0].Retry);
+        Assert.Null(spec.Steps[1].TimeoutSeconds);
+        Assert.Null(spec.Steps[1].Retry);
+
+        // Out of bounds, not a number, or not whole: refused with the field path the envelope would use.
+        foreach (var (timeout, retry, expected) in new (string? Timeout, string? Retry, string Expected)[]
+                 {
+                     ("0", null, "pipeline.steps[1].timeoutSeconds must be a whole number between 1 and 86400"),
+                     ("86401", null, "pipeline.steps[1].timeoutSeconds must be a whole number between 1 and 86400"),
+                     ("ten", null, "pipeline.steps[1].timeoutSeconds must be a whole number between 1 and 86400"),
+                     (null, "6", "pipeline.steps[1].retry must be a whole number between 1 and 5"),
+                     (null, "0", "pipeline.steps[1].retry must be a whole number between 1 and 5"),
+                 })
+        {
+            _ = Build(
+                "knobs",
+                [
+                    new FreestyleStepDraft(
+                        Name: "Bad",
+                        Script: "dotnet build",
+                        EnvLines: null,
+                        ContinueOnError: false,
+                        ArtifactsText: null,
+                        TimeoutSeconds: timeout,
+                        Retry: retry),
+                ]);
+            Assert.Contains(expected, Error ?? string.Empty, StringComparison.Ordinal);
+        }
+    }
+
     private static FreestyleStepDraft Step(string name, string script) =>
         new(Name: name, Script: script, EnvLines: null, ContinueOnError: false, ArtifactsText: null);
 

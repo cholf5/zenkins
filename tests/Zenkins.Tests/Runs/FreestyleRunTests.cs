@@ -208,6 +208,54 @@ public sealed class FreestyleRunTests
         Assert.Contains("error=kind-invalid", response.Headers.Location!.OriginalString, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_steps_editor_carries_the_two_step_knobs_and_prefills_what_is_stored()
+    {
+        // Card F-032, the editor half: both fields exist on every row (the saved one and the template a
+        // new row clones), the stored values come back in them, and the server-side parse is what the
+        // FreestyleStepsTests fact pins.
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner, "freestyle-knobs");
+        var steps = JsonSerializer.Serialize(new object[]
+        {
+            new
+            {
+                name = "Flaky",
+                script = "echo hello",
+                envLines = string.Empty,
+                continueOnError = false,
+                artifactsText = string.Empty,
+                timeoutSeconds = "600",
+                retry = "2",
+            },
+        });
+        Assert.True(await SaveStepsAsync(owner, projectId, steps));
+
+        // The steps editor is the project's Pipelines tab (D-003 moved the definition surfaces there).
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/pipelines");
+
+        // The page holds the saved rows first and the row template after them, so each half is read on its
+        // own: a field present only in the template would otherwise satisfy an assertion about a saved step.
+        var templateStart = page.IndexOf("id=\"freestyle-step-template\"", StringComparison.Ordinal);
+        Assert.True(templateStart > 0, "the editor's row template is not on the page.");
+        var savedRows = page[..templateStart];
+        var template = page[templateStart..];
+
+        // The saved row: one input each, carrying the stored values and the server's bounds.
+        Assert.Contains("data-freestyle-field=\"timeout-seconds\"", savedRows, StringComparison.Ordinal);
+        Assert.Contains("data-freestyle-field=\"retry\"", savedRows, StringComparison.Ordinal);
+        Assert.Contains("value=\"600\"", savedRows, StringComparison.Ordinal);
+        Assert.Contains("value=\"2\"", savedRows, StringComparison.Ordinal);
+        Assert.Contains("max=\"86400\"", savedRows, StringComparison.Ordinal);
+        Assert.Contains("max=\"5\"", savedRows, StringComparison.Ordinal);
+
+        // The template a new row is cloned from has both too - otherwise "add step" would produce a row
+        // without the knobs and the feature would only exist for already-saved steps.
+        Assert.Contains("data-freestyle-field=\"timeout-seconds\"", template, StringComparison.Ordinal);
+        Assert.Contains("data-freestyle-field=\"retry\"", template, StringComparison.Ordinal);
+    }
+
     private static async Task<Guid> CreateFreestyleProjectAsync(HttpClient owner, string name = "freestyle-e2e")
     {
         var response = await OrganizationTestHost.PostFormAsync(

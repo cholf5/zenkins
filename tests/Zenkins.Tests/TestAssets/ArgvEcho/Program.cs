@@ -27,6 +27,14 @@ namespace Zenkins.Tests.TestAssets.ArgvEcho;
 /// <item><c>env &lt;name&gt;...</c> — prints each named environment variable's value
 /// ("&lt;unset&gt;" when missing), one per line. The child-environment probe.</item>
 /// <item><c>exit &lt;code&gt;</c> — exits with the given code. The non-zero-exit probe.</item>
+/// <item><c>flaky &lt;state-file&gt; &lt;fail-times&gt;</c> — counts its own invocations in the file
+/// (cwd-relative, one number per run), prints <c>attempt N</c>, and exits 3 while N is at most
+/// <c>fail-times</c>, then 0. The step-retry probe (card F-032): one step whose first attempts fail and
+/// whose last one succeeds, with the attempt count as a fact in the working tree.</item>
+/// <item><c>flaky-env &lt;state-file&gt; &lt;fail-times&gt; &lt;env-name&gt; &lt;report-file&gt;</c> — the same
+/// retry probe <b>plus</b> an environment value written to a file (not to the log, where the redactor
+/// would mask it): each attempt appends <c>N &lt;NAME&gt;=&lt;value&gt;</c>. The card F-032 fact that a retry
+/// re-runs the step with the value it already had, never a freshly fetched one.</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -145,6 +153,44 @@ internal static class Program
                 }
 
                 return exitCode;
+
+            case "flaky-env":
+                if (args.Length != 5 || !int.TryParse(args[2], out var failTimesWithEnv))
+                {
+                    return Usage("flaky-env <state-file> <fail-times> <env-name> <report-file>");
+                }
+
+                var envAttempts = File.Exists(args[1])
+                    ? int.Parse(File.ReadAllText(args[1]).Trim(), System.Globalization.CultureInfo.InvariantCulture)
+                    : 0;
+                envAttempts++;
+                File.WriteAllText(
+                    args[1],
+                    envAttempts.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
+                File.AppendAllText(
+                    args[4],
+                    envAttempts.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + " " + args[3] + "=" + (Environment.GetEnvironmentVariable(args[3]) ?? "<unset>") + "\n");
+                Console.Out.WriteLine($"attempt {envAttempts}");
+                return envAttempts <= failTimesWithEnv ? 3 : 0;
+
+            case "flaky":
+                // F-032: one step, several attempts. The counter file is the state, so the same argv can
+                // fail and then succeed - which is what a retried step looks like from the outside.
+                if (args.Length != 3 || !int.TryParse(args[2], out var failTimes))
+                {
+                    return Usage("flaky <state-file> <fail-times>");
+                }
+
+                var attempts = File.Exists(args[1])
+                    ? int.Parse(File.ReadAllText(args[1]).Trim(), System.Globalization.CultureInfo.InvariantCulture)
+                    : 0;
+                attempts++;
+                File.WriteAllText(
+                    args[1],
+                    attempts.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
+                Console.Out.WriteLine($"attempt {attempts}");
+                return attempts <= failTimes ? 3 : 0;
 
             default:
                 return Usage($"unknown mode '{args[0]}'");
