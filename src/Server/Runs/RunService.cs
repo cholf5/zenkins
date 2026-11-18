@@ -306,7 +306,46 @@ public sealed record RunView(
     /// yields one unnamed section per contiguous run of unstaged steps, which the page renders as the flat
     /// list it has always been - no empty headers, no invented stages.
     /// </summary>
-    public IReadOnlyList<RunStageView> StageGroups => RunStages.Group(StepList);
+    public IReadOnlyList<RunStageView> StageGroups => RunStages.Group(MainSteps);
+
+    /// <summary>
+    /// Card F-031: the main list's steps (declared order), without the post phase's rows. Every v1/v2/v3 run
+    /// written before the field existed has <see cref="StepList"/> == <see cref="MainSteps"/>.
+    /// </summary>
+    public IReadOnlyList<RunStepView> MainSteps => [.. StepList.Where(step => !step.IsPost)];
+
+    /// <summary>
+    /// Card F-031: the recorded post steps, in the order the run executed them. Only steps that the run actually
+    /// reached appear - predicting which outcome set would run would be a claim about an unfinished run. The
+    /// list is empty for a run whose spec declares no post step.
+    /// </summary>
+    public IReadOnlyList<RunStepView> PostSteps => [.. StepList.Where(step => step.IsPost)];
+
+    /// <summary>
+    /// Card F-031: the sentence the post section shows when a post step failed. Two honest shapes: the run
+    /// failed because the project asks post failures to count (<c>post-failed</c>), or the run's result is
+    /// unchanged and the page says exactly that. <see langword="null"/> when no post step failed.
+    /// </summary>
+    public string? PostFailureNote
+    {
+        get
+        {
+            var failed = PostSteps.Where(step => step.Status == PipelineStepStatus.Failed).ToArray();
+            if (failed.Length == 0)
+            {
+                return null;
+            }
+
+            if (FailureReason == PipelineFailureReasons.PostFailed)
+            {
+                return "The run failed because a post step failed (the project is set to fail the run on a "
+                    + "post step failure).";
+            }
+
+            return "A post step failed. The run's result is unchanged: a post step does not fail the run unless "
+                + "the project enables that. The step's own log has the detail.";
+        }
+    }
 
     /// <summary>
     /// Card F-030: the first failed step, in declaration order - the one a failed run's page jumps to. Read
@@ -525,7 +564,27 @@ public sealed record RunStepView(
     /// step declares none (every v1/v2 run, and an unstaged step of a v3 one). It is read from the spec only -
     /// never derived from <see cref="Name"/> - so a rename cannot rewrite an old run's sections.
     /// </summary>
-    string? Stage = null)
+    string? Stage = null,
+
+    /// <summary>
+    /// Card F-031: whether this step belongs to the post phase (<c>always</c>/<c>success</c>/<c>failure</c>)
+    /// rather than the main list. Read from the frozen spec's post lists by name - never from the <c>post/</c>
+    /// prefix alone - so the page can render the post section apart and the stage grouping can ignore it.
+    /// </summary>
+    bool IsPost = false,
+
+    /// <summary>
+    /// Card F-031: which post outcome set declared this step (<c>always</c>, <c>success</c>, <c>failure</c>),
+    /// or <see langword="null"/> for a main step. The page uses it as the row's context; the outcome set that
+    /// actually ran is the run's own history, not a promise this field makes.
+    /// </summary>
+    string? PostOutcome = null,
+
+    /// <summary>
+    /// The argv the step ran (or will run), read from the frozen spec - the page's command line. Empty for a
+    /// script step, whose text lives in the spec instead.
+    /// </summary>
+    string[]? Argv = null)
 {
     /// <summary>Whether the step is declared but not reached (no row recorded).</summary>
     public bool IsPending => Status == PipelineStepStatus.Pending;
@@ -640,7 +699,14 @@ public sealed record RunClaimResult(
     /// Card F-041: the names of the <c>file</c>-typed parameters. The worker fetches each one's bytes over the
     /// run-scoped route and materialises them into the run's own directory before any step starts. Names only.
     /// </summary>
-    IReadOnlyList<string>? FileParameters = null)
+    IReadOnlyList<string>? FileParameters = null,
+
+    /// <summary>
+    /// Card F-031: whether this run's project asks a failed post step to fail the run. False is the product
+    /// default (the main list decides the result); the worker reads it from the claim, because the executor
+    /// - not the page - is what turns it into the run's reported outcome.
+    /// </summary>
+    bool PostFailureFailsRun = false)
 {
     /// <summary>The 204 answer: nothing eligible right now. Same for every other rejection reason -
     /// a worker polls again, it never learns why it got nothing.</summary>
@@ -2751,7 +2817,12 @@ public sealed class RunService(
 
                     // F-041: the file parameters' names. The bytes travel over their own run-scoped route,
                     // because a claim carries names and never material (card F-040).
-                    ParameterNamesOfType(candidate, ProjectParameterTypes.File));
+                    ParameterNamesOfType(candidate, ProjectParameterTypes.File),
+
+                    // F-031: the project's explicit "a post failure fails the run" switch. Read from the
+                    // project at claim time - the worker is the one that executes the post phase, so it is the
+                    // one that has to know what the run should report.
+                    candidate.Project.PostFailureFailsRun);
             }
         }
 
@@ -3277,15 +3348,31 @@ public sealed class RunService(
                 return RunStepResult.Conflict(RunErrorCodes.StepUnknown);
             }
 
-            if (report.Index > spec.Steps.Length
-                || !string.Equals(report.Name, spec.Steps[report.Index - 1].Name, StringComparison.Ordinal))
+            // F-031: a post step's position continues after the main list, and which outcome set runs is the
+            // run's own outcome - the server cannot predict it. So beyond the main list a position is accepted
+            // for any *declared* post step (by its frozen `post/…` name), while the main list stays positional.
+            // The ordering check below still makes (RunId, Index) monotonic and write-once.
+            string? declaredName = null;
+            if (report.Index <= spec.Steps.Length)
+            {
+                if (string.Equals(report.Name, spec.Steps[report.Index - 1].Name, StringComparison.Ordinal))
+                {
+                    declaredName = spec.Steps[report.Index - 1].Name;
+                }
+            }
+            else if (spec.Post is { } post
+                && report.Index <= spec.Steps.Length + post.Count
+                && post.Find(report.Name) is not null)
+            {
+                declaredName = report.Name;
+            }
+
+            if (declaredName is null)
             {
                 // The position must exist in the frozen spec and agree with it; that is what makes
                 // (RunId, Index) an ordering authority rather than a bucket of worker-chosen rows.
                 return RunStepResult.Invalid(RunErrorCodes.StepUnknown);
             }
-
-            var declaredName = spec.Steps[report.Index - 1].Name;
 
             // 3. Ordering and idempotence, from the rows already recorded for this run.
             var existing = await context.BuildSteps
@@ -4409,24 +4496,27 @@ public sealed class RunService(
             {
                 var declared = spec.Steps[index - 1];
                 views.Add(byIndex.TryGetValue(index, out var step)
-                    ? ToStepView(step, declared.Stage)
+                    ? ToMainStepView(step, declared)
                     : new RunStepView(
                         null, index, declared.Name, PipelineStepStatus.Pending, null, null, null, null,
-                        Stage: declared.Stage));
+                        Stage: declared.Stage, Argv: declared.Argv));
             }
         }
 
-        // A recorded position the spec does not cover has no declaration to read a stage from, so it is
-        // honestly unstaged rather than guessed into a neighbour's section.
+        // A recorded position the spec covers beyond the main list is a post step (F-031): resolve it against
+        // the frozen post lists by its `post/…` name, so it renders in the post section with its own command
+        // line. A position the spec does not cover at all has no declaration to read from and stays honestly
+        // unstaged rather than guessed into a neighbour's section.
         views.AddRange(recorded
             .Where(step => views.All(view => view.Index != step.Index))
             .OrderBy(step => step.Index)
-            .Select(step => ToStepView(step, stage: null)));
+            .Select(step => ToPostStepView(step, pipeline?.Post?.Find(step.Name), pipeline)));
 
         return [.. views];
     }
 
-    private static RunStepView ToStepView(BuildStep step, string? stage) => new(
+    /// <summary>One recorded step of the main list: its declaration (stage, argv) and no post fields.</summary>
+    private static RunStepView ToMainStepView(BuildStep step, PipelineStep declared) => new(
         step.Id,
         step.Index,
         step.Name,
@@ -4436,7 +4526,32 @@ public sealed class RunService(
         step.ExitCode,
         step.FailureReason,
         step.Attempts,
-        stage);
+        Stage: declared.Stage,
+        Argv: declared.Argv);
+
+    /// <summary>
+    /// One recorded step that the main list does not cover. A post step (card F-031) is known by its frozen
+    /// <c>post/…</c> declaration; anything else stays an honestly unstaged, undeclared row.
+    /// </summary>
+    private static RunStepView ToPostStepView(BuildStep step, PipelineStep? declared, PipelineSpec? spec)
+    {
+        var isPost = declared is not null
+            && step.Name.StartsWith(PipelineSpecSchema.PostNamePrefix, StringComparison.Ordinal);
+        return new RunStepView(
+            step.Id,
+            step.Index,
+            step.Name,
+            step.Status,
+            step.StartedAt,
+            step.EndedAt,
+            step.ExitCode,
+            step.FailureReason,
+            step.Attempts,
+            Stage: declared?.Stage,
+            IsPost: isPost,
+            PostOutcome: isPost ? spec?.Post?.OutcomeOf(step.Name) : null,
+            Argv: declared?.Argv);
+    }
 
     /// <summary>
     /// The frozen spec as the page reads it (card F-014). A row whose JSON no longer parses is rendered

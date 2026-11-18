@@ -78,6 +78,14 @@ public static class PipelineStepFailureReasons
     public const string NotStarted = "not-started";
 
     /// <summary>
+    /// Failed: a post step (card F-031) overran the bounded grace window a canceled run gives its cleanup. A
+    /// distinct value from <see cref="Canceled"/> because the step was not killed by the cancel itself - it was
+    /// allowed to run <b>after</b> it, and this is the window ending. A deadline-clamped window records
+    /// <see cref="TimedOut"/> instead, because that kill really is the run's deadline.
+    /// </summary>
+    public const string PostGraceExceeded = "post-grace-exceeded";
+
+    /// <summary>
     /// Failed: the step declared an artifact path that the shared rules refused (card F-016) - a traversal,
     /// an absolute or drive-qualified path, or a symlink whose target leaves the checked-out repository.
     /// The run log names the path as the pipeline wrote it; nothing was uploaded and no row was created.
@@ -110,8 +118,8 @@ public static class PipelineStepFailureReasons
     /// <summary>Every reason a report may carry.</summary>
     public static IReadOnlyList<string> All { get; } =
         [
-            Canceled, TimedOut, StepTimeout, NotStarted, SecretUnavailable, ArtifactPathRejected,
-            ArtifactFailed, WhenNotMatched, PreviousStepFailed, RunCanceled,
+            Canceled, TimedOut, StepTimeout, NotStarted, PostGraceExceeded, SecretUnavailable,
+            ArtifactPathRejected, ArtifactFailed, WhenNotMatched, PreviousStepFailed, RunCanceled,
         ];
 
     /// <summary>The reasons a <see cref="PipelineStepStatus.Skipped"/> report may carry.</summary>
@@ -119,7 +127,10 @@ public static class PipelineStepFailureReasons
 
     /// <summary>The reasons a <see cref="PipelineStepStatus.Failed"/> report may carry.</summary>
     public static IReadOnlyList<string> FailReasons { get; } =
-        [Canceled, TimedOut, StepTimeout, NotStarted, SecretUnavailable, ArtifactPathRejected, ArtifactFailed];
+    [
+        Canceled, TimedOut, StepTimeout, NotStarted, PostGraceExceeded, SecretUnavailable,
+        ArtifactPathRejected, ArtifactFailed,
+    ];
 
     /// <summary>Whether <paramref name="status"/> with <paramref name="failureReason"/> is a legal pair.</summary>
     public static bool IsLegal(string status, string? failureReason) => status switch

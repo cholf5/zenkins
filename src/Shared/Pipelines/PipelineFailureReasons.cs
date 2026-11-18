@@ -105,6 +105,15 @@ public static class PipelineFailureReasons
     /// </summary>
     public const string StepRetryExhausted = "step-retry-exhausted";
 
+    /// <summary>
+    /// Card F-031: a post step failed and the project is configured to fail the run on a post step failure. The
+    /// default is the opposite - the run's result is the main list's, and the post failure is shown on its own
+    /// step - so this reason only ever appears when the project explicitly asked for that stricter reading.
+    /// Deliberately separate from <c>step-failed</c>: the failing step ran after the build's result was already
+    /// decided, and the page must be able to say so.
+    /// </summary>
+    public const string PostFailed = "post-failed";
+
     /// <summary>Every reason a worker may report through the <c>completed</c> endpoint.</summary>
     public static readonly string[] WorkerReportable =
     [
@@ -127,6 +136,7 @@ public static class PipelineFailureReasons
         StepFailed,
         StepTimeout,
         StepRetryExhausted,
+        PostFailed,
     ];
 
     /// <summary>Whether <paramref name="reason"/> is one of <see cref="WorkerReportable"/>.</summary>

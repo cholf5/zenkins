@@ -227,6 +227,42 @@
             </BbCardContent>
         </BbCard>
 
+        @* Card F-031: the explicit "a failed post step fails the run" switch. The default keeps a green
+           build green; this is the project that wants the stricter reading, and the run page says which
+           reading produced its result. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Post steps</BbCardTitle>
+                <BbCardDescription>
+                    Post steps (<code>success</code>, <code>failure</code>, <code>always</code>) run after the
+                    main step list. By default a post step that fails is recorded as its own failed step and
+                    the run's result stays what the main steps decided - cleanup cannot silently turn a green
+                    build red, and it cannot be swallowed either. Turn this on to make a failed post step fail
+                    the run.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <form id="project-post-failure-form" method="post"
+                      action="@($"/projects/{_project.Id}/post-failure")" data-zenkins-antiforgery>
+                    <label class="bb:flex bb:items-start bb:gap-2">
+                        <input type="checkbox"
+                               id="project-post-failure-fails-run"
+                               name="Enabled"
+                               value="true"
+                               checked="@_project.PostFailureFailsRun" />
+                        <span class="bb:text-sm">Fail the run when a post step fails.</span>
+                    </label>
+                    <p class="bb:mt-2 bb:text-xs bb:text-muted-foreground">
+                        A canceled run keeps <code>Canceled</code> either way: a cleanup failure cannot rewrite
+                        why the run stopped.
+                    </p>
+                    <div class="bb:mt-3">
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Save post-step setting</BbButton>
+                    </div>
+                </form>
+            </BbCardContent>
+        </BbCard>
+
         @* Card F-026: the chain edges are declared here and nowhere else. Two lists and one form, because an
            edge always has a direction: each list is titled with what it means for this project ("runs after"
            / "queues a run of") rather than with the column name, and every row states the two rules the edge
@@ -1600,6 +1636,12 @@
         // F-038's retention policy.
         "retention-saved" =>
             "The retention policy was saved. The next sweep applies it; nothing was deleted now.",
+        // F-031's switch.
+        "post-failure-on" =>
+            "A failed post step now fails the run. This applies to runs claimed from now on.",
+        "post-failure-off" =>
+            "A failed post step no longer fails the run: it is recorded as its own failed step and the page "
+            + "explains that the result is unchanged.",
         // F-025's polling card.
         "polling-saved" => "The polling settings were saved.",
         // F-024's schedules.

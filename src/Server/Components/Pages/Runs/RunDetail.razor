@@ -345,7 +345,7 @@
                                             <span class="bb:text-xs bb:text-muted-foreground">@section.StepCount step(s)</span>
                                         </summary>
                                         <ol id="@($"run-stage-steps-{section.Name}")" class="bb:mt-2 bb:space-y-3">
-                                            <RunStepList Steps="@section.Steps" Pipeline="@pipeline"
+                                            <RunStepList Steps="@section.Steps"
                                                          FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
                                                          StepSelected="FilterLogToStep" />
                                         </ol>
@@ -354,12 +354,39 @@
                             }
                             else
                             {
-                                <RunStepList Steps="@section.Steps" Pipeline="@pipeline"
+                                <RunStepList Steps="@section.Steps"
                                              FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
                                              StepSelected="FilterLogToStep" />
                             }
                         }
                     </ol>
+
+                    @* F-031: the post phase, apart from the main list. Only the steps the run actually
+                       reached appear (which outcome set runs is the run's own history, not something the
+                       page predicts), their frozen names already carry the `post/` prefix, and the note
+                       says exactly what a failed post step did - or did not - do to the run's result. *@
+                    @if (_run.PostSteps.Count > 0)
+                    {
+                        <section id="run-post" class="bb:mt-4 bb:rounded-md bb:border bb:border-input bb:p-3">
+                            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                <h3 class="bb:text-sm bb:font-medium">Post steps</h3>
+                                <span id="run-post-count" class="bb:text-xs bb:text-muted-foreground">@_run.PostSteps.Count recorded</span>
+                            </div>
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                These run after the main steps: the matching outcome set (success or failure),
+                                then <code>always</code> last.
+                            </p>
+                            <ol id="run-post-steps" class="bb:mt-2 bb:space-y-3 bb:text-sm">
+                                <RunStepList Steps="@_run.PostSteps"
+                                             FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
+                                             StepSelected="FilterLogToStep" />
+                            </ol>
+                            @if (_run.PostFailureNote is { } postNote)
+                            {
+                                <p id="run-post-note" class="bb:mt-2 bb:text-xs">@postNote</p>
+                            }
+                        </section>
+                    }
                 }
                 else
                 {

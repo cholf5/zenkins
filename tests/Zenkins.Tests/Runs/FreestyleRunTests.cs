@@ -299,6 +299,56 @@ public sealed class FreestyleRunTests
     }
 
     [Fact]
+    public async Task The_steps_editor_carries_the_three_post_lists_and_their_prefixed_names()
+    {
+        // Card F-031's editor half: three post lists reach the browser (fields, containers, templates), their
+        // saved rows show the authored name (the frozen record's prefix is added server-side), and the spec the
+        // run snapshots carries the prefixed post steps.
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner, "freestyle-post");
+
+        var steps = JsonSerializer.Serialize(new object[]
+        {
+            new { name = "Build", script = "echo build", envLines = "", continueOnError = false, artifactsText = "" },
+        });
+        var always = JsonSerializer.Serialize(new object[]
+        {
+            new { name = "Cleanup", script = "echo cleanup", envLines = "", continueOnError = false, artifactsText = "" },
+        });
+        var success = JsonSerializer.Serialize(new object[]
+        {
+            new { name = "Report", script = "echo report", envLines = "", continueOnError = false, artifactsText = "" },
+        });
+        Assert.True((await SaveStepsRawAsync(owner, projectId, steps, always, success)).StatusCode
+            is HttpStatusCode.Found or HttpStatusCode.RedirectKeepVerb);
+
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/pipelines");
+        foreach (var key in new[] { "steps", "always", "success", "failure" })
+        {
+            Assert.Contains($"data-freestyle-steps-list=\"{key}\"", page, StringComparison.Ordinal);
+            Assert.Contains($"data-freestyle-json-target=\"{key}\"", page, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("name=\"AlwaysStepsJson\"", page, StringComparison.Ordinal);
+        Assert.Contains("name=\"SuccessStepsJson\"", page, StringComparison.Ordinal);
+        // The saved post row shows the authored name; the record gets its `post/` prefix when frozen.
+        Assert.Contains("value=\"Cleanup\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("value=\"post/Cleanup\"", page, StringComparison.Ordinal);
+
+        var script = await AuthTestHost.GetStringAsync(owner, "/js/freestyle-steps.js");
+        Assert.Contains("data-freestyle-json-target", script, StringComparison.Ordinal);
+
+        var runId = await RunTestHost.TriggerRunAsync(owner, projectId);
+        var run = await host.ReadRunAsync(runId);
+        Assert.True(PipelineSpecJson.TryRead(run.PipelineSpecJson, out var spec, out var error), error);
+        Assert.NotNull(spec!.Post);
+        Assert.Equal(["post/Cleanup"], spec.Post!.Always!.Select(step => step.Name));
+        Assert.Equal(["post/Report"], spec.Post.Success!.Select(step => step.Name));
+        Assert.Null(spec.Post.Failure);
+    }
+
+    [Fact]
     public async Task The_steps_editor_carries_the_stage_and_the_frozen_spec_renders_it()
     {
         // Card F-030's last mile for Freestyle: the field has to reach the browser (both halves of the
@@ -437,15 +487,39 @@ public sealed class FreestyleRunTests
     private static async Task<bool> SaveStepsAsync(HttpClient owner, Guid projectId, string stepsJson) =>
         (await SaveStepsRawAsync(owner, projectId, stepsJson)).StatusCode is HttpStatusCode.Found or HttpStatusCode.RedirectKeepVerb;
 
-    private static async Task<HttpResponseMessage> SaveStepsRawAsync(HttpClient owner, Guid projectId, string stepsJson) =>
-        await OrganizationTestHost.PostFormAsync(
+    private static async Task<HttpResponseMessage> SaveStepsRawAsync(
+        HttpClient owner,
+        Guid projectId,
+        string stepsJson,
+        string? alwaysJson = null,
+        string? successJson = null,
+        string? failureJson = null)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["StepsJson"] = stepsJson,
+        };
+        if (alwaysJson is not null)
+        {
+            fields["AlwaysStepsJson"] = alwaysJson;
+        }
+
+        if (successJson is not null)
+        {
+            fields["SuccessStepsJson"] = successJson;
+        }
+
+        if (failureJson is not null)
+        {
+            fields["FailureStepsJson"] = failureJson;
+        }
+
+        return await OrganizationTestHost.PostFormAsync(
             owner,
             $"/projects/{projectId}",
             $"/projects/{projectId}/freestyle/steps",
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["StepsJson"] = stepsJson,
-            });
+            fields);
+    }
 
     private static async Task<Guid> TriggerForAssertionAsync(HttpClient owner, Guid projectId) =>
         await RunTestHost.TriggerRunAsync(owner, projectId);

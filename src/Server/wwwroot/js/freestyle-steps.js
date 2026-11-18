@@ -1,16 +1,22 @@
 // F-020: the Freestyle steps editor. The form is a plain HTML form posting to the real endpoint
 // (antiforgery like every other form); this script is the dynamic row layer the server cannot render
-// statelessly: add / remove / reorder a step, then serialize the rows into the one hidden StepsJson
-// field the endpoint parses. The server (FreestyleSteps.BuildSpecJson) rebuilds and re-validates the
-// whole spec from that payload - the browser never authors a spec, it only collects field values.
+// statelessly: add / remove / reorder a step, then serialize each list into its own hidden field
+// (StepsJson and, since F-031, AlwaysStepsJson / SuccessStepsJson / FailureStepsJson). The server
+// (FreestyleSteps.BuildSpecJson) rebuilds and re-validates the whole spec from that payload - the
+// browser never authors a spec, it only collects field values.
 (function () {
     "use strict";
 
     var FORM_SELECTOR = "form[data-freestyle-steps-form]";
+    var LIST_SELECTOR = "[data-freestyle-steps-list]";
     var ROW_SELECTOR = "[data-freestyle-step]";
 
-    function rows(form) {
-        return Array.prototype.slice.call(form.querySelectorAll(ROW_SELECTOR));
+    function lists(form) {
+        return Array.prototype.slice.call(form.querySelectorAll(LIST_SELECTOR));
+    }
+
+    function rows(list) {
+        return Array.prototype.slice.call(list.querySelectorAll(ROW_SELECTOR));
     }
 
     function fieldValue(row, name) {
@@ -21,8 +27,8 @@
         return field.type === "checkbox" ? (field.checked ? "true" : "false") : field.value;
     }
 
-    function serialize(form) {
-        var drafts = rows(form).map(function (row) {
+    function serializeList(list) {
+        return rows(list).map(function (row) {
             return {
                 name: fieldValue(row, "name"),
                 // F-030: the stage the step renders under. Without this line the field would render, look
@@ -41,15 +47,21 @@
                 runsOn: fieldValue(row, "runs-on"),
             };
         });
+    }
 
-        var target = form.querySelector("#freestyle-steps-json");
-        if (target) {
-            target.value = JSON.stringify(drafts);
+    function serialize(form) {
+        var all = lists(form);
+        for (var i = 0; i < all.length; i++) {
+            var key = all[i].getAttribute("data-freestyle-steps-list");
+            var target = form.querySelector('[data-freestyle-json-target="' + key + '"]');
+            if (target) {
+                target.value = JSON.stringify(serializeList(all[i]));
+            }
         }
     }
 
-    function renumber(form) {
-        var all = rows(form);
+    function renumber(list) {
+        var all = rows(list);
         for (var i = 0; i < all.length; i++) {
             var label = all[i].querySelector("[data-freestyle-step-index]");
             if (label) {
@@ -58,23 +70,19 @@
         }
     }
 
-    function addStep(form) {
-        var template = form.querySelector("#freestyle-step-template");
-        var list = form.querySelector("[data-freestyle-steps-list]");
+    function addStep(section) {
+        var template = section.querySelector("template");
+        var list = section.querySelector(LIST_SELECTOR);
         if (!template || !list) {
             return;
         }
 
         list.appendChild(template.content.firstElementChild.cloneNode(true));
-        renumber(form);
+        renumber(list);
     }
 
-    function removeStep(row) {
-        row.remove();
-    }
-
-    function moveStep(form, row, offset) {
-        var all = rows(form);
+    function moveStep(list, row, offset) {
+        var all = rows(list);
         var index = all.indexOf(row);
         var target = index + offset;
         if (index < 0 || target < 0 || target >= all.length) {
@@ -85,7 +93,7 @@
         // the next-next sibling (or appends at the end).
         var reference = offset < 0 ? all[index - 1] : all[index + 1].nextSibling;
         row.parentNode.insertBefore(row, reference);
-        renumber(form);
+        renumber(list);
     }
 
     function init() {
@@ -102,25 +110,29 @@
                         return;
                     }
 
+                    var section = button.closest("[data-freestyle-list-section]");
                     var row = button.closest(ROW_SELECTOR);
+                    var list = section ? section.querySelector(LIST_SELECTOR) : null;
                     switch (button.getAttribute("data-freestyle-action")) {
                         case "add":
-                            addStep(form);
+                            if (section) {
+                                addStep(section);
+                            }
                             break;
                         case "remove":
-                            if (row) {
-                                removeStep(row);
-                                renumber(form);
+                            if (row && list) {
+                                row.parentNode.removeChild(row);
+                                renumber(list);
                             }
                             break;
                         case "move-up":
-                            if (row) {
-                                moveStep(form, row, -1);
+                            if (row && list) {
+                                moveStep(list, row, -1);
                             }
                             break;
                         case "move-down":
-                            if (row) {
-                                moveStep(form, row, 1);
+                            if (row && list) {
+                                moveStep(list, row, 1);
                             }
                             break;
                     }

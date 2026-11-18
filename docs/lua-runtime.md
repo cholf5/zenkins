@@ -564,6 +564,17 @@ validates it, serialises it, and executes the steps **in C#**:
   steps by equal name — a repeat after another stage is a second section, and an unstaged step renders
   outside every section. Because the name lives in the spec, a later rename of the step or the pipeline
   never rewrites an old run's sections; a spec with no stage at all renders as the flat list it always was.
+- **Post actions are steps too** (card F-031): `post = { always = { … }, success = { … }, failure = { … } }`
+  inside `pipeline { … }` declares what runs after the main list. The lists use the same step tables as
+  `steps`, and their frozen names get the `post/` prefix (`post/cleanup`), so a step record and a log line
+  can never be mistaken for a main step's; an author writes the plain name and the prefix is refused if
+  written by hand. After the main list ends, **exactly one** outcome set runs (`success` when it succeeded,
+  `failure` when it failed - never both) and then `always` runs last; a canceled run runs neither outcome
+  set and gets `always` inside a bounded grace window (30 s, clamped to whatever the run's deadline has
+  left), so cleanup is not skipped by a cancel. A post failure is its own failed step and does **not** fail
+  a successful run by default; the project's explicit switch makes it do so (`post-failed`). Execution
+  order, step indices (post steps continue after the main list), env composition, conditions, artifacts,
+  timeouts and retries all come from the one step executor - post actions are not a second execution path.
 - **Two optional step fields bound a step on its own** (card F-032): `timeout = 600` and `retry = 2`
   are additive, optional and defaulted to "no limit of its own" / "one attempt", so the schema version
   stays where it is — a reader that does not know them executes the step exactly as before. The

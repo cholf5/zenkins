@@ -43,7 +43,19 @@ public sealed record PipelineSpec(
     PipelineStep[] Steps,
     SortedDictionary<string, string>? Env = null,
     PipelineTriggers? Triggers = null,
-    string[]? SecretReferences = null);
+    string[]? SecretReferences = null,
+
+    /// <summary>
+    /// Card F-031: the steps that run <b>after</b> the main list - the outcome sets and the cleanup that runs
+    /// whatever happened. The lists use the same <see cref="PipelineStep"/> shape as the main list (so run,
+    /// env, conditions, artifacts, timeouts and retries all apply), and they are frozen here at definition
+    /// time: which set ran is the run's own outcome, never something a page re-derives later.
+    /// <para>
+    /// <b>Additive to v3.</b> A spec frozen before this field existed has no <c>post</c> and executes exactly
+    /// as it did; only a document that carries one is read through the rules below.
+    /// </para>
+    /// </summary>
+    PipelinePost? Post = null);
 
 /// <summary>
 /// One step of a frozen spec. Exactly one of <see cref="Run"/> / <see cref="Shell"/> / <see cref="Script"/>
@@ -156,6 +168,101 @@ public sealed record PipelineStep(
 public sealed record PipelineTriggers(string[]? Branches = null);
 
 /// <summary>
+/// The three post-action lists (card F-031): what runs after the main list ends. <b>Exactly one outcome set
+/// runs</b> - <see cref="Success"/> for a run that succeeded, <see cref="Failure"/> for one that failed - and
+/// then <see cref="Always"/> runs last, whatever happened (cleanup, artifact upload, notification).
+/// <para>
+/// <b>A post step is a step.</b> The lists hold the same <see cref="PipelineStep"/> shape, so argv/script,
+/// env, <c>when</c>, artifacts, timeouts and retries apply unchanged; the executor runs them through the same
+/// step code, only with a different phase boundary and a continuing step index. Their frozen names carry the
+/// <see cref="PipelineSpecSchema.PostNamePrefix"/> (<c>post/cleanup</c>) so a run's step records and logs can
+/// never be confused with a main step's.
+/// </para>
+/// <para>
+/// <b>A canceled run runs <see cref="Always"/> only.</b> A cancel is not a pipeline failure (F-009 reports it
+/// as <c>Canceled</c>), so the <c>failure</c> set is not what a canceled run asked for; cleanup is. The
+/// executor still gives it a bounded grace window, which is the whole point of the feature.
+/// </para>
+/// </summary>
+public sealed record PipelinePost(
+    PipelineStep[]? Success = null,
+    PipelineStep[]? Failure = null,
+    PipelineStep[]? Always = null)
+{
+    /// <summary>Whether the spec declares no post step at all (the pre-F-031 shape).</summary>
+    [JsonIgnore]
+    public bool IsEmpty => Count == 0;
+
+    /// <summary>How many post steps the spec declares across the three lists.</summary>
+    [JsonIgnore]
+    public int Count => (Success?.Length ?? 0) + (Failure?.Length ?? 0) + (Always?.Length ?? 0);
+
+    /// <summary>
+    /// Every declared post step with the outcome set it belongs to, in one canonical order
+    /// (<c>success</c>, <c>failure</c>, <c>always</c>). The server uses it to resolve a recorded
+    /// <c>post/…</c> row back to its declaration; the executor never assumes this order is what runs.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<(string Outcome, PipelineStep Step)> DeclaredSteps
+    {
+        get
+        {
+            var steps = new List<(string Outcome, PipelineStep Step)>(Count);
+            Add(steps, PipelinePostOutcomes.Success, Success);
+            Add(steps, PipelinePostOutcomes.Failure, Failure);
+            Add(steps, PipelinePostOutcomes.Always, Always);
+            return steps;
+        }
+    }
+
+    /// <summary>The declared post step named <paramref name="name"/> (already <c>post/</c>-prefixed), if any.</summary>
+    public PipelineStep? Find(string? name) =>
+        name is null
+            ? null
+            : DeclaredSteps.FirstOrDefault(declared => string.Equals(declared.Step.Name, name, StringComparison.Ordinal)).Step;
+
+    /// <summary>The outcome set <paramref name="name"/> belongs to, or <see langword="null"/>.</summary>
+    public string? OutcomeOf(string? name)
+    {
+        if (name is null)
+        {
+            return null;
+        }
+
+        foreach (var declared in DeclaredSteps)
+        {
+            if (string.Equals(declared.Step.Name, name, StringComparison.Ordinal))
+            {
+                return declared.Outcome;
+            }
+        }
+
+        return null;
+    }
+
+    private static void Add(List<(string Outcome, PipelineStep Step)> steps, string outcome, PipelineStep[]? list)
+    {
+        if (list is null)
+        {
+            return;
+        }
+
+        foreach (var step in list)
+        {
+            steps.Add((outcome, step));
+        }
+    }
+}
+
+/// <summary>The outcome set names a post step can belong to (card F-031), as the spec and logs spell them.</summary>
+public static class PipelinePostOutcomes
+{
+    public const string Success = "success";
+    public const string Failure = "failure";
+    public const string Always = "always";
+}
+
+/// <summary>
 /// A step's execution-time condition (card F-015): <c>when = { branch = "main", platform = "linux",
 /// env = { K = "v" } }</c>.
 /// <para>
@@ -236,6 +343,26 @@ public static class PipelineSpecSchema
     public const int MaxSteps = 200;
 
     /// <summary>
+    /// Card F-031: the prefix every frozen post step's name carries (<c>post/cleanup</c>). It is part of the
+    /// frozen record, not a render-time decoration: a step record, a log line and a page heading all read the
+    /// same name, so a post step can never be confused with a main step of the same author-chosen name.
+    /// </summary>
+    public const string PostNamePrefix = "post/";
+
+    /// <summary>
+    /// An upper bound on the steps one post outcome set may declare (card F-031). Cleanup is a short list, not
+    /// a second pipeline; the bound keeps a definition honest and the run page's post section readable.
+    /// </summary>
+    public const int MaxPostStepsPerList = 40;
+
+    /// <summary>
+    /// Card F-031: how long a canceled run's post steps may still run. A cancel must not skip cleanup, and it
+    /// must not let a canceled run linger either: 30 seconds is the window, clamped by whatever the run's
+    /// deadline has left.
+    /// </summary>
+    public const int PostGraceSeconds = 30;
+
+    /// <summary>
     /// The lower bound of a step's own timeout (card F-032): one second. Below that the platform's own
     /// process start-up dominates the measurement, so the limit would kill steps that never had a chance.
     /// </summary>
@@ -271,7 +398,9 @@ public static class PipelineSpecSchema
     /// question, asked at claim time; a definition is refused only for what can never hold.
     /// </para>
     /// </summary>
-    public static string? ValidateWorkerRequirements(IReadOnlyList<PipelineStep> steps)
+    public static string? ValidateWorkerRequirements(
+        IReadOnlyList<PipelineStep> steps,
+        string pathPrefix = "pipeline.steps")
     {
         ArgumentNullException.ThrowIfNull(steps);
 
@@ -279,7 +408,7 @@ public static class PipelineSpecSchema
         for (var index = 0; index < steps.Count; index++)
         {
             var step = steps[index];
-            var path = $"pipeline.steps[{index + 1}]";
+            var path = $"{pathPrefix}[{index + 1}]";
 
             WorkerRequirement requirement;
             if (!string.IsNullOrWhiteSpace(step.Requirement))
@@ -475,6 +604,7 @@ public static class PipelineSpecSchema
     WriteIndented = false)]
 [JsonSerializable(typeof(PipelineSpec))]
 [JsonSerializable(typeof(PipelineStep))]
+[JsonSerializable(typeof(PipelinePost))]
 [JsonSerializable(typeof(PipelineTriggers))]
 [JsonSerializable(typeof(PipelineCondition))]
 public sealed partial class PipelineJsonContext : JsonSerializerContext;
@@ -563,100 +693,50 @@ public static class PipelineSpecJson
         var names = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < parsed.Steps.Length; i++)
         {
-            var step = parsed.Steps[i];
-            var path = $"pipeline.steps[{i + 1}]";
-            if (string.IsNullOrWhiteSpace(step.Name))
-            {
-                error = $"{path}.name must be a non-empty string.";
-                return false;
-            }
-
-            if (!names.Add(step.Name))
-            {
-                error = $"{path}.name '{step.Name}' is used by more than one step.";
-                return false;
-            }
-
-            var declared = (step.Run is null ? 0 : 1)
-                + (step.Shell is null ? 0 : 1)
-                + (step.Script is null ? 0 : 1);
-            if (declared != 1)
-            {
-                error = $"{path} must declare exactly one of run, shell or script.";
-                return false;
-            }
-
-            if (step.Script is { } script)
-            {
-                // F-020: a script step carries text instead of argv - non-empty and bounded, or it is a
-                // mistake the executor could only fail later and less clearly.
-                if (string.IsNullOrWhiteSpace(script))
-                {
-                    error = $"{path}.script must be a non-empty script text.";
-                    return false;
-                }
-
-                if (script.Length > PipelineSpecSchema.MaxScriptChars)
-                {
-                    error = $"{path}.script must be at most {PipelineSpecSchema.MaxScriptChars} characters.";
-                    return false;
-                }
-            }
-            else if (step.Argv.Length == 0)
-            {
-                error = $"{path} has an empty argv.";
-                return false;
-            }
-
-            // F-015: a condition is declared data the executor evaluates; an empty one is a mistake, and
-            // so is a key or platform the executor does not know (a typo would never match anything).
-            if (step.When is { } condition
-                && !TryReadCondition(condition, $"{path}.when", out error))
-            {
-                return false;
-            }
-
-            // F-016: the declared artifact paths are re-validated against the shared path rules by the
-            // upload endpoint; here the envelope only refuses a shape the executor could not even try
-            // (an empty entry, or more entries than a step may publish).
-            if (!TryReadArtifactPaths(step.Artifacts, $"{path}.artifacts", out error))
-            {
-                return false;
-            }
-
-            // F-030: the stage is frozen on the step, so the envelope checks the shape the page will render -
-            // an empty or whitespace-padded header is a definition mistake, not data to trim later.
-            if (!PipelineSpecSchema.TryValidateStageName(step.Stage, out var stageError))
-            {
-                error = $"{path}.stage {stageError}";
-                return false;
-            }
-
-            // The stage is v3's field. A v1/v2 document that carries one contradicts the version it was frozen
-            // under, so it is refused instead of being rendered as if the field had always been there.
-            if (step.Stage is not null && parsed.Version < 3)
-            {
-                error = $"{path}.stage requires pipeline.version 3 (this spec is v{parsed.Version}).";
-                return false;
-            }
-
-            // F-032: the two step knobs are bounded here too. The Worker's definition phase refuses them
-            // with the same bounds and a field path; this is the Server's defensive gate, so a buggy or
-            // hostile worker cannot freeze a limit the executor would have to guess about (a zero-second
-            // timeout, or a six-thousand-attempt loop).
-            if (!TryReadStepLimit(
-                    step.TimeoutSeconds,
-                    PipelineSpecSchema.MinStepTimeoutSeconds,
-                    PipelineSpecSchema.MaxStepTimeoutSeconds,
-                    $"{path}.timeoutSeconds",
-                    out error)
-                || !TryReadStepLimit(
-                    step.Retry,
-                    PipelineSpecSchema.MinStepRetry,
-                    PipelineSpecSchema.MaxStepRetry,
-                    $"{path}.retry",
+            if (!TryReadDeclaredStep(
+                    parsed.Steps[i],
+                    $"pipeline.steps[{i + 1}]",
+                    parsed.Version,
+                    isPost: false,
+                    names,
                     out error))
             {
+                return false;
+            }
+        }
+
+        // F-031: the post lists are the same step shape under their own paths. Exactly one outcome set runs,
+        // and `always` runs after it; the envelope only has to refuse a shape the executor could not honour.
+        if (parsed.Post is { } post)
+        {
+            if (parsed.Version < 3)
+            {
+                error = $"pipeline.post requires pipeline.version 3 (this spec is v{parsed.Version}).";
+                return false;
+            }
+
+            if (post.IsEmpty)
+            {
+                error = "pipeline.post must declare at least one of always, success or failure.";
+                return false;
+            }
+
+            if (!TryReadPostList(post.Success, "pipeline.post.success", parsed.Version, names, out error)
+                || !TryReadPostList(post.Failure, "pipeline.post.failure", parsed.Version, names, out error)
+                || !TryReadPostList(post.Always, "pipeline.post.always", parsed.Version, names, out error))
+            {
+                return false;
+            }
+
+            // F-033's rule applies inside a post list too (one Worker executes the run): a contradiction the
+            // claim loop would have refused is refused here, with the list's own field paths.
+            var postRequirementError =
+                PipelineSpecSchema.ValidateWorkerRequirements(post.Success ?? [], "pipeline.post.success")
+                ?? PipelineSpecSchema.ValidateWorkerRequirements(post.Failure ?? [], "pipeline.post.failure")
+                ?? PipelineSpecSchema.ValidateWorkerRequirements(post.Always ?? [], "pipeline.post.always");
+            if (postRequirementError is not null)
+            {
+                error = postRequirementError;
                 return false;
             }
         }
@@ -669,6 +749,173 @@ public static class PipelineSpecJson
         spec = secretReferences is null
             ? parsed
             : parsed with { SecretReferences = secretReferences };
+        return true;
+    }
+
+
+    /// <summary>
+    /// One post outcome list (card F-031): bounded in count, then each step through the same declared-step
+    /// rules the main list uses - so a post step cannot declare a shape a main step could not.
+    /// </summary>
+    internal static bool TryReadPostList(
+        PipelineStep[]? steps,
+        string path,
+        int version,
+        HashSet<string> names,
+        out string? error)
+    {
+        error = null;
+        if (steps is null)
+        {
+            return true;
+        }
+
+        if (steps.Length > PipelineSpecSchema.MaxPostStepsPerList)
+        {
+            error = $"{path} must hold at most {PipelineSpecSchema.MaxPostStepsPerList} steps.";
+            return false;
+        }
+
+        for (var i = 0; i < steps.Length; i++)
+        {
+            if (!TryReadDeclaredStep(steps[i], $"{path}[{i + 1}]", version, isPost: true, names, out error))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The envelope check of one declared step, wherever it was declared (card F-014's rules, reused by
+    /// F-031's post lists). <paramref name="names"/> spans the whole spec, so a post step's prefixed name
+    /// cannot collide with a main step's either.
+    /// </summary>
+    private static bool TryReadDeclaredStep(
+        PipelineStep step,
+        string path,
+        int version,
+        bool isPost,
+        HashSet<string> names,
+        out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(step.Name))
+        {
+            error = $"{path}.name must be a non-empty string.";
+            return false;
+        }
+
+        if (isPost)
+        {
+            // F-031: the prefix is the frozen record's, not a render-time decoration. A post step without it
+            // would make a record name ambiguous with a main step's, which is exactly what the prefix prevents.
+            if (!step.Name.StartsWith(PipelineSpecSchema.PostNamePrefix, StringComparison.Ordinal)
+                || step.Name.Length == PipelineSpecSchema.PostNamePrefix.Length)
+            {
+                error = $"{path}.name must start with '{PipelineSpecSchema.PostNamePrefix}' (e.g. "
+                    + $"'{PipelineSpecSchema.PostNamePrefix}cleanup').";
+                return false;
+            }
+        }
+
+        if (!names.Add(step.Name))
+        {
+            error = $"{path}.name '{step.Name}' is used by more than one step.";
+            return false;
+        }
+
+        var declared = (step.Run is null ? 0 : 1)
+            + (step.Shell is null ? 0 : 1)
+            + (step.Script is null ? 0 : 1);
+        if (declared != 1)
+        {
+            error = $"{path} must declare exactly one of run, shell or script.";
+            return false;
+        }
+
+        if (step.Script is { } script)
+        {
+            // F-020: a script step carries text instead of argv - non-empty and bounded, or it is a
+            // mistake the executor could only fail later and less clearly.
+            if (string.IsNullOrWhiteSpace(script))
+            {
+                error = $"{path}.script must be a non-empty script text.";
+                return false;
+            }
+
+            if (script.Length > PipelineSpecSchema.MaxScriptChars)
+            {
+                error = $"{path}.script must be at most {PipelineSpecSchema.MaxScriptChars} characters.";
+                return false;
+            }
+        }
+        else if (step.Argv.Length == 0)
+        {
+            error = $"{path} has an empty argv.";
+            return false;
+        }
+
+        // F-015: a condition is declared data the executor evaluates; an empty one is a mistake, and
+        // so is a key or platform the executor does not know (a typo would never match anything).
+        if (step.When is { } condition
+            && !TryReadCondition(condition, $"{path}.when", out error))
+        {
+            return false;
+        }
+
+        // F-016: the declared artifact paths are re-validated against the shared path rules by the
+        // upload endpoint; here the envelope only refuses a shape the executor could not even try.
+        if (!TryReadArtifactPaths(step.Artifacts, $"{path}.artifacts", out error))
+        {
+            return false;
+        }
+
+        // F-030: the stage is frozen on the step, so the envelope checks the shape the page will render -
+        // an empty or whitespace-padded header is a definition mistake, not data to trim later.
+        if (!PipelineSpecSchema.TryValidateStageName(step.Stage, out var stageError))
+        {
+            error = $"{path}.stage {stageError}";
+            return false;
+        }
+
+        // F-031: a post step renders under its `post/` name in the post section, never inside a stage. A stage
+        // on it would be configuration the page cannot honour, so it is refused rather than ignored.
+        if (isPost && step.Stage is not null)
+        {
+            error = $"{path}.stage must not be declared: post steps render in the post section, not a stage.";
+            return false;
+        }
+
+        // The stage is v3's field. A v1/v2 document that carries one contradicts the version it was frozen
+        // under, so it is refused instead of being rendered as if the field had always been there.
+        if (step.Stage is not null && version < 3)
+        {
+            error = $"{path}.stage requires pipeline.version 3 (this spec is v{version}).";
+            return false;
+        }
+
+        // F-032: the two step knobs are bounded here too. The Worker's definition phase refuses them
+        // with the same bounds and a field path; this is the Server's defensive gate, so a buggy or
+        // hostile worker cannot freeze a limit the executor would have to guess about (a zero-second
+        // timeout, or a six-thousand-attempt loop).
+        if (!TryReadStepLimit(
+                step.TimeoutSeconds,
+                PipelineSpecSchema.MinStepTimeoutSeconds,
+                PipelineSpecSchema.MaxStepTimeoutSeconds,
+                $"{path}.timeoutSeconds",
+                out error)
+            || !TryReadStepLimit(
+                step.Retry,
+                PipelineSpecSchema.MinStepRetry,
+                PipelineSpecSchema.MaxStepRetry,
+                $"{path}.retry",
+                out error))
+        {
+            return false;
+        }
+
         return true;
     }
 

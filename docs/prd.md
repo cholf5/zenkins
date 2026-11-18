@@ -413,6 +413,9 @@ Shell 只是逃生口，不是主要 Pipeline 编排方式。
   - 失败或超时的尝试按声明次数重试，**取消永不重试**；每次尝试是步骤日志中一段带分隔标记的内容，步骤记录仍只有一条（带 `Attempts` 与最终退出码），步骤列表与定义保持 1:1；重试用尽且最后一次是普通非零退出时，Run 的原因为 `step-retry-exhausted`。
   - secret 引用每步只解析一次，重试不重新取材质。
   - 两个字段都不填的步骤，行为与引入本字段前完全一致。
+- 主步骤列表结束后可声明**后置步骤**（`post`，F-031）：`success`、`failure` 两组按 Run 结果**二选一**执行，随后 `always` **最后**执行（success→always 或 failure→always，两个结果组永不同跑）。后置步骤与主步骤同形（run/script/env/when/artifacts/timeout/retry 全部适用），记录名带 `post/` 前缀，日志独立。
+  - 后置步骤失败**默认不改变**主列表已经决定的结果：该步骤自身记为 Failed 并显示在 Run 页的 Post steps 区，页面说明结果为何不变；项目设置里可显式打开"后置步骤失败即 Run 失败"（Run 原因为 `post-failed`）。
+  - **取消时 `always` 仍会执行**：用户取消给后置步骤一个有界宽限窗（默认 30 秒），deadline 触发的取消则被夹到 deadline 剩余时间；超窗的后置步骤被杀死并记录（用户取消宽限 → `post-grace-exceeded`，deadline → `timed-out`）。清理成功不会把 `Canceled` 改成别的状态；取消的 Run 不跑 `failure` 组。
 - 支持 Pipeline 级别和 Step 级别的环境变量。
 - 支持条件执行。
 - Step 可声明可选的 `stage`（阶段名），构建页据此把步骤分组显示（如 **Build → Test → Package**，F-030）。相邻的同名 stage 合成一个阶段区，未声明 stage 的步骤显示在任何阶段区之外；阶段信息随 spec 一起冻结（schema v3），**不得**事后从步骤名推导，旧 run 仍按当时的样子显示为无阶段列表。阶段只影响展示：执行顺序、`continue_on_error`、跳过与取消都完全不变。

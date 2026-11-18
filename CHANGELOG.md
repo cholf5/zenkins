@@ -8,6 +8,19 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **Post actions (F-031).** A pipeline can declare `post = { success, failure, always }` - steps that run
+  after the main list, so cleanup no longer needs `continue_on_error` on a real step. The lists are the
+  same `PipelineStep` shape as the main one (run/script, env, conditions, artifacts, timeout, retry) and
+  their frozen names carry a `post/` prefix, so records and logs cannot be confused with main steps.
+  After the main list ends exactly one outcome set runs (success or failure, never both) and then
+  `always` runs last. A post step failure is recorded as its own failed step and does not change a
+  successful run's result unless the project enables "a failed post step fails the run" (new switch on
+  the settings tab; the run then reports `post-failed`). A canceled run still runs `always` inside a
+  bounded grace window (30 s, clamped to the run's remaining deadline), so a cancel no longer skips
+  cleanup; a step that overruns is killed and recorded (`post-grace-exceeded` vs `timed-out`), and a
+  successful cleanup does not change `Canceled`. Freestyle projects get the three lists in the steps
+  editor, frozen into the spec the run carries. Schema stays v3 (additive): specs without `post` read,
+  render and execute exactly as before.
 - **Stage grouping (F-030).** A pipeline can group its steps into named stages, and the run page
   reads a 40-step build as Build → Test → Package instead of one flat list. The name lives **inside the
   frozen spec** (`PipelineStep.Stage`, schema v3): it is not derived from step names, so a later rename

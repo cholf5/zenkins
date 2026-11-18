@@ -43,7 +43,8 @@ internal sealed class RunUiHost : IDisposable
     /// </summary>
     public async Task<RunUiRun> CreateRunAsync(
         IReadOnlyList<PipelineStep> steps,
-        int version = PipelineSpecSchema.Version)
+        int version = PipelineSpecSchema.Version,
+        PipelinePost? post = null)
     {
         var (projectId, owner) = await Streaming.CreateProjectAsync();
         var (token, _) = await Streaming.RegisterWorkerAsync();
@@ -55,7 +56,7 @@ internal sealed class RunUiHost : IDisposable
         using var accepted = await RunTestHost.AcceptAsync(workerClient, token, runId);
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
 
-        var spec = new PipelineSpec(version, "runui-pipeline", [.. steps]);
+        var spec = new PipelineSpec(version, "runui-pipeline", [.. steps], Post: post);
         using var definition = await RunTestHost.ReportDefinitionAsync(
             workerClient, token, runId, PipelineSpecJson.Serialize(spec));
         Assert.Equal(HttpStatusCode.OK, definition.StatusCode);
@@ -117,10 +118,19 @@ internal sealed class RunUiRun
     /// Sends one step transition through the real step endpoint and records the answer's step row
     /// id - the value the test then stamps on that step's log lines.
     /// </summary>
-    public async Task ReportStepAsync(int index, string status, int? exitCode = null, string? failureReason = null)
+    /// <param name="name">
+    /// Card F-031: a post step's frozen record name (<c>post/…</c>), when the test reports one - the declared
+    /// main names cover the main list only.
+    /// </param>
+    public async Task ReportStepAsync(
+        int index,
+        string status,
+        int? exitCode = null,
+        string? failureReason = null,
+        string? name = null)
     {
         using var response = await RunTestHost.ReportStepAsync(
-            WorkerClient, WorkerToken, RunId, index, StepNames[index - 1], status, exitCode, failureReason);
+            WorkerClient, WorkerToken, RunId, index, name ?? StepNames[index - 1], status, exitCode, failureReason);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var stepId = await ReadStepIdAsync(response);
         lock (RecordedStepIds)

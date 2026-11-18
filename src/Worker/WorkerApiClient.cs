@@ -123,7 +123,13 @@ public sealed record WorkerClaimResponse(
     /// both a script and a spec. Absent from an older server's JSON: the Worker then derives the shape
     /// from the fields it does know, exactly as the Server did before the word existed.
     /// </summary>
-    string? DefinitionSource = null);
+    string? DefinitionSource = null,
+
+    /// <summary>
+    /// Card F-031: the project's "a failed post step fails the run" switch. Defaults to
+    /// <see langword="false"/> - the product default and what an older server's claim means.
+    /// </summary>
+    bool PostFailureFailsRun = false);
 
 /// <summary>
 /// The accepted report's answer (card F-014 extends the bodyless answer): the run's execution deadline,

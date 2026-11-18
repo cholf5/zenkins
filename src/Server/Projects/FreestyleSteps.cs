@@ -39,8 +39,16 @@ public sealed record FreestyleStepDraft(
     string? RunsOn = null,
     string? Stage = null);
 
-/// <summary>The steps editor's form payload: the drafts, serialized as JSON by the page.</summary>
-public sealed record FreestyleStepsInput(string? StepsJson);
+/// <summary>
+/// The steps editor's form payload: the drafts, serialized as JSON by the page - the main list plus, since
+/// card F-031, the three post lists (each its own JSON array and its own hidden field). Blank means "this
+/// list declares nothing".
+/// </summary>
+public sealed record FreestyleStepsInput(
+    string? StepsJson,
+    string? AlwaysStepsJson = null,
+    string? SuccessStepsJson = null,
+    string? FailureStepsJson = null);
 
 /// <summary>
 /// Builds and validates the Freestyle spec (card F-020). One routine, used by the save endpoint and
@@ -60,8 +68,9 @@ public static class FreestyleSteps
     public static readonly JsonSerializerOptions DraftsOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
-    /// Builds the frozen spec JSON from the drafts. Returns <see langword="null"/> with a one-line
-    /// reason when anything is refused; nothing is written by this class.
+    /// Builds the frozen spec JSON from the drafts - the main list and, since card F-031, the three post
+    /// lists. Returns <see langword="null"/> with a one-line reason when anything is refused; nothing is
+    /// written by this class.
     /// </summary>
     public static string? BuildSpecJson(string projectName, FreestyleStepsInput input, out string? error)
     {
@@ -82,87 +91,24 @@ public static class FreestyleSteps
         var secretNames = new List<string>();
         for (var i = 0; i < drafts.Length; i++)
         {
-            var draft = drafts[i];
-            var path = $"pipeline.steps[{i + 1}]";
-
-            // The draft's text fields become the declared shapes; the individual field rules
-            // (non-empty name, bounded script, artifact paths) are the envelope's, applied below by
-            // TryRead and the upload path.
-            if (ParseEnvLines(draft.EnvLines, path, out var env, out error) is false)
-            {
-                return null;
-            }
-
-            var artifacts = ParseArtifactsText(draft.ArtifactsText);
-            if (!ParseStepLimit(
-                    draft.TimeoutSeconds,
-                    $"{path}.timeoutSeconds",
-                    PipelineSpecSchema.MinStepTimeoutSeconds,
-                    PipelineSpecSchema.MaxStepTimeoutSeconds,
-                    out var timeoutSeconds,
-                    out error)
-                || !ParseStepLimit(
-                    draft.Retry,
-                    $"{path}.retry",
-                    PipelineSpecSchema.MinStepRetry,
-                    PipelineSpecSchema.MaxStepRetry,
-                    out var retry,
+            if (!TryBuildStep(
+                    drafts[i],
+                    $"pipeline.steps[{i + 1}]",
+                    isPost: false,
+                    secretNames,
+                    out var step,
                     out error))
             {
                 return null;
             }
 
-            // Card F-033: one parser for the requirement, whatever the editor's field holds - the same
-            // WorkerRequirement the Lua reader and the claim loop use, never a second splitter here. A
-            // blank field means "no requirement", which is not the empty expression.
-            var runsOn = draft.RunsOn?.Trim();
-            WorkerRequirement? requirement = null;
-            if (!string.IsNullOrWhiteSpace(runsOn))
-            {
-                if (!WorkerRequirement.TryParse(runsOn, out var parsed, out var parseError))
-                {
-                    error = $"{path}.runsOn {parseError}";
-                    return null;
-                }
+            steps[i] = step!;
+        }
 
-                if (parsed.IsContradiction)
-                {
-                    error = $"{path}.runsOn can never be satisfied: '{runsOn}'.";
-                    return null;
-                }
-
-                requirement = parsed;
-            }
-
-            // Card F-030: the stage is the editor's text field, trimmed server-side like the name - a blank
-            // field is "no stage", and the envelope then bounds the shape it stores (non-empty, <= 64, unpadded).
-            var stage = draft.Stage?.Trim();
-
-            steps[i] = new PipelineStep(
-                draft.Name?.Trim() ?? string.Empty,
-                Script: draft.Script ?? string.Empty,
-                Env: env,
-                ContinueOnError: draft.ContinueOnError,
-                Artifacts: artifacts,
-                TimeoutSeconds: timeoutSeconds,
-                Retry: retry,
-                RunsOn: string.IsNullOrWhiteSpace(runsOn) ? null : runsOn,
-                Requirement: requirement?.StorageForm,
-                Stage: string.IsNullOrEmpty(stage) ? null : stage);
-
-            // The Server-side capture (D-006's semantics, extended by F-040): the exact reference form and
-            // never a value - scanned from the same fields the Worker will substitute (the script text and the
-            // step's env values). The form matters: a step that reads ${secretFile:KEY} or a pair's .password
-            // is a use of that secret, and recording only the bare name would make the Secrets page's "which
-            // pipelines use this" either lie or lose the half that was used.
-            secretNames.AddRange(StepReference.ReferencesIn(draft.Script));
-            if (env is not null)
-            {
-                foreach (var (_, value) in env)
-                {
-                    secretNames.AddRange(StepReference.ReferencesIn(value));
-                }
-            }
+        var post = BuildPost(input, secretNames, out error);
+        if (error is not null)
+        {
+            return null;
         }
 
         // Card F-033: the same cross-step rule the Lua reader applies, at the one place a Freestyle definition
@@ -179,7 +125,8 @@ public static class FreestyleSteps
             PipelineSpecSchema.Version,
             projectName,
             steps,
-            SecretReferences: PipelineSpecSchema.NormalizeSecretReferences([.. secretNames]));
+            SecretReferences: PipelineSpecSchema.NormalizeSecretReferences([.. secretNames]),
+            Post: post);
 
         if (!PipelineSpecJson.TryRead(PipelineSpecJson.Serialize(spec), out var validated, out var envelopeError)
             || validated is null)
@@ -189,6 +136,211 @@ public static class FreestyleSteps
         }
 
         return PipelineSpecJson.Serialize(validated);
+    }
+
+    /// <summary>
+    /// One draft as a frozen <see cref="PipelineStep"/>. The same routine serves the main list and the post
+    /// lists (card F-031): a post step is a step, so its env/artifact/limit parsing must not be a second copy.
+    /// A post step's frozen name gets the <c>post/</c> prefix here, and its stage is deliberately not read - the
+    /// editor hides the field and the envelope would refuse it.
+    /// </summary>
+    private static bool TryBuildStep(
+        FreestyleStepDraft draft,
+        string path,
+        bool isPost,
+        List<string> secretNames,
+        out PipelineStep? step,
+        out string? error)
+    {
+        step = null;
+        error = null;
+
+        // The draft's text fields become the declared shapes; the individual field rules
+        // (non-empty name, bounded script, artifact paths) are the envelope's, applied below by
+        // TryRead and the upload path.
+        if (!ParseEnvLines(draft.EnvLines, path, out var env, out error))
+        {
+            return false;
+        }
+
+        var artifacts = ParseArtifactsText(draft.ArtifactsText);
+        if (!ParseStepLimit(
+                draft.TimeoutSeconds,
+                $"{path}.timeoutSeconds",
+                PipelineSpecSchema.MinStepTimeoutSeconds,
+                PipelineSpecSchema.MaxStepTimeoutSeconds,
+                out var timeoutSeconds,
+                out error)
+            || !ParseStepLimit(
+                draft.Retry,
+                $"{path}.retry",
+                PipelineSpecSchema.MinStepRetry,
+                PipelineSpecSchema.MaxStepRetry,
+                out var retry,
+                out error))
+        {
+            return false;
+        }
+
+        // Card F-033: one parser for the requirement, whatever the editor's field holds - the same
+        // WorkerRequirement the Lua reader and the claim loop use, never a second splitter here. A
+        // blank field means "no requirement", which is not the empty expression.
+        var runsOn = draft.RunsOn?.Trim();
+        WorkerRequirement? requirement = null;
+        if (!string.IsNullOrWhiteSpace(runsOn))
+        {
+            if (!WorkerRequirement.TryParse(runsOn, out var parsed, out var parseError))
+            {
+                error = $"{path}.runsOn {parseError}";
+                return false;
+            }
+
+            if (parsed.IsContradiction)
+            {
+                error = $"{path}.runsOn can never be satisfied: '{runsOn}'.";
+                return false;
+            }
+
+            requirement = parsed;
+        }
+
+        var name = draft.Name?.Trim() ?? string.Empty;
+        if (isPost)
+        {
+            // Mirrors the Lua reader: the prefix is the frozen record's, so an author who typed it would get a
+            // doubled one. The editor strips it from the row, so this only refuses a hand-crafted POST.
+            if (name.StartsWith(PipelineSpecSchema.PostNamePrefix, StringComparison.Ordinal))
+            {
+                error = $"{path}.name must not start with '{PipelineSpecSchema.PostNamePrefix}' - a post step's "
+                    + "record name gets that prefix automatically; declare the plain name.";
+                return false;
+            }
+
+            name = PipelineSpecSchema.PostNamePrefix + name;
+        }
+
+        // Card F-030: the stage is the editor's text field, trimmed server-side like the name - a blank
+        // field is "no stage", and the envelope then bounds the shape it stores (non-empty, <= 64, unpadded).
+        // A post step never carries one (F-031).
+        var stage = isPost ? null : draft.Stage?.Trim();
+
+        step = new PipelineStep(
+            name,
+            Script: draft.Script ?? string.Empty,
+            Env: env,
+            ContinueOnError: draft.ContinueOnError,
+            Artifacts: artifacts,
+            TimeoutSeconds: timeoutSeconds,
+            Retry: retry,
+            RunsOn: string.IsNullOrWhiteSpace(runsOn) ? null : runsOn,
+            Requirement: requirement?.StorageForm,
+            Stage: string.IsNullOrEmpty(stage) ? null : stage);
+
+        // The Server-side capture (D-006's semantics, extended by F-040): the exact reference form and
+        // never a value - scanned from the same fields the Worker will substitute (the script text and the
+        // step's env values). The form matters: a step that reads ${secretFile:KEY} or a pair's .password
+        // is a use of that secret, and recording only the bare name would make the Secrets page's "which
+        // pipelines use this" either lie or lose the half that was used.
+        secretNames.AddRange(StepReference.ReferencesIn(draft.Script));
+        if (env is not null)
+        {
+            foreach (var (_, value) in env)
+            {
+                secretNames.AddRange(StepReference.ReferencesIn(value));
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The three post lists of the editor (card F-031). An absent or empty list is "not declared"; a list
+    /// that does not parse is refused with its own field path, like every other draft field.
+    /// </summary>
+    private static PipelinePost? BuildPost(
+        FreestyleStepsInput input,
+        List<string> secretNames,
+        out string? error)
+    {
+        var always = BuildPostList(input.AlwaysStepsJson, PipelinePostOutcomes.Always, secretNames, out error);
+        if (error is not null)
+        {
+            return null;
+        }
+
+        var success = BuildPostList(input.SuccessStepsJson, PipelinePostOutcomes.Success, secretNames, out error);
+        if (error is not null)
+        {
+            return null;
+        }
+
+        var failure = BuildPostList(input.FailureStepsJson, PipelinePostOutcomes.Failure, secretNames, out error);
+        if (error is not null)
+        {
+            return null;
+        }
+
+        if (always is null && success is null && failure is null)
+        {
+            return null;
+        }
+
+        return new PipelinePost(success, failure, always);
+    }
+
+    private static PipelineStep[]? BuildPostList(
+        string? json,
+        string outcome,
+        List<string> secretNames,
+        out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        FreestyleStepDraft[]? drafts;
+        try
+        {
+            drafts = JsonSerializer.Deserialize<FreestyleStepDraft[]>(json, DraftsOptions);
+        }
+        catch (JsonException)
+        {
+            error = $"the {outcome} post step list is not valid JSON for the steps editor.";
+            return null;
+        }
+
+        if (drafts is null || drafts.Length == 0)
+        {
+            return null;
+        }
+
+        var steps = new PipelineStep[drafts.Length];
+        for (var i = 0; i < drafts.Length; i++)
+        {
+            if (!TryBuildStep(
+                    drafts[i],
+                    $"pipeline.post.{outcome}[{i + 1}]",
+                    isPost: true,
+                    secretNames,
+                    out var step,
+                    out error))
+            {
+                return null;
+            }
+
+            steps[i] = step!;
+        }
+
+        var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(steps, $"pipeline.post.{outcome}");
+        if (requirementError is not null)
+        {
+            error = requirementError;
+            return null;
+        }
+
+        return steps;
     }
 
     /// <summary>

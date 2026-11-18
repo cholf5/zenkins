@@ -77,6 +77,15 @@ public sealed class Project : ITenantOwned
     public string? PipelinePath { get; set; } = "pipeline.lua";
 
     /// <summary>
+    /// Card F-031: whether a failed post step fails the run. <b>False is the product default</b> - a cleanup
+    /// that breaks after a green build must not silently turn the build red, and it must not be silently
+    /// swallowed either: the failed step is recorded and the run page explains that the result is unchanged.
+    /// A project that wants the stricter reading (a failed cleanup means the build is not trusted) turns this
+    /// on explicitly, and the claim carries the answer to the worker that executes the post phase.
+    /// </summary>
+    public bool PostFailureFailsRun { get; set; }
+
+    /// <summary>
     /// The project's build-parameter definitions (card F-021, PRD §3.11): a JSON array of
     /// <see cref="Zenkins.Shared.Projects.ProjectParameter"/>, serialized with the source-generated
     /// <c>ProjectParameterJsonContext</c>. Null means "no parameters declared"; the trigger form

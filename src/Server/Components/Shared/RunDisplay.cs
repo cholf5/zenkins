@@ -176,6 +176,10 @@ public static class RunDisplay
             PipelineFailureReasons.StepRetryExhausted =>
                 "A step failed and then failed again on every attempt it declared; the run stopped there. "
                 + "Each attempt's output is its own delimited section in the step's log.",
+            // F-031: the project explicitly asked a failed post step to fail the run.
+            PipelineFailureReasons.PostFailed =>
+                "A post step failed, and this project is set to fail the run on a post step failure. The "
+                + "failing step is in the Post steps section, with its own log.",
             _ => string.Empty,
         };
     }

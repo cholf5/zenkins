@@ -1022,6 +1022,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<bool>("PollingEnabled")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("PostFailureFailsRun")
+                        .HasColumnType("boolean");
+
                     b.Property<int>("QuietPeriodSeconds")
                         .HasColumnType("integer");
 

@@ -43,9 +43,9 @@
                    @onclick="@(() => StepSelected.InvokeAsync(stepRowId))">View log</a>
             }
         </div>
-        @if (step.Index <= Pipeline.Steps.Length)
+        @if (step.Argv is { Length: > 0 } argv)
         {
-            <code class="bb:text-xs bb:text-muted-foreground">@string.Join(' ', Pipeline.Steps[step.Index - 1].Argv)</code>
+            <code class="bb:text-xs bb:text-muted-foreground">@string.Join(' ', argv)</code>
         }
     </li>
 }
@@ -54,10 +54,6 @@
     /// <summary>The rows to render, in declaration order (one stage section, or an unstaged run).</summary>
     [Parameter, EditorRequired]
     public IReadOnlyList<RunStepView> Steps { get; set; } = [];
-
-    /// <summary>The run's frozen spec - the argv shown under each step comes from it.</summary>
-    [Parameter, EditorRequired]
-    public PipelineSpec Pipeline { get; set; } = null!;
 
     /// <summary>
     /// Card F-030: the index of the run's first failed step, or null when nothing failed. Exactly that row

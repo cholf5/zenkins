@@ -78,6 +78,8 @@ public static class ProjectEndpoints
         // submits: the preview button names itself and answers "what would the next sweep delete?" with the
         // same evaluation the sweep itself runs, without storing anything.
         group.MapPost("/{projectId:guid}/retention", SaveRetentionAsync);
+        // F-031: the explicit "a failed post step fails the run" switch, from the settings tab.
+        group.MapPost("/{projectId:guid}/post-failure", SavePostFailureAsync);
 
         return endpoints;
     }
@@ -400,6 +402,39 @@ public static class ProjectEndpoints
     }
 
     /// <summary>
+    /// Card F-031: flips the "a failed post step fails the run" switch. A settings-tab form, so the PRG
+    /// target is that tab with a notice; authorization and tenancy answers stay hard.
+    /// </summary>
+    private static async Task<IResult> SavePostFailureAsync(
+        Guid projectId,
+        [FromForm] PostFailureForm form,
+        HttpContext httpContext,
+        ProjectService projects)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var enabled = form?.Enabled ?? false;
+        var result = await projects.SetPostFailureFailsRunAsync(
+            userId,
+            projectId,
+            enabled,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            ProjectMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/settings?notice={(enabled ? "post-failure-on" : "post-failure-off")}"),
+            ProjectMutationStatus.Forbidden => Forbidden(result),
+            ProjectMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect($"/projects/{projectId}/settings?error={FirstCode(result)}"),
+        };
+    }
+
+    /// <summary>
     /// Card F-028: re-enables the project. Nothing is replayed - canceled runs stay canceled and no
     /// refused trigger is retried; the next trigger queues a run like any other.
     /// </summary>
@@ -639,6 +674,15 @@ public static class ProjectEndpoints
     }
 
     /// <summary>
+    /// Card F-031's switch form. The checkbox posts <c>true</c> when ticked and nothing when not, which binds
+    /// to <see langword="false"/> - the same reading the page showed.
+    /// </summary>
+    public sealed class PostFailureForm
+    {
+        public bool Enabled { get; set; }
+    }
+
+    /// <summary>
     /// Card F-029's limits form. All three fields are optional text: blank is "the default". They are
     /// not bound as numbers so a typo reaches the service's validation and comes back as a field-level
     /// code instead of a binding failure.
@@ -770,7 +814,18 @@ public static class ProjectEndpoints
     {
         public string? StepsJson { get; set; }
 
-        public FreestyleStepsInput ToInput() => new(StepsJson);
+        /// <summary>Card F-031: the three post lists, each its own JSON array like the main one.</summary>
+        public string? AlwaysStepsJson { get; set; }
+
+        public string? SuccessStepsJson { get; set; }
+
+        public string? FailureStepsJson { get; set; }
+
+        public FreestyleStepsInput ToInput() => new(
+            StepsJson,
+            AlwaysStepsJson,
+            SuccessStepsJson,
+            FailureStepsJson);
     }
 
     /// <summary>

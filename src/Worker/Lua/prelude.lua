@@ -36,6 +36,19 @@ end
 -- The name is written onto every step the entry contains (the host flattens the entries back into
 -- one ordered step list), so the frozen spec - not a reader's guess - is what a run page groups by.
 -- `stages` is an ordered list, not a map: a Lua map has no declaration order to show.
+--
+-- F-031: post steps run after the main list.
+--
+--   pipeline { name = "release", steps = { ... }, post = {
+--     success = { step{ name = "report",  run = {...} } },   -- only when the main list succeeded
+--     failure = { step{ name = "notify",  run = {...} } },   -- only when it failed (never both)
+--     always  = { step{ name = "cleanup", run = {...} } },   -- last, whatever happened
+--   } }
+--
+-- The host freezes each post step's name with the `post/` prefix (declare the plain name), runs the
+-- matching set and then `always` through the same C# step executor, and gives `always` a bounded grace
+-- window after a cancel. A post step's failure is shown as its own step and does not change the run's
+-- result unless the project says so.
 function pipeline(spec)
   require_table(spec, "pipeline{}", 1)
   _zenkins_pipeline = spec

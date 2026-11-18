@@ -118,7 +118,14 @@ public sealed record ProjectView(
     string? LastPollMessage = null,
 
     /// <summary>Card F-025: consecutive failed probes - the backoff state the card shows (1x, 2x, 4x ...).</summary>
-    int PollFailureStreak = 0);
+    int PollFailureStreak = 0,
+
+    /// <summary>
+    /// Card F-031: whether a failed post step fails the run (the settings tab's switch). False is the default
+    /// and the historical behaviour of every project; the claim hands this value to the worker that executes
+    /// the post phase.
+    /// </summary>
+    bool PostFailureFailsRun = false);
 
 /// <summary>The raw form values, before trimming and validation. <see cref="Kind"/> is honored on
 /// create only - a project's kind is immutable after that (F-020), so an edit cannot turn a Pipeline
@@ -756,6 +763,53 @@ public sealed class ProjectService(
     }
 
     /// <summary>
+    /// Card F-031: the project's explicit "a failed post step fails the run" switch. Members and Owners may
+    /// change it (like every other project setting); it is read at claim time and handed to the worker, which
+    /// is the side that executes the post phase and reports the run's outcome. Nothing is replayed: runs
+    /// already queued carry the answer they were claimed with.
+    /// </summary>
+    public async Task<ProjectMutationResult> SetPostFailureFailsRunAsync(
+        string actingUserId,
+        Guid projectId,
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            return ProjectMutationResult.Forbidden(
+                "You are not a member of an organization, so there is no project to edit.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (!await IsMemberAsync(context, actingUserId, cancellationToken))
+        {
+            return ProjectMutationResult.Forbidden("You are not a member of the active organization.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return ProjectMutationResult.NotFound();
+        }
+
+        project.PostFailureFailsRun = enabled;
+        await context.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Project post-failure switch changed. OrganizationId={OrganizationId} ProjectId={ProjectId} ByUserId={UserId} PostFailureFailsRun={Enabled}",
+            activeOrganizationId,
+            project.Id,
+            actingUserId,
+            enabled);
+        return ProjectMutationResult.Success(project.Id);
+    }
+
+    /// <summary>
     /// Saves the queue controls (card F-029): the concurrency limit, the quiet period and the queue cap.
     /// Members may edit them, like every other project field - they bound the project's own queue, they
     /// do not decide who may do what. Blank means the default (unlimited / zero), which is exactly how
@@ -1064,5 +1118,6 @@ public sealed class ProjectService(
         project.LastPollAt,
         project.LastPollOutcome,
         project.LastPollMessage,
-        project.PollFailureStreak);
+        project.PollFailureStreak,
+        project.PostFailureFailsRun);
 }

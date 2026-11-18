@@ -197,6 +197,211 @@ public sealed class PipelineRunnerTests
     }
 
     // ------------------------------------------------------------------
+    // Card F-031: post actions
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_successful_main_list_runs_the_success_set_then_always_and_never_the_failure_set()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Main", "append", "marker.txt", "main"),
+                success: PipelineTestData.Step("AllGood", "append", "marker.txt", "success"),
+                failure: PipelineTestData.Step("OnFail", "append", "marker.txt", "failure"),
+                always: PipelineTestData.Step("Cleanup", "append", "marker.txt", "always")));
+        using var run = new PipelineRunHarness(repository);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+
+        // The marker file is the order the steps really ran in: success, then always - never the failure set.
+        Assert.Equal(["main", "success", "always"], MarkerLines(run));
+        Assert.Equal(["Main", "post/AllGood", "post/Cleanup"], TerminalNames(run));
+
+        // The frozen spec carries the prefixed names (so a record and a log line are unambiguous).
+        var report = Assert.Single(run.DefinitionReports);
+        Assert.True(PipelineSpecJson.TryRead(report.PipelineSpecJson, out var spec, out var error), error);
+        Assert.NotNull(spec!.Post);
+        Assert.Equal(
+            ["post/AllGood", "post/OnFail", "post/Cleanup"],
+            spec.Post!.DeclaredSteps.Select(declared => declared.Step.Name));
+    }
+
+    [Fact]
+    public async Task A_failed_main_list_runs_the_failure_set_then_always_and_never_the_success_set()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Main", "exit", "3"),
+                success: PipelineTestData.Step("AllGood", "append", "marker.txt", "success"),
+                failure: PipelineTestData.Step("OnFail", "append", "marker.txt", "failure"),
+                always: PipelineTestData.Step("Cleanup", "append", "marker.txt", "always")));
+        using var run = new PipelineRunHarness(repository);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(3, outcome.ExitCode);
+        Assert.Equal(PipelineFailureReasons.StepFailed, outcome.FailureReason);
+        Assert.Equal(["failure", "always"], MarkerLines(run));
+        Assert.Equal(["Main", "post/OnFail", "post/Cleanup"], TerminalNames(run));
+    }
+
+    [Fact]
+    public async Task A_failing_post_step_is_recorded_but_does_not_flip_a_successful_run_by_default()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Main", "append", "marker.txt", "main"),
+                always: PipelineTestData.Step("Broken", "exit", "4")));
+        using var run = new PipelineRunHarness(repository);
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        // The main list decided the result; the broken cleanup is visible as its own failed step.
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+
+        var broken = Assert.Single(run.StepReports, report =>
+            report.Name == "post/Broken" && report.Status == PipelineStepStatus.Failed);
+        Assert.Equal(4, broken.ExitCode);
+        Assert.Equal(["main"], MarkerLines(run));
+    }
+
+    [Fact]
+    public async Task The_projects_switch_makes_a_failed_post_step_fail_the_run()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Main", "append", "marker.txt", "main"),
+                always: PipelineTestData.Step("Broken", "exit", "4")));
+        using var run = new PipelineRunHarness(repository) { PostFailureFailsRun = true };
+
+        var outcome = await run.ExecuteAsync(CancellationToken);
+
+        Assert.Equal(4, outcome.ExitCode);
+        Assert.Equal(PipelineFailureReasons.PostFailed, outcome.FailureReason);
+    }
+
+    [Fact]
+    public async Task A_canceled_run_still_runs_always_inside_the_grace_and_stays_canceled()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Long", "stream", "5000"),
+                success: PipelineTestData.Step("AllGood", "append", "marker.txt", "success"),
+                failure: PipelineTestData.Step("OnFail", "append", "marker.txt", "failure"),
+                always: PipelineTestData.Step("Cleanup", "append", "marker.txt", "cleanup")));
+        using var cancellation = new CancellationTokenSource();
+        using var run = new PipelineRunHarness(repository)
+        {
+            OnStepRunning = _ => cancellation.Cancel(),
+        };
+
+        var outcome = await run.ExecuteAsync(cancellation.Token);
+
+        Assert.True(outcome.Canceled);
+        // The cleanup really ran after the cancel - that is the point of the grace window.
+        Assert.Equal(["cleanup"], MarkerLines(run));
+        Assert.Equal(["Long", "post/Cleanup"], TerminalNames(run));
+
+        // ... and the run stays Canceled: a successful cleanup does not resurrect it.
+        Assert.Null(outcome.ExitCode);
+        Assert.Null(outcome.FailureReason);
+    }
+
+    [Fact]
+    public async Task A_post_step_that_overruns_the_cancel_grace_is_killed_and_recorded()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Long", "stream", "5000"),
+                always: PipelineTestData.Step("SlowCleanup", "stream", "5000")));
+        using var cancellation = new CancellationTokenSource();
+        using var run = new PipelineRunHarness(repository)
+        {
+            OnStepRunning = _ => cancellation.Cancel(),
+            PostGrace = TimeSpan.FromMilliseconds(250),
+        };
+
+        var outcome = await run.ExecuteAsync(cancellation.Token);
+
+        Assert.True(outcome.Canceled);
+        var cleanup = Assert.Single(run.StepReports, report =>
+            report.Name == "post/SlowCleanup" && report.Status == PipelineStepStatus.Failed);
+        Assert.Equal(PipelineStepFailureReasons.PostGraceExceeded, cleanup.FailureReason);
+    }
+
+    [Fact]
+    public async Task A_deadline_cancel_clamps_the_grace_to_the_deadline_and_kills_an_overrunning_post_step()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Long", "stream", "5000"),
+                always: PipelineTestData.Step("SlowCleanup", "stream", "5000")));
+
+        // A manual clock moves the run to half a second before its deadline at the instant the cancel fires: the
+        // definition phase ran with the full 30s, and the post window is clamped to the 0.5s the deadline left -
+        // not the 30s an operator cancel would get.
+        var now = DateTimeOffset.UtcNow;
+        var clock = new ManualClock(now);
+        using var cancellation = new CancellationTokenSource();
+        using var run = new PipelineRunHarness(repository)
+        {
+            Clock = clock,
+            Deadline = now.AddSeconds(30),
+            CancellationFailureReason = () => Zenkins.Shared.RunCancellation.RunCancelReasons.Timeout,
+            OnStepRunning = _ =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(29.5));
+                cancellation.Cancel();
+            },
+        };
+
+        var outcome = await run.ExecuteAsync(cancellation.Token);
+
+        Assert.True(outcome.Canceled);
+        var cleanup = Assert.Single(run.StepReports, report =>
+            report.Name == "post/SlowCleanup" && report.Status == PipelineStepStatus.Failed);
+        // The kill is the run's deadline (not the cancel-grace value): the window was clamped to it.
+        Assert.Equal(PipelineStepFailureReasons.TimedOut, cleanup.FailureReason);
+    }
+
+    [Fact]
+    public async Task A_deadline_with_no_time_left_records_the_post_steps_as_skipped_and_runs_nothing()
+    {
+        using var repository = PipelineRepository.Create(
+            PipelineWithPost(
+                PipelineTestData.Step("Long", "stream", "5000"),
+                always: PipelineTestData.Step("Cleanup", "append", "marker.txt", "cleanup")));
+        // A manual clock lets the deadline pass at the exact moment the cancel arrives: the definition phase
+        // ran inside the deadline, and by the time post would start there is no time left to clamp to.
+        var now = DateTimeOffset.UtcNow;
+        var clock = new ManualClock(now);
+        using var cancellation = new CancellationTokenSource();
+        using var run = new PipelineRunHarness(repository)
+        {
+            Clock = clock,
+            Deadline = now.AddSeconds(30),
+            CancellationFailureReason = () => Zenkins.Shared.RunCancellation.RunCancelReasons.Timeout,
+            OnStepRunning = _ =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(60));
+                cancellation.Cancel();
+            },
+        };
+
+        var outcome = await run.ExecuteAsync(cancellation.Token);
+
+        Assert.True(outcome.Canceled);
+        Assert.False(File.Exists(Path.Combine(run.Work.RepositoryPath, "marker.txt")));
+        var cleanup = Assert.Single(run.StepReports, report =>
+            report.Name == "post/Cleanup" && report.Status == PipelineStepStatus.Skipped);
+        Assert.Equal(PipelineStepFailureReasons.RunCanceled, cleanup.FailureReason);
+    }
+
+    // ------------------------------------------------------------------
     // TC-002: a failing step stops the run
     // ------------------------------------------------------------------
 
@@ -569,6 +774,53 @@ public sealed class PipelineRunnerTests
     }
 
     /// <summary>
+    /// <summary>
+    /// A definition with a post table (card F-031): the main step plus whichever outcome sets the fact needs.
+    /// Post steps are authored with plain names; the reader freezes them with the `post/` prefix.
+    /// </summary>
+    private static string PipelineWithPost(
+        string mainStep,
+        string? success = null,
+        string? failure = null,
+        string? always = null)
+    {
+        var lists = new List<string>();
+        if (success is not null)
+        {
+            lists.Add($"success = {{ {success} }},");
+        }
+
+        if (failure is not null)
+        {
+            lists.Add($"failure = {{ {failure} }},");
+        }
+
+        if (always is not null)
+        {
+            lists.Add($"always = {{ {always} }},");
+        }
+
+        return $$"""
+            pipeline {
+              name = "post",
+              steps = { {{mainStep}} },
+              post = {
+            {{string.Join("\n", lists.Select(list => "    " + list))}}
+              },
+            }
+            """;
+    }
+
+    /// <summary>The marker file's lines, in the order the steps appended them (a repository run's cwd).</summary>
+    private static string[] MarkerLines(PipelineRunHarness run) =>
+        File.ReadAllLines(Path.Combine(run.Work.RepositoryPath, "marker.txt"));
+
+    /// <summary>The names of a run's terminal step reports, in order - what a page lists as its steps.</summary>
+    private static string[] TerminalNames(PipelineRunHarness run) =>
+        [.. run.StepReports
+            .Where(report => PipelineStepStatus.IsTerminal(report.Status))
+            .Select(report => report.Name)];
+
     /// A Freestyle spec over one script per entry (card F-020): built and serialized by the product's
     /// own contract, so the shape the runner reads is the shape the Server freezes.
     /// </summary>
@@ -945,10 +1197,10 @@ public sealed class PipelineRunnerTests
         // spent it there - the run answered `git-timeout` before the step it is about had even reported Running.
         var deadlineClock = new ManualClock(DateTimeOffset.UtcNow);
         using var cancellation = new CancellationTokenSource();
-        using (var repository = PipelineRepository.Create(
+        using var repository = PipelineRepository.Create(
             PipelineTestData.Pipeline(
                 "deadline-governs",
-                PipelineTestData.StepWith("Long", timeoutSeconds: 7200, retry: null, "stream", "30000"))))
+                PipelineTestData.StepWith("Long", timeoutSeconds: 7200, retry: null, "stream", "30000")));
         using (var run = new PipelineRunHarness(repository)
                {
                    Deadline = deadlineClock.Now.AddHours(1),
@@ -975,11 +1227,11 @@ public sealed class PipelineRunnerTests
 
         // (b) The step's limit is earlier: it fires, and the log says so - the reverse sentence.
         var stepClock = new ManualClock(DateTimeOffset.UtcNow);
-        using (var repository = PipelineRepository.Create(
+        using (var stepRepository = PipelineRepository.Create(
             PipelineTestData.Pipeline(
                 "step-governs",
                 PipelineTestData.StepWith("Short", timeoutSeconds: 2, retry: null, "stream", "30000"))))
-        using (var run = new PipelineRunHarness(repository)
+        using (var run = new PipelineRunHarness(stepRepository)
                {
                    Deadline = stepClock.Now.AddMinutes(2),
                    Clock = stepClock,
@@ -1173,6 +1425,16 @@ public sealed class PipelineRunnerTests
         public TimeProvider Clock { get; init; } = TimeProvider.System;
 
         /// <summary>
+        /// Card F-031: how long a canceled run's post steps may run. The product default is 30s; a fact that
+        /// proves the kill shortens it.
+        /// </summary>
+        public TimeSpan PostGrace { get; init; } =
+            TimeSpan.FromSeconds(PipelineSpecSchema.PostGraceSeconds);
+
+        /// <summary>Card F-031: the project's explicit "a post failure fails the run" switch.</summary>
+        public bool PostFailureFailsRun { get; init; }
+
+        /// <summary>
         /// Card Q-023: called when a step reports that it is <b>running</b>. A fact that cancels "two seconds
         /// into the step" arms its timer here instead of at construction, so a slow machine cannot deliver the
         /// cancel before the step ever started (which used to turn "the step timed out" into "the run was
@@ -1258,6 +1520,8 @@ public sealed class PipelineRunnerTests
                     Branch = Branch,
                     PipelinePath = PipelinePath,
                     Deadline = Deadline,
+                    PostGrace = PostGrace,
+                    PostFailureFailsRun = PostFailureFailsRun,
                     GitExecutable = GitExecutable,
                     GitEnvironment = GitEnvironment,
                     Log = Emit,
@@ -1373,7 +1637,11 @@ public sealed class PipelineRunnerTests
 /// </summary>
 internal sealed class ManualClock(DateTimeOffset now) : TimeProvider
 {
-    public DateTimeOffset Now { get; } = now;
+    /// <summary>The instant the runner reads; <see cref="Advance"/> moves it without a real wait.</summary>
+    public DateTimeOffset Now { get; private set; } = now;
 
     public override DateTimeOffset GetUtcNow() => Now;
+
+    /// <summary>Moves the clock forward - card F-031's "the deadline has passed by the time post runs".</summary>
+    public void Advance(TimeSpan by) => Now += by;
 }

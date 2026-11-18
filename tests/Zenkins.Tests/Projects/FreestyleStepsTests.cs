@@ -322,6 +322,69 @@ public sealed class FreestyleStepsTests
             StringComparison.Ordinal);
     }
 
+    // ------------------------------------------------------------------
+    // Card F-031: the three post lists
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void Post_draft_lists_are_frozen_with_the_prefix_and_keep_the_step_shape()
+    {
+        var json = Build("post", input: new FreestyleStepsInput(
+            """[{"name":"Build","script":"echo build"}]""",
+            AlwaysStepsJson: """[{"name":"Cleanup","script":"echo cleanup","timeoutSeconds":"30"}]""",
+            SuccessStepsJson: """[{"name":"Report","script":"echo report"}]"""));
+
+        Assert.NotNull(json);
+        var spec = Read(json!);
+
+        Assert.Equal(PipelineSpecSchema.Version, spec.Version);
+        Assert.NotNull(spec.Post);
+        Assert.Equal(["post/Cleanup"], spec.Post!.Always!.Select(step => step.Name));
+        Assert.Equal(["post/Report"], spec.Post.Success!.Select(step => step.Name));
+        Assert.Null(spec.Post.Failure);
+
+        // A post step is a step: the timeout the editor declared survived.
+        Assert.Equal(30, spec.Post.Always![0].TimeoutSeconds);
+    }
+
+    [Fact]
+    public void Blank_post_lists_are_no_post_phase_at_all()
+    {
+        var json = Build("no-post", input: new FreestyleStepsInput(
+            """[{"name":"Build","script":"echo build"}]""",
+            AlwaysStepsJson: " ",
+            SuccessStepsJson: null,
+            FailureStepsJson: "[]"));
+
+        Assert.NotNull(json);
+        Assert.Null(Read(json!).Post);
+    }
+
+    [Fact]
+    public void A_post_draft_cannot_smuggle_a_stage_into_the_frozen_record()
+    {
+        // The editor hides the stage field for post rows; a hand-crafted POST that sets it is ignored by the
+        // builder and the envelope sees a clean step - post steps render in the post section, not a stage.
+        var json = Build("post-stage", input: new FreestyleStepsInput(
+            """[{"name":"Build","script":"echo build"}]""",
+            AlwaysStepsJson: """[{"name":"Cleanup","script":"echo cleanup","stage":"Build"}]"""));
+
+        Assert.NotNull(json);
+        Assert.Null(Read(json!).Post!.Always![0].Stage);
+    }
+
+    [Fact]
+    public void A_post_name_that_already_carries_the_prefix_is_refused_by_path()
+    {
+        var json = Build("post-prefixed", input: new FreestyleStepsInput(
+            """[{"name":"Build","script":"echo build"}]""",
+            AlwaysStepsJson: """[{"name":"post/Cleanup","script":"echo cleanup"}]"""));
+
+        Assert.Null(json);
+        Assert.NotNull(Error);
+        Assert.Contains("pipeline.post.always[1].name must not start with 'post/'", Error!, StringComparison.Ordinal);
+    }
+
     private static FreestyleStepDraft Step(string name, string script) =>
         new(Name: name, Script: script, EnvLines: null, ContinueOnError: false, ArtifactsText: null);
 

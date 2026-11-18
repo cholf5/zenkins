@@ -47,10 +47,11 @@ public static class PipelineSpecReader
     private const string RunKey = "run";
     private const string ShellKey = "shell";
 
-    private static readonly string[] PipelineKeys = ["name", "env", "steps", "stages", "triggers"];
+    private static readonly string[] PipelineKeys = ["name", "env", "steps", "stages", "post", "triggers"];
     private static readonly string[] StepKeys =
         ["name", "run", "shell", "env", "continue_on_error", "when", "artifacts", "timeout", "retry", "runs_on", "stage"];
     private static readonly string[] StageKeys = ["name", "steps"];
+    private static readonly string[] PostKeys = ["success", "failure", "always"];
     private static readonly string[] WhenKeys = ["branch", "platform", "env"];
     private static readonly string[] TriggerKeys = ["branches"];
 
@@ -78,10 +79,15 @@ public static class PipelineSpecReader
 
         var name = ReadName(root, "pipeline.name");
         var env = ReadEnv(root, "pipeline.env");
-        var steps = ReadSteps(root);
+
+        // One name registry across the whole definition (card F-031): a post step's frozen `post/…` name must
+        // be unique against the main list's too, or a run's step records would be ambiguous.
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        var steps = ReadSteps(root, names);
+        var post = ReadPost(root, names);
         var triggers = ReadTriggers(root);
 
-        return new PipelineSpec(PipelineSpecSchema.Version, name, steps, env, triggers);
+        return new PipelineSpec(PipelineSpecSchema.Version, name, steps, env, triggers, Post: post);
     }
 
     /// <summary>
@@ -96,7 +102,7 @@ public static class PipelineSpecReader
     /// form is refused with a message that shows the list form instead of silently reordering a pipeline.
     /// </para>
     /// </summary>
-    private static PipelineStep[] ReadSteps(LuaHostTable root)
+    private static PipelineStep[] ReadSteps(LuaHostTable root, Dictionary<string, string> names)
     {
         var hasSteps = TryGet(root, "steps", out var stepsValue) && !stepsValue.IsNil;
         var hasStages = TryGet(root, "stages", out var stagesValue) && !stagesValue.IsNil;
@@ -109,7 +115,6 @@ public static class PipelineSpecReader
         }
 
         // One name registry across both spellings: a duplicate is a duplicate wherever it was declared.
-        var names = new Dictionary<string, string>(StringComparer.Ordinal);
         var steps = hasStages
             ? ReadStageSteps(stagesValue, names)
             : ReadFlatSteps(stepsValue, names);
@@ -117,6 +122,88 @@ public static class PipelineSpecReader
         // Card F-033: a run executes on one Worker, so the union of the steps' requirements must be one Worker's
         // worth. A contradiction is a definition mistake and is refused here, by path, naming both steps.
         var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(steps);
+        if (requirementError is not null)
+        {
+            throw Invalid(requirementError);
+        }
+
+        return steps;
+    }
+
+    /// <summary>
+    /// Reads the optional <c>post = { always = { … }, success = { … }, failure = { … } }</c> table
+    /// (card F-031). Each list holds ordinary step tables; their frozen names get the
+    /// <see cref="PipelineSpecSchema.PostNamePrefix"/>, which is what keeps a post step's record and log
+    /// unambiguous. The order of the three keys does not matter: the executor, not the table, decides which
+    /// set runs from the run's own outcome.
+    /// </summary>
+    private static PipelinePost? ReadPost(LuaHostTable root, Dictionary<string, string> names)
+    {
+        if (!TryGet(root, "post", out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        if (value.Kind == LuaHostValueKind.Table && value.Table.IsSequence && value.Table.Items.Count == 0)
+        {
+            // An empty table is Lua for "nothing declared" everywhere else (env, triggers), so it is the same
+            // here: no post phase rather than an empty one.
+            return null;
+        }
+
+        if (value.Kind != LuaHostValueKind.Table || value.Table.IsSequence)
+        {
+            throw Invalid(
+                "pipeline.post must be a table ({ always = { … }, success = { … }, failure = { … } }), got "
+                + Describe(value) + ".");
+        }
+
+        var post = value.Table;
+        RejectUnknownKeys(post, "pipeline.post", PostKeys);
+
+        var success = ReadPostList(post, PipelinePostOutcomes.Success, names);
+        var failure = ReadPostList(post, PipelinePostOutcomes.Failure, names);
+        var always = ReadPostList(post, PipelinePostOutcomes.Always, names);
+        if (success is null && failure is null && always is null)
+        {
+            throw Invalid("pipeline.post must declare at least one of always, success or failure.");
+        }
+
+        return new PipelinePost(success, failure, always);
+    }
+
+    /// <summary>
+    /// Reads one post outcome list. Absent and an empty table both mean "this set declares nothing" - the
+    /// same reading every other list field gets (an empty Lua table has no shape of its own).
+    /// </summary>
+    private static PipelineStep[]? ReadPostList(LuaHostTable post, string key, Dictionary<string, string> names)
+    {
+        var path = $"pipeline.post.{key}";
+        if (!TryGet(post, key, out var value) || value.IsNil)
+        {
+            return null;
+        }
+
+        if (value.Kind != LuaHostValueKind.Table || !value.Table.IsSequence)
+        {
+            throw Invalid($"{path} must be a list of steps, not a map.");
+        }
+
+        var items = value.Table.Items;
+        if (items.Count == 0)
+        {
+            return null;
+        }
+
+        var steps = new PipelineStep[items.Count];
+        for (var i = 0; i < items.Count; i++)
+        {
+            steps[i] = ReadStep(items[i], $"{path}[{i + 1}]", inheritedStage: null, names, isPost: true);
+        }
+
+        // F-033's cross-step rule applies to a post list too: one Worker executes the run, so two post steps
+        // whose requirements can never hold together are a definition mistake, named by their own paths.
+        var requirementError = PipelineSpecSchema.ValidateWorkerRequirements(steps, path);
         if (requirementError is not null)
         {
             throw Invalid(requirementError);
@@ -158,7 +245,8 @@ public static class PipelineSpecReader
         var steps = new PipelineStep[count];
         for (var i = 0; i < count; i++)
         {
-            steps[i] = ReadStep(stepsTable.Items[i], $"pipeline.steps[{i + 1}]", inheritedStage: null, names);
+            steps[i] = ReadStep(
+                stepsTable.Items[i], $"pipeline.steps[{i + 1}]", inheritedStage: null, names);
         }
 
         return steps;
@@ -243,7 +331,8 @@ public static class PipelineSpecReader
         LuaHostValue item,
         string path,
         string? inheritedStage,
-        Dictionary<string, string> names)
+        Dictionary<string, string> names,
+        bool isPost = false)
     {
         if (item.Kind != LuaHostValueKind.Table || item.Table.IsSequence)
         {
@@ -253,11 +342,31 @@ public static class PipelineSpecReader
         var table = item.Table;
         RejectUnknownKeys(table, path, StepKeys);
 
-        var stepName = ReadName(table, path + ".name");
+        var declaredName = ReadName(table, path + ".name");
+        string stepName;
+        if (isPost)
+        {
+            // F-031: the frozen record's name carries the prefix, so a step record and a log line can never be
+            // mistaken for a main step's. The author writes the plain name; writing the prefix again is a
+            // mistake worth naming, not a silently doubled prefix.
+            if (declaredName.StartsWith(PipelineSpecSchema.PostNamePrefix, StringComparison.Ordinal))
+            {
+                throw Invalid(
+                    $"{path}.name must not start with '{PipelineSpecSchema.PostNamePrefix}' - a post step's "
+                    + "record name gets that prefix automatically; declare the plain name.");
+            }
+
+            stepName = PipelineSpecSchema.PostNamePrefix + declaredName;
+        }
+        else
+        {
+            stepName = declaredName;
+        }
+
         if (names.TryGetValue(stepName, out var firstPath))
         {
             throw Invalid(
-                $"{path}.name '{stepName}' is already used by {firstPath}; step names must be unique.");
+                $"{path}.name '{declaredName}' is already used by {firstPath}; step names must be unique.");
         }
 
         names.Add(stepName, path);
@@ -293,6 +402,14 @@ public static class PipelineSpecReader
             throw Invalid(
                 $"{path}.stage is assigned by the stage entry that contains it; declare the stage in one place "
                 + $"({inheritedStage}).");
+        }
+
+        // A post step renders in the post section, never inside a stage: a stage on it is configuration the
+        // page cannot honour, so it is refused here as well as by the envelope.
+        if (isPost && declaredStage is not null)
+        {
+            throw Invalid(
+                $"{path}.stage must not be declared: post steps render in the post section, not a stage.");
         }
 
         return new PipelineStep(

@@ -1,13 +1,11 @@
-@using System.Globalization
 @using Zenkins.Shared.Pipelines
-@* Card F-020's Freestyle steps editor. A plain HTML form posting to the real endpoint (antiforgery
-   like every other form): the rows below render the saved spec's steps, and js/freestyle-steps.js
-   owns the dynamic row list (add / remove / reorder) and serializes the rows into the hidden
-   StepsJson field on submit. The server - never the browser - builds and validates the frozen spec
-   from that payload (FreestyleSteps.BuildSpecJson), so what is stored is exactly what a run executes. *@
+@* Card F-020's Freestyle steps editor, extended by card F-031 with the three post lists. A plain HTML form
+   posting to the real endpoint (antiforgery like every other form): the rows below render the saved
+   spec's steps, and js/freestyle-steps.js owns the dynamic row lists (add / remove / reorder) and
+   serializes each list into its own hidden field on submit. The server - never the browser - builds and
+   validates the frozen spec from that payload (FreestyleSteps.BuildSpecJson), so what is stored is
+   exactly what a run executes. *@
 <form method="post" action="@Action" data-zenkins-antiforgery data-freestyle-steps-form>
-    <input type="hidden" name="StepsJson" id="freestyle-steps-json" />
-
     @if (ErrorCode is not null)
     {
         <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
@@ -15,252 +13,41 @@
         </div>
     }
 
-    <ol data-freestyle-steps-list class="bb:space-y-4">
-        @for (var stepIndex = 0; stepIndex < Steps.Count; stepIndex++)
-        {
-            var step = Steps[stepIndex];
-            <li data-freestyle-step class="bb:rounded-md bb:border bb:border-input bb:p-4">
-                <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
-                    <span class="bb:text-sm bb:font-medium">
-                        Step <span data-freestyle-step-index>@(stepIndex + 1)</span>
-                    </span>
-                    <div class="bb:flex bb:items-center bb:gap-1">
-                        <button type="button" data-freestyle-action="move-up"
-                                class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                                aria-label="Move step @(stepIndex + 1) up">↑</button>
-                        <button type="button" data-freestyle-action="move-down"
-                                class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                                aria-label="Move step @(stepIndex + 1) down">↓</button>
-                        <button type="button" data-freestyle-action="remove"
-                                class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                                aria-label="Remove step @(stepIndex + 1)">Remove</button>
-                    </div>
-                </div>
-                <div class="bb:space-y-3 bb:text-sm">
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-name-@(stepIndex)">Name</label>
-                        <input data-freestyle-field="name"
-                               id="step-name-@(stepIndex)"
-                               value="@step.Name"
-                               maxlength="200"
-                               autocomplete="off"
-                               spellcheck="false"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-stage-@(stepIndex)">
-                            Stage (blank = outside any stage)
-                        </label>
-                        <input data-freestyle-field="stage"
-                               id="step-stage-@(stepIndex)"
-                               value="@step.Stage"
-                               maxlength="@MaxStageLength"
-                               placeholder="Build"
-                               autocomplete="off"
-                               spellcheck="false"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-script-@(stepIndex)">
-                            Script
-                        </label>
-                        <textarea data-freestyle-field="script"
-                                  id="step-script-@(stepIndex)"
-                                  rows="6"
-                                  spellcheck="false"
-                                  class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs">@step.Script</textarea>
-                        <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                            Runs on the claiming worker (cmd on Windows, /bin/sh -e on Unix) in the
-                            run's workspace. <code>${secret:NAME}</code> and <code>${env:NAME}</code>
-                            references are resolved just before the step starts.
-                        </p>
-                    </div>
-                    <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-env-@(stepIndex)">
-                                Environment (one NAME=value per line)
-                            </label>
-                            <textarea data-freestyle-field="env-lines"
-                                      id="step-env-@(stepIndex)"
-                                      rows="3"
-                                      spellcheck="false"
-                                      class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs">@EnvLinesText(step)</textarea>
-                        </div>
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-artifacts-@(stepIndex)">
-                                Artifacts (comma-separated paths)
-                            </label>
-                            <input data-freestyle-field="artifacts-text"
-                                   id="step-artifacts-@(stepIndex)"
-                                   value="@string.Join(", ", step.ArtifactPaths)"
-                                   autocomplete="off"
-                                   spellcheck="false"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
-                    </div>
-                    <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-timeout-@(stepIndex)">
-                                Timeout (seconds, blank = no limit)
-                            </label>
-                            <input data-freestyle-field="timeout-seconds"
-                                   id="step-timeout-@(stepIndex)"
-                                   type="number"
-                                   min="@MinStepTimeoutSeconds"
-                                   max="@MaxStepTimeoutSeconds"
-                                   value="@(step.TimeoutSeconds?.ToString(CultureInfo.InvariantCulture))"
-                                   autocomplete="off"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-runs-on-@(stepIndex)">
-                                Needs a Worker with (blank = any)
-                            </label>
-                            <input data-freestyle-field="runs-on"
-                                   id="step-runs-on-@(stepIndex)"
-                                   type="text"
-                                   value="@step.RunsOn"
-                                   placeholder="linux &amp;&amp; (arm64 || x64)"
-                                   autocomplete="off"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="step-retry-@(stepIndex)">
-                                Attempts (blank = 1)
-                            </label>
-                            <input data-freestyle-field="retry"
-                                   id="step-retry-@(stepIndex)"
-                                   type="number"
-                                   min="@MinStepRetry"
-                                   max="@MaxStepRetry"
-                                   value="@(step.Retry?.ToString(CultureInfo.InvariantCulture))"
-                                   autocomplete="off"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
-                    </div>
-                    <label class="bb:flex bb:items-center bb:gap-2">
-                        <input type="checkbox"
-                               data-freestyle-field="continue-on-error"
-                               checked="@(step.ContinueOnError)" />
-                        <span class="bb:text-xs">Continue on error: a failure here does not stop the run.</span>
-                    </label>
-                </div>
-            </li>
-        }
-    </ol>
+    <div class="bb:space-y-8">
+        <FreestyleStepsSection ListKey="steps"
+                               FieldName="StepsJson"
+                               TemplateId="freestyle-step-template"
+                               Title="Steps"
+                               Description="The main list, run in order. A failure stops the list unless the step says continue on error."
+                               Steps="Steps"
+                               ShowStage="true" />
 
-    <template id="freestyle-step-template">
-        <li data-freestyle-step class="bb:rounded-md bb:border bb:border-input bb:p-4">
-            <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
-                <span class="bb:text-sm bb:font-medium">
-                    Step <span data-freestyle-step-index></span>
-                </span>
-                <div class="bb:flex bb:items-center bb:gap-1">
-                    <button type="button" data-freestyle-action="move-up"
-                            class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                            aria-label="Move step up">↑</button>
-                    <button type="button" data-freestyle-action="move-down"
-                            class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                            aria-label="Move step down">↓</button>
-                    <button type="button" data-freestyle-action="remove"
-                            class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                            aria-label="Remove step">Remove</button>
-                </div>
-            </div>
-            <div class="bb:space-y-3 bb:text-sm">
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="name">Name</label>
-                    <input data-freestyle-field="name"
-                           maxlength="200"
-                           autocomplete="off"
-                           spellcheck="false"
-                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                </div>
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="stage">
-                        Stage (blank = outside any stage)
-                    </label>
-                    <input data-freestyle-field="stage"
-                           maxlength="@MaxStageLength"
-                           placeholder="Build"
-                           autocomplete="off"
-                           spellcheck="false"
-                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                </div>
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="script">Script</label>
-                    <textarea data-freestyle-field="script"
-                              rows="6"
-                              spellcheck="false"
-                              class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs"></textarea>
-                </div>
-                <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="env-lines">
-                            Environment (one NAME=value per line)
-                        </label>
-                        <textarea data-freestyle-field="env-lines"
-                                  rows="3"
-                                  spellcheck="false"
-                                  class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs"></textarea>
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="artifacts-text">
-                            Artifacts (comma-separated paths)
-                        </label>
-                        <input data-freestyle-field="artifacts-text"
-                               autocomplete="off"
-                               spellcheck="false"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                </div>
-                <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="timeout-seconds">
-                            Timeout (seconds, blank = no limit)
-                        </label>
-                        <input data-freestyle-field="timeout-seconds"
-                               type="number"
-                               min="@MinStepTimeoutSeconds"
-                               max="@MaxStepTimeoutSeconds"
-                               autocomplete="off"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="runs-on">
-                            Needs a Worker with (blank = any)
-                        </label>
-                        <input data-freestyle-field="runs-on"
-                               type="text"
-                               placeholder="linux &amp;&amp; (arm64 || x64)"
-                               autocomplete="off"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="retry">
-                            Attempts (blank = 1)
-                        </label>
-                        <input data-freestyle-field="retry"
-                               type="number"
-                               min="@MinStepRetry"
-                               max="@MaxStepRetry"
-                               autocomplete="off"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                </div>
-                <label class="bb:flex bb:items-center bb:gap-2">
-                    <input type="checkbox" data-freestyle-field="continue-on-error" />
-                    <span class="bb:text-xs">Continue on error: a failure here does not stop the run.</span>
-                </label>
-            </div>
-        </li>
-    </template>
+        <FreestyleStepsSection ListKey="always"
+                               FieldName="AlwaysStepsJson"
+                               TemplateId="freestyle-step-template-always"
+                               Title="Post steps: always"
+                               Description="Runs after the main list whatever happened - cleanup, artifact upload, notification. On a canceled run these steps get a bounded grace window."
+                               Steps="PostAlways"
+                               StripPostPrefix="true" />
 
-    <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <button type="button" data-freestyle-action="add"
-                class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-2 bb:text-sm">
-            Add step
-        </button>
+        <FreestyleStepsSection ListKey="success"
+                               FieldName="SuccessStepsJson"
+                               TemplateId="freestyle-step-template-success"
+                               Title="Post steps: on success"
+                               Description="Runs after the main list only when it succeeded, before the always steps. Never runs together with the failure set."
+                               Steps="PostSuccess"
+                               StripPostPrefix="true" />
+
+        <FreestyleStepsSection ListKey="failure"
+                               FieldName="FailureStepsJson"
+                               TemplateId="freestyle-step-template-failure"
+                               Title="Post steps: on failure"
+                               Description="Runs after the main list only when it failed, before the always steps. Never runs together with the success set."
+                               Steps="PostFailure"
+                               StripPostPrefix="true" />
+    </div>
+
+    <div class="bb:mt-6 bb:flex bb:flex-wrap bb:items-center bb:gap-3">
         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save steps</BbButton>
     </div>
 </form>
@@ -270,31 +57,24 @@
     [Parameter, EditorRequired]
     public string Action { get; set; } = string.Empty;
 
-    /// <summary>The saved spec's steps, in order; an empty list renders no rows (the template covers
+    /// <summary>The saved spec's main steps, in order; an empty list renders no rows (the template covers
     /// the first "Add step").</summary>
     [Parameter]
     public IReadOnlyList<PipelineStep> Steps { get; set; } = [];
 
+    /// <summary>Card F-031: the saved spec's <c>always</c> post steps (frozen names carry <c>post/</c>).</summary>
+    [Parameter]
+    public IReadOnlyList<PipelineStep> PostAlways { get; set; } = [];
+
+    /// <summary>Card F-031: the saved spec's <c>success</c> post steps.</summary>
+    [Parameter]
+    public IReadOnlyList<PipelineStep> PostSuccess { get; set; } = [];
+
+    /// <summary>Card F-031: the saved spec's <c>failure</c> post steps.</summary>
+    [Parameter]
+    public IReadOnlyList<PipelineStep> PostFailure { get; set; } = [];
+
     /// <summary>The stable validation code from the redirect query, if any.</summary>
     [Parameter]
     public string? ErrorCode { get; set; }
-
-    /// <summary>Card F-032: the two step knobs' bounds, so the inputs' min/max match the server's rules.</summary>
-    private const int MinStepTimeoutSeconds = PipelineSpecSchema.MinStepTimeoutSeconds;
-
-    private const int MaxStepTimeoutSeconds = PipelineSpecSchema.MaxStepTimeoutSeconds;
-
-    private const int MinStepRetry = PipelineSpecSchema.MinStepRetry;
-
-    private const int MaxStepRetry = PipelineSpecSchema.MaxStepRetry;
-
-    /// <summary>Card F-030: the stage field's bound, so the input's maxlength matches the envelope's rule.</summary>
-    private const int MaxStageLength = PipelineSpecSchema.MaxStageLength;
-
-    /// <summary>The step's environment rendered back into the editor's NAME=value lines, so editing
-    /// what is stored round-trips through exactly one representation.</summary>
-    private static string EnvLinesText(PipelineStep step) =>
-        step.Env is { } env
-            ? string.Join("\n", env.Select(row => $"{row.Key}={row.Value}"))
-            : string.Empty;
 }

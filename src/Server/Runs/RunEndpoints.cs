@@ -443,7 +443,8 @@ public static class RunEndpoints
                 result.PipelineScriptText,
                 result.DefinitionSource,
                 result.PasswordParameters,
-                result.FileParameters)),
+                result.FileParameters,
+                result.PostFailureFailsRun)),
         };
     }
 
@@ -801,7 +802,13 @@ public static class RunEndpoints
         /// the worker fetches each one over the run-scoped parameter-file route, so a megabyte upload never
         /// travels in a document every worker reads for every run.
         /// </summary>
-        IReadOnlyList<string>? FileParameters = null);
+        IReadOnlyList<string>? FileParameters = null,
+
+        /// <summary>
+        /// Card F-031: the project's "a failed post step fails the run" switch. Absent from an older server's
+        /// claim, which the worker reads as <see langword="false"/> - the product default.
+        /// </summary>
+        bool PostFailureFailsRun = false);
 
     /// <param name="DeadlineAt">F-014: the accepted answer carries the run's frozen deadline.</param>
     public sealed record RunReportResponse(string Status, DateTimeOffset? DeadlineAt = null);

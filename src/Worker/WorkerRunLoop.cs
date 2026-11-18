@@ -495,6 +495,10 @@ public sealed class WorkerRunLoop(
                 // F-017 (review M1): a webhook run names the commit to build; a manual run does not.
                 ExpectedCommit = claim.Commit,
 
+                // F-031: a failed post step fails the run only when the project says so; the default keeps
+                // the main list's result and shows the post failure on its own step.
+                PostFailureFailsRun = claim.PostFailureFailsRun,
+
                 // F-020: a non-null spec makes this run Freestyle - the worker skips the clone and
                 // the definition phase and executes exactly what the server froze at trigger time.
                 PipelineSpecJson = claim.PipelineSpecJson,
