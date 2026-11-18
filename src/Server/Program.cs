@@ -26,6 +26,7 @@ using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
 using Zenkins.Server.Schedules;
 using Zenkins.Server.Secrets;
+using Zenkins.Server.Snippets;
 using Zenkins.Server.Webhooks;
 using Zenkins.Server.Workers;
 using Zenkins.Shared;
@@ -77,6 +78,10 @@ builder.Services.AddZenkinsSchedules();
 builder.Services.AddZenkinsDashboard();
 builder.Services.AddZenkinsLogs(builder.Configuration);
 builder.Services.AddZenkinsSecrets();
+
+// F-035: the organization's reusable step snippets. Text an editor copies into a definition - there is no
+// runtime consumer, which is what keeps an edit or a delete away from saved projects and runs.
+builder.Services.AddZenkinsSnippets();
 
 // F-034: the organization environment layer - plain name/value configuration every project's steps
 // receive, snapshotted onto each run at trigger time.
@@ -267,6 +272,9 @@ app.MapScheduleEndpoints();
 // Secret create/rotate/delete (F-012). Owner-only, form-bound; there is deliberately no
 // value-returning route at all - SecretRouteShapeTests pins the route table.
 app.MapSecretEndpoints();
+
+// F-035: the snippet library's create/edit/delete forms (Member or Owner).
+app.MapStepSnippetEndpoints();
 
 // F-034: the organization environment variables' create/edit/delete forms. Member-readable list,
 // Owner-only mutations; form-bound like the secret forms above.

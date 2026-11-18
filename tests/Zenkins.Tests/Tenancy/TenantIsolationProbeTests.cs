@@ -98,6 +98,33 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     [Fact]
+    public Task Step_snippets_are_invisible_across_tenants() =>
+        TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<StepSnippet>(_fixture, CancellationToken);
+
+    [Fact]
+    public Task Cross_tenant_step_snippet_write_is_rejected_and_persists_nothing() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<StepSnippet>(
+            _fixture,
+            () => new StepSnippet
+            {
+                // The fixture seeds one snippet per organization, so a cross-tenant insert is refused by
+                // the tenant guard - never persisted, never a unique-index accident.
+                Name = "smuggled-snippet",
+                Kind = Zenkins.Shared.Snippets.StepSnippetKinds.ScriptStep,
+                Body = "echo smuggled",
+                CreatedByUserId = TwoOrgsFixture.OrgAOwnerUserId,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task Find_after_a_tenant_switch_returns_null_for_step_snippets() =>
+        TenantIsolationProbes.AssertFindAfterTenantSwitchReturnsNullAsync<StepSnippet>(
+            _fixture,
+            TwoOrgsFixture.StepSnippetAId,
+            TwoOrgsFixture.StepSnippetBId,
+            CancellationToken);
+
+    [Fact]
     public Task Git_credentials_are_invisible_across_tenants() =>
         TenantIsolationProbes.AssertActiveTenantSeesOnlyOwnRowsAsync<GitCredential>(_fixture, CancellationToken);
 

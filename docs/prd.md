@@ -1216,6 +1216,16 @@ webhook）。
   端点 URL 是 Owner 配置的可信值，但仍然禁跟随重定向、限读响应体：配置错误不能变成 SSRF 跳板。
 - **禁用项目照常通知**：§3.5 的刹车只停“新触发”，它已有的 Run 仍然是历史，仍然欠通知。
 - 契约细节（payload 字段、头部、验签示例、重试策略）见 [`docs/notifications.md`](../docs/notifications.md)。
+### 3.15 步骤片段（Step snippets）
+
+组织可以维护一组命名的可复用**文本**片段（F-035），供项目定义插入，避免第十个项目再抄一遍同一段脚本。
+
+- **两类**：`script-step`（插入 Freestyle 步骤列表，形成一个完整步骤的脚本体）与 `lua-fragment`（插入 pipeline 的 Lua 文本：inline 编辑器按光标插入；仓库项目只提供复制）。片段是文本，不是步骤、不是模块，**不能带自己的执行语义**（不能自己排步骤、不能读环境）。
+- **插入即复制、保存即冻结**：插入只是把正文复制进正在编辑的定义，随普通保存冻结进 spec。片段不被 run 引用，因此**编辑或删除片段不会改变已保存的项目、已冻结的 spec、排队中或历史 run**——没有引用就没有悬空；删除页明确说明这一点。
+- **秘密引用走同一个扫描器**：正文里的 `${secret:NAME}` / `${secretFile:NAME}` 在保存时由与手写文本相同的 `StepReference` 扫描器进入 `secretReferences`，没有绕过 D-006 的旁路。
+- **限额与目标一致**：`script-step` ≤ 32 KiB（Freestyle script 上限），`lua-fragment` ≤ 64 KiB（inline script 上限），正文非空；名称在组织内唯一（≤100 字符，唯一索引兜底），描述可选（≤500）。组织成员与 Owner 都可维护。
+- **仓库项目不改仓库**：页面只提供复制到剪贴板，`pipeline.lua` 仍是唯一事实来源；产品永远不重写用户的仓库。
+- 片段页显示正文、插入后步骤的预览（名称取片段名；env / 制品为空、插入后在步骤上补）与它携带的秘密引用名。
 
 ## 4. UI 设计
 
@@ -1237,6 +1247,7 @@ webhook）。
 - Organization 设置
 - Worker 管理
 - Secrets 管理
+- 步骤片段（Snippets）管理
 
 #### Dashboard
 

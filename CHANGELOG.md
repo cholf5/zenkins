@@ -8,6 +8,14 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **Step snippets (F-035).** An organization can keep named, reusable text snippets and insert them into a
+  project's definition: a `script-step` becomes a fully formed Freestyle step row, a `lua-fragment` is
+  inserted at the caret in an inline pipeline (or copied to the clipboard for a repository pipeline - the
+  product never rewrites the repository). Inserting **copies the text**; the normal save freezes it, so an
+  edited or deleted snippet cannot change a saved project, a frozen spec or a run - there is no reference to
+  dangle, and the pages say so. Bodies are bounded like the text they feed (32 KiB / 64 KiB), names are unique
+  per organization, and `${secret:…}` references are captured by the same scanner as hand-typed text. Members
+  and Owners can both manage snippets; the page previews the resulting step and its secret references.
 - **Post actions (F-031).** A pipeline can declare `post = { success, failure, always }` - steps that run
   after the main list, so cleanup no longer needs `continue_on_error` on a real step. The lists are the
   same `PipelineStep` shape as the main one (run/script, env, conditions, artifacts, timeout, retry) and

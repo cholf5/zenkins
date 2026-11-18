@@ -21,6 +21,7 @@ using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Probes;
 using Zenkins.Shared.Projects;
 using Zenkins.Shared.Secrets;
+using Zenkins.Shared.Snippets;
 using Zenkins.Shared.Tenancy;
 
 namespace Zenkins.Server.Data;
@@ -117,6 +118,9 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Encrypted organization secrets (F-012). Write-only above this layer: nothing outside
     /// <c>SecretService.TryGetValueAsync</c> ever decrypts a row, and no endpoint returns a value.</summary>
     public DbSet<Secret> Secrets => Set<Secret>();
+
+    /// <summary>Card F-035: the organization's reusable step snippets (text an editor copies, never a link).</summary>
+    public DbSet<StepSnippet> StepSnippets => Set<StepSnippet>();
 
     /// <summary>Card F-026's upstream/downstream edges (tenant-owned).</summary>
     public DbSet<ProjectLink> ProjectLinks => Set<ProjectLink>();
@@ -1249,6 +1253,31 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // F-012: secrets are tenant-owned and write-only above the storage layer. The name is the
         // identity: unique per organization (case-sensitive - both providers compare text
         // case-sensitively by default), env-var shaped, and immutable (a rename is delete + create).
+        // F-035: reusable step snippets. Text an editor copies into a definition; nothing points back at the
+        // row, so editing or deleting one cannot change a saved project or a run. The unique (org, name) index
+        // is the guard against two concurrent creates choosing the same name; the service translates the
+        // violation into a field error instead of a 500.
+        modelBuilder.Entity<StepSnippet>(entity =>
+        {
+            entity.HasKey(snippet => snippet.Id);
+            entity.Property(snippet => snippet.Name).IsRequired().HasMaxLength(StepSnippetLimits.MaxNameLength);
+            entity.Property(snippet => snippet.Kind).IsRequired().HasMaxLength(32);
+            entity.Property(snippet => snippet.Body).IsRequired();
+            entity.Property(snippet => snippet.Description).HasMaxLength(StepSnippetLimits.MaxDescriptionLength);
+            entity.Property(snippet => snippet.CreatedByUserId).IsRequired().HasMaxLength(450);
+            entity.Property(snippet => snippet.UpdatedByUserId).HasMaxLength(450);
+            entity.HasIndex(snippet => new { snippet.OrganizationId, snippet.Name }).IsUnique();
+            entity.HasOne<Organization>().WithMany().HasForeignKey(snippet => snippet.OrganizationId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasQueryFilter(snippet => snippet.OrganizationId == CurrentOrganizationId);
+
+            // The kind is a closed set; the constraint is a belt-and-braces check like the other string
+            // vocabularies, so an out-of-band write cannot store a kind no editor offers.
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_StepSnippets_Kind",
+                $"\"Kind\" IN ('{StepSnippetKinds.ScriptStep}', '{StepSnippetKinds.LuaFragment}')"));
+        });
+
         modelBuilder.Entity<Secret>(entity =>
         {
             entity.HasKey(secret => secret.Id);

@@ -297,6 +297,7 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
         Assert.Equal(TwoOrgsFixture.ProjectBName, beta.Name);
         Assert.Equal(TwoOrgsFixture.ProjectBRepositoryUrl, beta.RepositoryUrl);
         Assert.False(beta.Disabled);
+        Assert.False(beta.PostFailureFailsRun);
         Assert.Null(beta.MaxConcurrentRuns);
         Assert.Null(beta.MaxQueuedRuns);
         Assert.Equal(0, beta.QuietPeriodSeconds);

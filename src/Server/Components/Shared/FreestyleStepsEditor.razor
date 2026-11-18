@@ -13,6 +13,35 @@
         </div>
     }
 
+    @* F-035: insert a `script-step` snippet as a fully formed row. The text is copied into the row and saved
+       with the rest of the form - the project never references the snippet. *@
+    @if (Snippets.Count > 0)
+    {
+        <div id="freestyle-snippets" class="bb:mb-6 bb:rounded-md bb:border bb:border-input bb:p-3">
+            <label for="freestyle-snippet-select" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">
+                Insert a snippet step
+            </label>
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <select id="freestyle-snippet-select"
+                        data-freestyle-snippet-select
+                        class="bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-sm">
+                    @foreach (var snippet in Snippets)
+                    {
+                        <option value="@snippet.Id">@snippet.Name</option>
+                    }
+                </select>
+                <button type="button" data-freestyle-action="insert-snippet"
+                        class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-1 bb:text-sm">
+                    Insert step
+                </button>
+                <span class="bb:text-xs bb:text-muted-foreground">
+                    Copies the snippet's script into a new step. Later edits to the snippet do not change this
+                    project.
+                </span>
+            </div>
+        </div>
+    }
+
     <div class="bb:space-y-8">
         <FreestyleStepsSection ListKey="steps"
                                FieldName="StepsJson"
@@ -73,6 +102,13 @@
     /// <summary>Card F-031: the saved spec's <c>failure</c> post steps.</summary>
     [Parameter]
     public IReadOnlyList<PipelineStep> PostFailure { get; set; } = [];
+
+    /// <summary>
+    /// Card F-035: the organization's <c>script-step</c> snippets the picker offers. Their bodies travel in the
+    /// page's <c>#snippets-data</c> JSON; this list is only the picker's labels and ids.
+    /// </summary>
+    [Parameter]
+    public IReadOnlyList<Zenkins.Server.Snippets.StepSnippetView> Snippets { get; set; } = [];
 
     /// <summary>The stable validation code from the redirect query, if any.</summary>
     [Parameter]

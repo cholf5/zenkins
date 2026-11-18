@@ -81,6 +81,52 @@
         renumber(list);
     }
 
+    // F-035: append a fully formed row from a `script-step` snippet. The text comes from the page's
+    // #snippets-data JSON (the same one the inline/copy affordances read) - the snippet row is never
+    // referenced by the saved definition, so a later edit cannot change this project.
+    function insertSnippetStep(form, section) {
+        var select = form.querySelector("[data-freestyle-snippet-select]");
+        var list = section.querySelector(LIST_SELECTOR);
+        var template = section.querySelector("template");
+        if (!select || !list || !template || select.selectedIndex < 0) {
+            return;
+        }
+
+        var data = snippetData();
+        var snippet = data.scriptStep.filter(function (candidate) {
+            return candidate.id === select.options[select.selectedIndex].value;
+        })[0];
+        if (!snippet) {
+            return;
+        }
+
+        var row = template.content.firstElementChild.cloneNode(true);
+        var name = row.querySelector('[data-freestyle-field="name"]');
+        var script = row.querySelector('[data-freestyle-field="script"]');
+        if (name) {
+            name.value = snippet.name;
+        }
+        if (script) {
+            script.value = snippet.body;
+        }
+
+        list.appendChild(row);
+        renumber(list);
+    }
+
+    function snippetData() {
+        var element = document.getElementById("snippets-data");
+        if (!element) {
+            return { scriptStep: [], luaFragment: [] };
+        }
+
+        try {
+            return JSON.parse(element.textContent);
+        } catch (error) {
+            return { scriptStep: [], luaFragment: [] };
+        }
+    }
+
     function moveStep(list, row, offset) {
         var all = rows(list);
         var index = all.indexOf(row);
@@ -117,6 +163,11 @@
                         case "add":
                             if (section) {
                                 addStep(section);
+                            }
+                            break;
+                        case "insert-snippet":
+                            if (form && section) {
+                                insertSnippetStep(form, section);
                             }
                             break;
                         case "remove":

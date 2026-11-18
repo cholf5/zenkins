@@ -110,6 +110,12 @@ public sealed class TwoOrgsFixture : IDisposable
     /// <summary>B's only artifact.</summary>
     public static readonly Guid ArtifactBId = new("b0000000-0000-4000-8000-000000000082");
 
+    /// <summary>A's only step snippet, the positive control for the F-035 probes.</summary>
+    public static readonly Guid StepSnippetAId = new("a0000000-0000-4000-8000-0000000000a1");
+
+    /// <summary>B's only step snippet.</summary>
+    public static readonly Guid StepSnippetBId = new("b0000000-0000-4000-8000-0000000000a2");
+
     /// <summary>A's only Git credential, the positive control for the F-013 probes.</summary>
     public static readonly Guid GitCredentialAId = new("a0000000-0000-4000-8000-000000000071");
 
@@ -220,6 +226,13 @@ public sealed class TwoOrgsFixture : IDisposable
     public const string SecretBName = "BETA_TOKEN";
     public const string SecretACiphertext = "CfDJ8-fixture-alpha-ciphertext";
     public const string SecretBCiphertext = "CfDJ8-fixture-beta-ciphertext";
+
+    // F-035: one step snippet per organization. The body carries a distinctive word per side, so the
+    // page scan can prove a foreign snippet's text never reaches the active tenant's pages.
+    public const string StepSnippetAName = "alpha-lint";
+    public const string StepSnippetBName = "beta-lint";
+    public const string StepSnippetABody = "echo alpha-snippet-body";
+    public const string StepSnippetBBody = "echo beta-snippet-body";
 
     // F-013: one Git credential per organization, same placeholder-ciphertext discipline as the
     // secrets above (the tenancy probes never decrypt).
@@ -636,6 +649,28 @@ public sealed class TwoOrgsFixture : IDisposable
                 OrganizationId = OrgBId,
                 Name = SecretBName,
                 Ciphertext = SecretBCiphertext,
+                CreatedByUserId = OrgBOwnerUserId,
+            });
+
+        // F-035: one snippet per organization - the read/write/find probes and the page scan need a row on
+        // each side (a foreign snippet's name and body must stay out of the active tenant's pages).
+        context.StepSnippets.AddRange(
+            new StepSnippet
+            {
+                Id = StepSnippetAId,
+                OrganizationId = OrgAId,
+                Name = StepSnippetAName,
+                Kind = Zenkins.Shared.Snippets.StepSnippetKinds.ScriptStep,
+                Body = StepSnippetABody,
+                CreatedByUserId = OrgAOwnerUserId,
+            },
+            new StepSnippet
+            {
+                Id = StepSnippetBId,
+                OrganizationId = OrgBId,
+                Name = StepSnippetBName,
+                Kind = Zenkins.Shared.Snippets.StepSnippetKinds.LuaFragment,
+                Body = StepSnippetBBody,
                 CreatedByUserId = OrgBOwnerUserId,
             });
 

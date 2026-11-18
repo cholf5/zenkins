@@ -61,6 +61,12 @@ public static class TenantIsolationProbes
             // layer, and the page/mutation probes live in TenantIsolationHttpSurfaceProbeTests.
             typeof(OrganizationEnvironmentVariable),
 
+            // F-035: the organization's reusable step snippets. Probed by TenantIsolationProbeTests (the
+            // generic read/write/find trio) and TenantIsolationHttpSurfaceProbeTests (a foreign id in the
+            // mutation routes is one bare 404 and nothing is written; the page renders the active org's own
+            // snippets only). Nothing references a snippet at run time, so the row is the whole surface.
+            typeof(StepSnippet),
+
             // F-026: the chain edges and the outbox obligation behind them. The HTTP half is probed by
             // TenantIsolationLinkProbeTests (a foreign project id in the route, in the body or in the link id is
             // one bare 404 and nothing is written, and the settings page renders no foreign edge); the rows

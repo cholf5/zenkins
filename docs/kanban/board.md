@@ -12,7 +12,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
-| [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
 
 ## Done
 
@@ -106,3 +105,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-031](issues/f-031-post-actions.md) | Post actions: always / on-success / on-failure steps after the last step | P2 | 2026-11-18 |
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | 2026-11-18 |
 | [F-039](issues/f-039-completion-notifications.md) | Completion notifications: signed outbound webhooks on failure, success and recovery | P2 | 2026-11-18 |
+| [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | 2026-11-18 |

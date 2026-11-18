@@ -49,6 +49,7 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
                      "/",
                      "/projects",
                      "/secrets",
+                     "/snippets",
                      "/workers",
                      "/api-tokens",
                      "/organizations/members",
@@ -72,6 +73,9 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
             Assert.DoesNotContain(TwoOrgsFixture.ProjectBRepositoryUrl, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.WorkerBName, scanned, StringComparison.Ordinal);
             Assert.DoesNotContain(TwoOrgsFixture.SecretBName, scanned, StringComparison.Ordinal);
+            // F-035: both the foreign snippet's name and its body (a body would be visible verbatim).
+            Assert.DoesNotContain(TwoOrgsFixture.StepSnippetBName, scanned, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.StepSnippetBBody, scanned, StringComparison.Ordinal);
 
             // F-034: the organization environment is plain configuration, so a leak would be visible
             // verbatim - the value is asserted, not only the name.
@@ -425,6 +429,37 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
             host, secret => secret.Id == TwoOrgsFixture.SecretBId)).Single();
         Assert.Equal(TwoOrgsFixture.SecretBCiphertext, beta.Ciphertext);
         Assert.Equal(TwoOrgsFixture.SecretBName, beta.Name);
+    }
+
+    [Fact]
+    public async Task Snippet_mutations_cannot_reach_another_tenants_snippet()
+    {
+        using var host = new TenantProbeHostFixture();
+        using var client = await TenantIsolationAuditProbes.SignInAsync(host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
+
+        var edit = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/snippets",
+            $"/snippets/{TwoOrgsFixture.StepSnippetBId}/edit",
+            new Dictionary<string, string>
+            {
+                ["Name"] = "hijacked-snippet",
+                ["Kind"] = Zenkins.Shared.Snippets.StepSnippetKinds.ScriptStep,
+                ["Body"] = "echo hijacked",
+            });
+        Assert.Equal(HttpStatusCode.NotFound, edit.StatusCode);
+
+        var delete = await OrganizationTestHost.PostFormAsync(
+            client,
+            "/snippets",
+            $"/snippets/{TwoOrgsFixture.StepSnippetBId}/delete",
+            new Dictionary<string, string>());
+        Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
+
+        var beta = (await TenantIsolationAuditProbes.ReadAcrossTenantsAsync<StepSnippet>(
+            host, snippet => snippet.Id == TwoOrgsFixture.StepSnippetBId)).Single();
+        Assert.Equal(TwoOrgsFixture.StepSnippetBName, beta.Name);
+        Assert.Equal(TwoOrgsFixture.StepSnippetBBody, beta.Body);
     }
 
     [Fact]

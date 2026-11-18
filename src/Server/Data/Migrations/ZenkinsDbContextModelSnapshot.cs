@@ -1411,6 +1411,59 @@ namespace Zenkins.Server.Data.Migrations
                     b.ToTable("Secrets");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.StepSnippet", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpdatedByUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("StepSnippets", t =>
+                        {
+                            t.HasCheckConstraint("CK_StepSnippets_Kind", "\"Kind\" IN ('script-step', 'lua-fragment')");
+                        });
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.User", b =>
                 {
                     b.Property<string>("Id")
@@ -2045,6 +2098,15 @@ namespace Zenkins.Server.Data.Migrations
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Secret", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.StepSnippet", b =>
                 {
                     b.HasOne("Zenkins.Server.Data.Entities.Organization", null)
                         .WithMany()

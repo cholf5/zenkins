@@ -1,11 +1,15 @@
 @page "/projects/{ProjectId:guid}/pipelines"
 @attribute [Authorize]
+@using System.Text.Json
 @using Zenkins.Shared.Pipelines
 @using Zenkins.Shared.Projects
+@using Zenkins.Shared.Snippets
 @using Zenkins.Server.Probes
+@using Zenkins.Server.Snippets
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
 @inject RunService RunsService
+@inject StepSnippetService SnippetsService
 @inject Zenkins.Server.Probes.DefinitionValidationService Validations
 
 @* D-003: the definition tab, read-only by decision for a Pipeline project - it answers "what does
@@ -52,11 +56,13 @@
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
+                @SnippetDataScript()
                 <FreestyleStepsEditor Action="@($"/projects/{_project.Id}/freestyle/steps")"
                                       Steps="@(_savedSteps ?? [])"
                                       PostAlways="@(_savedPost?.Always ?? [])"
                                       PostSuccess="@(_savedPost?.Success ?? [])"
                                       PostFailure="@(_savedPost?.Failure ?? [])"
+                                      Snippets="@ScriptStepSnippets"
                                       ErrorCode="@ErrorCode" />
             </BbCardContent>
         </BbCard>
@@ -69,6 +75,8 @@
                 <BbBadge Variant="BadgeVariant.Outline">Inline</BbBadge>
             </div>
         </div>
+
+        @SnippetDataScript()
 
         <ProjectTabs ProjectId="@_project.Id" Active="pipelines" Kind="@_project.Kind"
                      BranchDiscovery="@_project.BranchDiscovery" />
@@ -108,6 +116,34 @@
                               spellcheck="false"
                               autocomplete="off"
                               class="bb:flex bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-sm">@_project.InlineScript</textarea>
+                    @* F-035: insert a Lua fragment at the caret. The text is copied into the editor and saved
+                       like typed text - the snippet is never referenced by the project or a run. *@
+                    @if (FragmentSnippets.Count > 0)
+                    {
+                        <div id="inline-snippets" class="bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-sm">
+                            <label for="inline-snippet-select" class="bb:mb-1 bb:block bb:text-xs bb:font-medium">
+                                Insert a snippet
+                            </label>
+                            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                <select id="inline-snippet-select"
+                                        data-snippet-select="luaFragment"
+                                        class="bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-xs">
+                                    @foreach (var snippet in FragmentSnippets)
+                                    {
+                                        <option value="@snippet.Id">@snippet.Name</option>
+                                    }
+                                </select>
+                                <button type="button"
+                                        data-snippet-insert
+                                        data-snippet-target="#inline-script"
+                                        data-snippet-list="luaFragment"
+                                        class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-1 bb:text-xs">
+                                    Insert at caret
+                                </button>
+                                <span data-snippet-status class="bb:text-xs bb:text-muted-foreground"></span>
+                            </div>
+                        </div>
+                    }
                     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
                         <button type="submit"
                                 class="bb:inline-flex bb:h-9 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
@@ -174,6 +210,10 @@
     }
     else
     {
+        @* F-035: the snippet pickers' one data source. The bodies are copied by the browser on insert; the
+           product never fetches them at run time, so editing a snippet cannot reach a saved definition. *@
+        @SnippetDataScript()
+
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
                 <BbCardTitle As="h1" tabindex="-1">Pipelines · @_project.Name</BbCardTitle>
@@ -205,6 +245,47 @@
                 </dl>
             </BbCardContent>
         </BbCard>
+
+        @* F-035: the repository half. The product copies the text and never rewrites the repository file, so
+           this is a clipboard affordance plus the snippet bodies - paste into pipeline.lua yourself. *@
+        @if (FragmentSnippets.Count > 0)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Snippet library</BbCardTitle>
+                    <BbCardDescription>
+                        Copy a fragment into <code>@_project.PipelinePath</code> in your repository. The
+                        product never rewrites your repository; the file stays the source of truth, and a
+                        snippet edit never changes a committed pipeline.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <div id="pipelines-snippets" class="bb:space-y-3">
+                        @foreach (var snippet in FragmentSnippets)
+                        {
+                            <div class="bb:rounded-md bb:border bb:border-input bb:p-3">
+                                <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                                    <span class="bb:text-sm bb:font-medium">@snippet.Name</span>
+                                    <button type="button"
+                                            data-snippet-copy="true"
+                                            data-snippet-id="@snippet.Id"
+                                            data-snippet-list="luaFragment"
+                                            class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs">
+                                        Copy
+                                    </button>
+                                    <span data-snippet-status class="bb:text-xs bb:text-muted-foreground"></span>
+                                </div>
+                                @if (snippet.Description is { Length: > 0 } description)
+                                {
+                                    <p class="bb:text-xs bb:text-muted-foreground">@description</p>
+                                }
+                                <pre class="bb:mt-2 bb:max-h-40 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-2 bb:text-xs">@snippet.Body</pre>
+                            </div>
+                        }
+                    </div>
+                </BbCardContent>
+            </BbCard>
+        }
 
         @if (_newestRun is not { } run)
         {
@@ -314,6 +395,15 @@
     private RunView? _newestRun;
     private IReadOnlyList<PipelineStep>? _savedSteps;
 
+    /// <summary>Card F-035: the organization's snippets, split by the editor that offers them.</summary>
+    private IReadOnlyList<StepSnippetView> _snippets = [];
+
+    private IReadOnlyList<StepSnippetView> ScriptStepSnippets =>
+        [.. _snippets.Where(snippet => snippet.Kind == StepSnippetKinds.ScriptStep)];
+
+    private IReadOnlyList<StepSnippetView> FragmentSnippets =>
+        [.. _snippets.Where(snippet => snippet.Kind == StepSnippetKinds.LuaFragment)];
+
     /// <summary>Card F-031: the saved spec's post lists, rendered as the editor's three post sections.</summary>
     private PipelinePost? _savedPost;
     private DefinitionValidationView? _validation;
@@ -335,6 +425,10 @@
             return;
         }
 
+        // F-035: the organization's snippet library - the editors' copy source. It is plain text; loading it
+        // here creates no reference from the project or its runs to the snippet row.
+        _snippets = await SnippetsService.ListAsync();
+
         // F-020: a Freestyle project's saved steps render as the editor's starting rows. The saved
         // JSON is the envelope-checked spec, so the parse here only fails on a corrupted row - the
         // editor then renders empty rather than guessing.
@@ -355,6 +449,42 @@
         // The same read the Runs tab uses (newest first), so "newest" means the same run everywhere.
         var runs = await RunsService.GetProjectRunsAsync(ProjectId);
         _newestRun = runs.Count > 0 ? runs[0] : null;
+    }
+
+    /// <summary>
+    /// Card F-035: the one payload the page's snippet affordances read, embedded as JSON. The serializer's
+    /// default encoder escapes <c>&lt;</c>, so a body that contains <c>&lt;/script&gt;</c> cannot close the
+    /// element; the browser copies the values, the server never resolves them again.
+    /// </summary>
+    private MarkupString SnippetDataScript()
+    {
+        if (_snippets.Count == 0)
+        {
+            // No library, no payload: a project page must not carry an empty script element the pickers
+            // would have to special-case.
+            return default;
+        }
+
+        var payload = new
+        {
+            scriptStep = ScriptStepSnippets.Select(snippet => new
+            {
+                id = snippet.Id,
+                name = snippet.Name,
+                body = snippet.Body,
+            }),
+            luaFragment = FragmentSnippets.Select(snippet => new
+            {
+                id = snippet.Id,
+                name = snippet.Name,
+                body = snippet.Body,
+            }),
+        };
+
+        return (MarkupString)(
+            "<script type=\"application/json\" id=\"snippets-data\">"
+            + JsonSerializer.Serialize(payload)
+            + "</script>");
     }
 
     private static PipelineSpec? LoadSavedSpec(string? specJson)
