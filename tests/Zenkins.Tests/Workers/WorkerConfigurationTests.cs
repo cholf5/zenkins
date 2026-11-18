@@ -56,6 +56,34 @@ public sealed class WorkerConfigurationTests
 
         // F-008's default: 10 000 unsent lines per run while reconnecting.
         Assert.Equal(10_000, configuration.LogBufferLines);
+
+        // F-038's default: keep a finished run's work directory for seven days.
+        Assert.Equal(168, configuration.WorkRetentionHours);
+    }
+
+    [Fact]
+    public void Zero_disables_the_work_directory_sweep_and_garbage_is_a_configuration_error()
+    {
+        // F-038: 0 is a supported value ("never sweep"), not an error - a worker whose disk is managed by
+        // something else must be able to say so.
+        var disabled = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+        {
+            [WorkerConfiguration.ServerUrlVariable] = "https://zenkins.example.test",
+            [WorkerConfiguration.WorkRetentionHoursVariable] = "0",
+        });
+        Assert.Equal(0, AssertGetValue(disabled).WorkRetentionHours);
+
+        foreach (var invalid in new[] { "-1", "8761", "seven" })
+        {
+            var result = WorkerConfiguration.FromEnvironment(new Dictionary<string, string?>
+            {
+                [WorkerConfiguration.ServerUrlVariable] = "https://zenkins.example.test",
+                [WorkerConfiguration.WorkRetentionHoursVariable] = invalid,
+            });
+
+            Assert.NotNull(result.Error);
+            Assert.Contains(WorkerConfiguration.WorkRetentionHoursVariable, result.Error!, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

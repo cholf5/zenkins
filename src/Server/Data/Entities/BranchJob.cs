@@ -82,9 +82,10 @@ public static class BranchOrphanEvidence
 /// only deleting the project cascades its branches away with everything else.
 /// </para>
 /// <para>
-/// <b>Retention is not this row's concern.</b> Card F-038 (still open) will scope its policy to a
-/// branch job - <c>(ProjectId, Branch)</c> is the natural key it needs - but this table neither stores
-/// nor enforces a retention policy, so nothing here pretends F-038 shipped.
+/// <b>Retention is not this row's concern.</b> Card F-038 scopes a project's retention policy to a branch
+/// job - <c>(ProjectId, Branch)</c> is the key it groups by, read from the runs' own snapshots - but the policy
+/// lives on <see cref="Project.RetentionKeep"/> / <see cref="Project.RetentionDays"/>, so this table stores and
+/// enforces nothing about it.
 /// </para>
 /// </summary>
 public sealed class BranchJob : ITenantOwned

@@ -286,7 +286,13 @@ public sealed record RunView(
     /// Card F-026: the chain facts this run's steps read (a downstream run only), from the run's own frozen
     /// record. Rendered in the chain section as their own list - never among the build parameters.
     /// </summary>
-    IReadOnlyDictionary<string, string>? UpstreamFacts = null)
+    IReadOnlyDictionary<string, string>? UpstreamFacts = null,
+
+    /// <summary>
+    /// Card F-038: "keep this build forever" - exempt from both retention rules. Rendered as the run page's pin
+    /// toggle, so the state the sweep reads is the state the page shows.
+    /// </summary>
+    bool Pinned = false)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -737,6 +743,7 @@ public sealed class RunService(
     WorkerMonitorOptions workerMonitorOptions,
     IHubContext<WorkerLogHub> workerLogHubs,
     RunParameterProtector parameterProtector,
+    RunTerminalSignal terminalSignal,
     ILogger<RunService> logger)
 {
     /// <summary>
@@ -3483,6 +3490,10 @@ public sealed class RunService(
             // path mirrors F-007's cleanup-before-report discipline on the server side).
             await runLogIngest.CompleteRunAsync(run.Id);
 
+            // Card F-038: the project's retention policy is evaluated after this terminal state - off the request
+            // path, so trimming history can never slow down or fail a worker's completed report.
+            terminalSignal.Pulse(run.ProjectId);
+
             logger.LogInformation(
                 "Run completed. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Status={Status} ExitCode={ExitCode} FailureReason={FailureReason}",
                 workerToken.OrganizationId,
@@ -3719,6 +3730,9 @@ public sealed class RunService(
                         run.OrganizationId,
                         runId,
                         actorLog);
+
+                    // Card F-038: Canceled is terminal, so the project's retention gate runs for it.
+                    terminalSignal.Pulse(run.ProjectId);
                     return RunCancelResult.Canceled();
                 }
 
@@ -3848,6 +3862,9 @@ public sealed class RunService(
             // discipline F-008 established; closes the Canceled-run gap its log recorded).
             await runLogIngest.CompleteRunAsync(run.Id);
 
+            // Card F-038: the retention evaluation the terminal state owes (see CompleteAsync's note).
+            terminalSignal.Pulse(run.ProjectId);
+
             logger.LogInformation(
                 "Run canceled by its worker. OrganizationId={OrganizationId} RunId={RunId} WorkerId={WorkerId} Status={Status} Reason={Reason}",
                 workerToken.OrganizationId,
@@ -3895,7 +3912,7 @@ public sealed class RunService(
             .AsNoTracking()
             .IgnoreQueryFilters()
             .Where(run => run.Status == BuildRunStatus.Running)
-            .Select(run => new { run.Id, run.WorkerId, run.DeadlineAt, run.CancelRequestedAt })
+            .Select(run => new { run.Id, run.ProjectId, run.WorkerId, run.DeadlineAt, run.CancelRequestedAt })
             .ToListAsync(cancellationToken);
 
         var result = new DeadlineSweepResult(0, 0);
@@ -3937,6 +3954,9 @@ public sealed class RunService(
                 {
                     result = result with { Lost = result.Lost + 1 };
                     await runLogIngest.CompleteRunAsync(run.Id);
+
+                    // Card F-038: Lost is terminal too, so the project's retention gate runs for it.
+                    terminalSignal.Pulse(run.ProjectId);
                 }
             }
         }
@@ -4015,12 +4035,12 @@ public sealed class RunService(
                 .AsNoTracking()
                 .IgnoreQueryFilters()
                 .Where(run => run.WorkerId == worker.Id && run.Status == BuildRunStatus.Running)
-                .Select(run => run.Id)
+                .Select(run => new { run.Id, run.ProjectId })
                 .ToListAsync(cancellationToken);
-            foreach (var runId in runningIds)
+            foreach (var run in runningIds)
             {
                 var lost = await context.TryTerminateRunningBuildRunAsync(
-                    runId,
+                    run.Id,
                     BuildRunStatus.Lost,
                     RunFailureReasons.WorkerOffline,
                     now,
@@ -4028,7 +4048,10 @@ public sealed class RunService(
                 if (lost == 1)
                 {
                     result = result with { RunsLost = result.RunsLost + 1 };
-                    await runLogIngest.CompleteRunAsync(runId);
+                    await runLogIngest.CompleteRunAsync(run.Id);
+
+                    // Card F-038: Lost is terminal too, so the project's retention gate runs for it.
+                    terminalSignal.Pulse(run.ProjectId);
                 }
             }
 
@@ -4359,7 +4382,10 @@ public sealed class RunService(
                     ? null
                     : JsonSerializer.Deserialize(
                         run.UpstreamFactsJson,
-                        ProjectParameterJsonContext.Default.DictionaryStringString));
+                        ProjectParameterJsonContext.Default.DictionaryStringString),
+
+                // F-038: whether this build is exempt from both retention rules.
+                run.Pinned);
         }).ToList();
     }
 

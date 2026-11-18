@@ -55,7 +55,13 @@ public sealed class WorkerRunLoop(
     BackoffScheduler backoff,
     TextWriter log,
     TextWriter errorLog,
-    RunCancelSignal? cancelSignal = null)
+    RunCancelSignal? cancelSignal = null,
+
+    /// <summary>
+    /// Card F-038: what this loop is executing, so the work-directory sweep never removes a live tree. Optional
+    /// because a test that drives one claim does not care about the sweeper.
+    /// </summary>
+    RunActivityRegistry? activity = null)
 {
     /// <summary>
     /// Exit code reported for a run that never produced one of its own (the work directory could
@@ -115,7 +121,18 @@ public sealed class WorkerRunLoop(
             return false;
         }
 
-        await ExecuteAsync(claimed, shutdown);
+        // Card F-038: the run is this worker's from here until the report is out, so its work tree must not be
+        // swept. `finally` covers every exit - completion, a definitive rejection, an unexpected failure.
+        activity?.Begin(claimed.RunId);
+        try
+        {
+            await ExecuteAsync(claimed, shutdown);
+        }
+        finally
+        {
+            activity?.End(claimed.RunId);
+        }
+
         return true;
     }
 

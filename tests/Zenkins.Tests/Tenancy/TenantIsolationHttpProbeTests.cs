@@ -333,6 +333,69 @@ public sealed class TenantIsolationHttpProbeTests : IClassFixture<TenantProbeHos
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Retention_and_pin_endpoints_cannot_reach_another_tenants_rows()
+    {
+        using var bob = await SignInAsync("bob@example.test");
+
+        // Card F-038's policy save: B's project in the route, twice over - once as a write attempt, and the read
+        // half afterwards proves B's row kept its (unset) policy.
+        using var retention = await OrganizationTestHost.PostFormAsync(
+            bob,
+            $"/projects/{TwoOrgsFixture.ProjectAId}",
+            $"/projects/{TwoOrgsFixture.ProjectBId}/retention",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["RetentionKeep"] = "0",
+                ["RetentionDays"] = "1",
+            });
+        Assert.Equal(HttpStatusCode.NotFound, retention.StatusCode);
+
+        var beta = (await _host.Data.ReadAcrossTenantsAsync<Project>(
+            project => project.Id == TwoOrgsFixture.ProjectBId,
+            CancellationToken)).Single();
+        Assert.Null(beta.RetentionKeep);
+        Assert.Null(beta.RetentionDays);
+
+        // ...and B's run is not pinnable either: both routes answer the same 404, and the row is untouched.
+        foreach (var route in new[] { "pin", "unpin" })
+        {
+            using var pin = await OrganizationTestHost.PostFormAsync(
+                bob,
+                $"/runs/{TwoOrgsFixture.BuildRunAId}",
+                $"/runs/{TwoOrgsFixture.BuildRunBId}/{route}",
+                new Dictionary<string, string>(StringComparer.Ordinal));
+            Assert.Equal(HttpStatusCode.NotFound, pin.StatusCode);
+        }
+
+        var betaRun = (await _host.Data.ReadAcrossTenantsAsync<BuildRun>(
+            run => run.Id == TwoOrgsFixture.BuildRunBId,
+            CancellationToken)).Single();
+        Assert.False(betaRun.Pinned);
+
+        // Positive control: the same requests work on the caller's own rows, so the probe cannot pass by refusing
+        // everything. (Unpinned again afterwards, so the shared fixture is left as the other probes expect it.)
+        using var ownPin = await OrganizationTestHost.PostFormAsync(
+            bob,
+            $"/runs/{TwoOrgsFixture.BuildRunAId}",
+            $"/runs/{TwoOrgsFixture.BuildRunAId}/pin",
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        Assert.True((int)ownPin.StatusCode is 302 or 303, $"pinning A's own run answered {(int)ownPin.StatusCode}.");
+        Assert.True((await _host.Data.ReadAcrossTenantsAsync<BuildRun>(
+            run => run.Id == TwoOrgsFixture.BuildRunAId,
+            CancellationToken)).Single().Pinned);
+
+        using var ownUnpin = await OrganizationTestHost.PostFormAsync(
+            bob,
+            $"/runs/{TwoOrgsFixture.BuildRunAId}",
+            $"/runs/{TwoOrgsFixture.BuildRunAId}/unpin",
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        Assert.True((int)ownUnpin.StatusCode is 302 or 303, $"unpinning A's own run answered {(int)ownUnpin.StatusCode}.");
+        Assert.False((await _host.Data.ReadAcrossTenantsAsync<BuildRun>(
+            run => run.Id == TwoOrgsFixture.BuildRunAId,
+            CancellationToken)).Single().Pinned);
+    }
+
     private static IEnumerable<string> ForeignProjectPaths(Guid projectId)
     {
         yield return $"/projects/{projectId}";

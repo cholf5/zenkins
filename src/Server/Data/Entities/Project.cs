@@ -160,6 +160,26 @@ public sealed class Project : ITenantOwned
     /// </summary>
     public int? MaxQueuedRuns { get; set; }
 
+    /// <summary>
+    /// Card F-038: how many builds of each branch this project keeps - the newest N. <see langword="null"/> means
+    /// the rule is not set, and <b>both rules unset means keep everything</b>, which is exactly how every project
+    /// behaved before this card.
+    /// <para>
+    /// <b>Per branch, not per project.</b> The group key is the run's own <see cref="BuildRun.GitBranch"/> - the
+    /// snapshot a run already carries - so a multibranch project (card F-023) keeps N builds of every branch
+    /// without a second policy, and a single-branch project has exactly one group. The newest build of a group is
+    /// never deleted by either rule, so a project can never be left with no result at all.
+    /// </para>
+    /// </summary>
+    public int? RetentionKeep { get; set; }
+
+    /// <summary>
+    /// Card F-038: builds newer than this many days are kept - a second, independent keep rule (the union of
+    /// "within the newest N" and "younger than D days" survives; everything else is deleted). <see langword="null"/>
+    /// means the rule is not set. Zero is a real value ("nothing is young enough"), not "unset".
+    /// </summary>
+    public int? RetentionDays { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

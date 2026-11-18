@@ -36,8 +36,26 @@
                 {
                     <BbBadge Variant="BadgeVariant.Destructive">Project disabled</BbBadge>
                 }
+                @* Card F-038: the state the retention sweep reads, said where the toggle is. *@
+                @if (_run.Pinned)
+                {
+                    <span id="run-pinned-badge" data-run-pinned="true">
+                        <BbBadge Variant="BadgeVariant.Secondary">Pinned</BbBadge>
+                    </span>
+                }
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                @* Card F-038: pinning is a Member action with the same guards as cancel, and it is offered
+                   for every run - pinning a queued build is a legitimate "do not throw this away when it
+                   finishes". The POST is form-bound (antiforgery) and the page says what it did. *@
+                <form method="post"
+                      action="@($"/runs/{_run.Id}/{(_run.Pinned ? "unpin" : "pin")}")"
+                      data-zenkins-antiforgery>
+                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">
+                        @(_run.Pinned ? "Unpin build" : "Pin build")
+                    </BbButton>
+                </form>
+
                 @* F-009: cancel is offered while the run can still be stopped. A Queued run is
                    canceled atomically; a Running run gets a cancel request the worker acts on.
                    The POST is form-bound (antiforgery), a terminal run answers a friendly no-op
@@ -835,6 +853,10 @@
         "canceled" => "The run was canceled.",
         "cancel-requested" => "The worker has been asked to cancel the run; the status updates when the worker reports.",
         "already-finished" => "The run had already finished, so it was not changed.",
+        // F-038's pin toggle: what changed, and the rule the change is about.
+        "pinned" => "This build is pinned: both retention rules skip it until it is unpinned.",
+        "unpinned" =>
+            "This build is no longer pinned. It is kept while the project's retention policy keeps it - nothing is deleted now.",
         _ => null,
     };
 

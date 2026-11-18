@@ -647,6 +647,7 @@ authoritative list with ranges and defaults):
 | `ZENKINS_WORKER_CONCURRENCY` | `1` | Runs executed simultaneously (advertised to the Server as `MaxConcurrency`). |
 | `ZENKINS_DATA_DIR` | `~/.zenkins` | Where the token store lives (mount a secret volume here if you prefer). |
 | `ZENKINS_WORK_ROOT` | `work` beside the binary | Root of the per-run work directories. |
+| `ZENKINS_WORK_RETENTION_HOURS` | `168` (7 days) | How long a **finished** run's `work/{run-id}` tree (checkout, published artifact copies, scratch) is kept on this worker's disk; the sweep removes older trees and never a running run's. `0` disables the sweep. The Server's own retention policy (PRD §3.5) removes the run's rows and artifact bytes - it cannot reach this disk, so this window is what bounds it. |
 | `ZENKINS_GIT_DEPTH` | `0` (full clone) | Shallow-clone depth. Webhook runs are pinned to the pushed commit — a depth that excludes it fails the run honestly; see [`docs/development.md`](development.md) §4. |
 | `ZENKINS_GIT_KNOWN_HOSTS` | unset (accept-new) | Pin an SSH `known_hosts` file and make unknown host keys a hard failure. |
 | `ZENKINS_GIT_TIMEOUT_SECONDS` | `300` | Budget of one git invocation. |

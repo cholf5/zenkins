@@ -376,6 +376,14 @@ public sealed class BuildRun : ITenantOwned
     /// </summary>
     public Guid? RebuiltFromRunId { get; set; }
 
+    /// <summary>
+    /// Card F-038: "keep this build forever". A pinned run is exempt from <b>both</b> retention rules - the keep
+    /// count and the day window - and from nothing else: pinning a queued run does not stop the queue, and
+    /// unpinning does not delete it (the next sweep decides). Set by a Member from the run page, which is the same
+    /// kind of action as cancel or rebuild, with the same guards.
+    /// </summary>
+    public bool Pinned { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

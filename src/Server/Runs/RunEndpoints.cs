@@ -74,6 +74,11 @@ public static class RunEndpoints
         runForms.MapPost("/{runId:guid}/rebuild", RebuildRunAsync);
         runForms.MapPost("/{runId:guid}/replay", ReplayRunAsync);
 
+        // Card F-038: the pin toggle. Cookie + antiforgery like every other run action; the service enforces
+        // membership, and the tenant filter makes a foreign run id the same 404 (no existence oracle).
+        runForms.MapPost("/{runId:guid}/pin", PinRunAsync);
+        runForms.MapPost("/{runId:guid}/unpin", UnpinRunAsync);
+
         // Worker run API: token-authenticated, exempt from cookie auth by design.
         var api = endpoints.MapGroup("/api/workers");
         api.MapPost("/claim", ClaimAsync);
@@ -527,6 +532,61 @@ public static class RunEndpoints
             request.Outcome,
             httpContext.RequestAborted));
 
+    /// <summary>
+    /// Card F-038's pin toggle: "keep this build forever". Two routes rather than a flag in the body, because the
+    /// button a person presses names the state it asks for - and a body that lost its field could otherwise
+    /// unpin a build the reader meant to protect.
+    /// </summary>
+    private static Task<IResult> PinRunAsync(
+        Guid runId,
+        [FromForm] PinRunForm? form,
+        HttpContext httpContext,
+        RetentionService retention)
+    {
+        _ = form;
+        return SetPinnedAsync(runId, pinned: true, httpContext, retention);
+    }
+
+    /// <summary>Card F-038: the other half of the toggle. Unpinning never deletes - the next sweep decides.</summary>
+    private static Task<IResult> UnpinRunAsync(
+        Guid runId,
+        [FromForm] PinRunForm? form,
+        HttpContext httpContext,
+        RetentionService retention)
+    {
+        _ = form;
+        return SetPinnedAsync(runId, pinned: false, httpContext, retention);
+    }
+
+    private static async Task<IResult> SetPinnedAsync(
+        Guid runId,
+        bool pinned,
+        HttpContext httpContext,
+        RetentionService retention)
+    {
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await retention.SetPinnedAsync(userId, runId, pinned, httpContext.RequestAborted);
+        return result.Status switch
+        {
+            // PRG either way: the page re-renders the toggle in the state it now has, which is also the state the
+            // retention sweep reads.
+            RunPinStatus.Success => Results.Redirect(
+                $"/runs/{runId}?notice={(result.Pinned ? "pinned" : "unpinned")}"),
+
+            // Authorization failures are a hard rejection, never a friendly redirect (F-003 rule).
+            RunPinStatus.Forbidden => Results.Text(
+                result.Message ?? "You are not allowed to pin this run.",
+                "text/plain",
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.NotFound(),
+        };
+    }
+
     private static async Task<IResult> CancelRunAsync(
         Guid runId,
         [FromForm] CancelRunForm form,
@@ -572,6 +632,14 @@ public static class RunEndpoints
         _ => Results.Json(new WorkerEndpoints.WorkerApiError(result.ErrorCode ?? RunErrorCodes.InvalidTransition),
             statusCode: StatusCodes.Status409Conflict),
     };
+
+    /// <summary>
+    /// Empty on purpose: the parameter is what makes the pin/unpin POSTs form-bound and therefore covered by
+    /// <c>UseAntiforgery</c>. Which state the button asks for is the route's, not a field's.
+    /// </summary>
+    public sealed class PinRunForm
+    {
+    }
 
     /// <summary>The trigger form. No project id field: the route is the only target selector.</summary>
     public sealed class StartRunForm

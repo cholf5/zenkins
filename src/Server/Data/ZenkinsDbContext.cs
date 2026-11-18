@@ -1260,6 +1260,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // F-023: the branch jobs of a multibranch project (tenant-owned; unique (ProjectId, Branch)).
         // The rules live next to the feature (src/Server/Branches).
         modelBuilder.ConfigureBranches(this);
+
+        // F-038: the two nullable retention rules on Project and BuildRun.Pinned. Three columns, no table,
+        // and the rules live next to the feature that reads them (src/Server/Runs).
+        modelBuilder.ConfigureRetention();
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

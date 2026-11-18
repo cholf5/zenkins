@@ -507,6 +507,9 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<string>("ParametersJson")
                         .HasColumnType("text");
 
+                    b.Property<bool>("Pinned")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("PipelinePath")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -1025,6 +1028,12 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<string>("RepositoryUrl")
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
+
+                    b.Property<int?>("RetentionDays")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("RetentionKeep")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");

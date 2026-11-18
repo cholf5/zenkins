@@ -22,6 +22,8 @@ namespace Zenkins.Worker;
 /// poll interval between empty claims, default 2).
 /// </para>
 /// <para>
+/// F-038 adds: <c>ZENKINS_WORK_RETENTION_HOURS</c> (how long a finished run's <c>work/{run-id}</c> tree is kept
+/// on this worker's disk; 0 disables the sweep, default seven days).
 /// F-008 adds: <c>ZENKINS_LOG_BUFFER_LINES</c> (the per-run bound of <em>unsent</em> log lines
 /// held while the upstream connection is down; drop-oldest beyond it, with an honest synthetic
 /// marker line reporting the loss; default 10 000).
@@ -69,7 +71,20 @@ public sealed record WorkerConfiguration(
     int ProbeConcurrency = WorkerConfiguration.DefaultProbeConcurrency,
 
     /// <summary>The budget of one probe's <c>git ls-remote</c> (card I-005); expiry is a typed timeout.</summary>
-    TimeSpan? ProbeTimeout = null)
+    TimeSpan? ProbeTimeout = null,
+
+    /// <summary>
+    /// Card F-038: how many hours a finished run's <c>work/{run-id}</c> tree is kept on <b>this</b> worker's disk.
+    /// Zero disables the sweep (the tree then lives as long as the disk does).
+    /// <para>
+    /// <b>Why the worker owns this half.</b> The Server cannot reach a remote worker's disk, so it deletes the
+    /// run's rows and the artifact bytes it owns, while the run directory is removed here, by age, on the worker
+    /// that wrote it. The alternative - the Server telling the worker to delete a directory - would be a second
+    /// contract to keep in step with runs the Server no longer knows about; an age window bounds the disk either
+    /// way, and it is honest about which machine did it.
+    /// </para>
+    /// </summary>
+    int WorkRetentionHours = WorkerConfiguration.DefaultWorkRetentionHours)
 {
     public const string ServerUrlVariable = "ZENKINS_SERVER_URL";
     public const string RegistrationTokenVariable = "ZENKINS_REGISTRATION_TOKEN";
@@ -89,6 +104,7 @@ public sealed record WorkerConfiguration(
     public const string ProbesEnabledVariable = "ZENKINS_PROBES_ENABLED";
     public const string ProbeConcurrencyVariable = "ZENKINS_PROBE_CONCURRENCY";
     public const string ProbeTimeoutSecondsVariable = "ZENKINS_PROBE_TIMEOUT_SECONDS";
+    public const string WorkRetentionHoursVariable = "ZENKINS_WORK_RETENTION_HOURS";
 
     /// <summary>PRD §3.4.5: default heartbeat interval and maximum concurrent tasks of 1.</summary>
     public const int DefaultHeartbeatSeconds = 15;
@@ -159,6 +175,16 @@ public sealed record WorkerConfiguration(
     /// <summary>Bounds for <c>ZENKINS_GIT_TIMEOUT_SECONDS</c>: one second up to a day.</summary>
     public const int MinGitTimeoutSeconds = 1;
     public const int MaxGitTimeoutSeconds = 86_400;
+
+    /// <summary>
+    /// Card F-038 default: keep a finished run's work directory for seven days. Long enough to inspect a failed
+    /// build's checkout by hand, short enough that a worker doing a hundred builds a day does not fill a disk.
+    /// </summary>
+    public const int DefaultWorkRetentionHours = 168;
+
+    /// <summary>Bounds for <c>ZENKINS_WORK_RETENTION_HOURS</c>: 0 (off) up to a year.</summary>
+    public const int MinWorkRetentionHours = 0;
+    public const int MaxWorkRetentionHours = 8_760;
 
     private static readonly string DefaultDataDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -372,6 +398,21 @@ public sealed record WorkerConfiguration(
                 + $"between {MinGitTimeoutSeconds} and {MaxGitTimeoutSeconds}.");
         }
 
+        var workRetentionText = environment.GetValueOrDefault(WorkRetentionHoursVariable)?.Trim();
+        int workRetentionHours;
+        if (string.IsNullOrEmpty(workRetentionText))
+        {
+            workRetentionHours = DefaultWorkRetentionHours;
+        }
+        else if (!int.TryParse(workRetentionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out workRetentionHours)
+            || workRetentionHours < MinWorkRetentionHours
+            || workRetentionHours > MaxWorkRetentionHours)
+        {
+            return WorkerConfigurationResult.Invalid(
+                $"configuration error: {WorkRetentionHoursVariable}='{workRetentionText}' is not a whole number "
+                + $"between {MinWorkRetentionHours} and {MaxWorkRetentionHours} (0 disables the sweep).");
+        }
+
         return WorkerConfigurationResult.Valid(new WorkerConfiguration(
             serverUrl,
             string.IsNullOrEmpty(registrationToken) ? null : registrationToken,
@@ -390,7 +431,8 @@ public sealed record WorkerConfiguration(
             gitExecutable,
             probesEnabled,
             probeConcurrency,
-            TimeSpan.FromSeconds(probeTimeoutSeconds)));
+            TimeSpan.FromSeconds(probeTimeoutSeconds),
+            workRetentionHours));
     }
 
     /// <summary>

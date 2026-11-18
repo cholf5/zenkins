@@ -1,5 +1,6 @@
 @page "/projects/{ProjectId:guid}/settings"
 @attribute [Authorize]
+@using System.Globalization
 @using Zenkins.Server.Git
 @using Zenkins.Server.Secrets
 @using Zenkins.Shared.Projects
@@ -13,6 +14,7 @@
 @inject ScheduleOptions ScheduleConfiguration
 @inject GitCredentialService CredentialService
 @inject ProjectLinkService LinkService
+@inject RetentionService RetentionGate
 @inject NavigationManager Navigation
 
 @* D-003: the Settings tab - everything that configures the project. The webhook cards moved here
@@ -451,6 +453,143 @@
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save limits</BbButton>
                     </div>
                 </form>
+            </BbCardContent>
+        </BbCard>
+
+        @* Card F-038: the retention policy. Two independent rules whose union is what survives - a build is
+           deleted only when it is beyond the newest N of its branch AND older than D days - and "both blank"
+           keeps everything, which is how the product behaved before this card. The counts beside the form are
+           the sweep's own evaluation, and the preview runs that same evaluation against the values in the
+           form, so the number the reader sees now is the number the next sweep would delete. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Retention</BbCardTitle>
+                <BbCardDescription>
+                    How much history this project keeps. A build is deleted only when it is
+                    <em>both</em> beyond the newest N of its branch and older than D days, so a tighter rule
+                    never surprises a rule you meant to keep. Pinned builds, builds still queued or running,
+                    and the newest build of each branch are never deleted. Deletion removes the run, its
+                    steps, logs, artifacts and their bytes.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <div id="project-retention" class="bb:space-y-4">
+                    @if (RetentionMessage is { } retentionError)
+                    {
+                        <div id="project-retention-error" role="alert"
+                             class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                            <p>@retentionError</p>
+                        </div>
+                    }
+
+                    @if (_retention is { } current)
+                    {
+                        <dl id="project-retention-current" class="bb:grid bb:grid-cols-1 bb:gap-3 bb:text-sm bb:sm:grid-cols-4">
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Keeps</dt>
+                                <dd id="project-retention-keeps">@RetentionRuleText(current.Policy)</dd>
+                            </div>
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Builds now</dt>
+                                <dd id="project-retention-total">@current.TotalRuns</dd>
+                            </div>
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pinned</dt>
+                                <dd id="project-retention-pinned">@current.PinnedRuns</dd>
+                            </div>
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Next sweep deletes</dt>
+                                <dd id="project-retention-next-sweep">@current.WouldDelete</dd>
+                            </div>
+                        </dl>
+                        <p class="bb:text-xs bb:text-muted-foreground">
+                            @current.Retained of @current.TotalRuns build(s) would survive; the newest build of
+                            each of @current.NewestPerBranch branch job(s) is always kept
+                            @if (current.NonTerminalRuns > 0)
+                            {
+                                <span>, and @current.NonTerminalRuns queued or running build(s) are never touched</span>
+                            }
+                            .
+                        </p>
+                    }
+
+                    @if (_retentionPreview is { } preview)
+                    {
+                        <div id="project-retention-preview"
+                             class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                            <p class="bb:font-medium">
+                                With @RetentionRuleText(preview.Policy), the next sweep would delete
+                                @preview.WouldDelete of @preview.TotalRuns build(s).
+                            </p>
+                            @if (preview.Candidates.Count > 0)
+                            {
+                                <ul class="bb:mt-2 bb:list-disc bb:space-y-1 bb:ps-5 bb:text-xs">
+                                    @foreach (var candidate in preview.Candidates.Take(5))
+                                    {
+                                        <li data-retention-candidate="@candidate.RunId">
+                                            #@candidate.Number (@candidate.Branch): @candidate.Reason
+                                        </li>
+                                    }
+                                </ul>
+                                @if (preview.Candidates.Count > 5)
+                                {
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        and @(preview.Candidates.Count - 5) more.
+                                    </p>
+                                }
+                            }
+                            <p class="bb:mt-2 bb:text-xs bb:text-muted-foreground">
+                                Nothing was saved. Press Save retention to store these values.
+                            </p>
+                        </div>
+                    }
+
+                    <form id="project-retention-form" method="post"
+                          action="@($"/projects/{_project.Id}/retention")" data-zenkins-antiforgery>
+                        <div class="bb:grid bb:grid-cols-1 bb:gap-4 bb:sm:grid-cols-2">
+                            <div>
+                                <label for="retention-keep" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Keep the newest (per branch)</label>
+                                <input id="retention-keep"
+                                       name="RetentionKeep"
+                                       value="@SubmittedKeep"
+                                       inputmode="numeric"
+                                       autocomplete="off"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                       placeholder="blank: keep every build" />
+                                <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                    A count of builds, per branch job: 10 means "the newest 10 of every
+                                    branch". Blank means this rule is not set.
+                                </p>
+                            </div>
+                            <div>
+                                <label for="retention-days" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Keep builds newer than (days)</label>
+                                <input id="retention-days"
+                                       name="RetentionDays"
+                                       value="@SubmittedDays"
+                                       inputmode="numeric"
+                                       autocomplete="off"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
+                                       placeholder="blank: keep every build" />
+                                <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                    A day window from the build's own creation time. Blank means this rule is
+                                    not set; blank in both fields keeps everything.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="bb:mt-4 bb:flex bb:flex-wrap bb:gap-2">
+                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save retention</BbButton>
+                            @* One form, two submits - the same shape the schedules card uses: the preview
+                               answers "what would this delete?" with the values in the fields and stores
+                               nothing. *@
+                            <button type="submit"
+                                    name="Action"
+                                    value="preview"
+                                    class="bb:h-9 bb:rounded-md bb:border bb:border-input bb:px-4 bb:text-sm bb:font-medium bb:hover:bg-accent">
+                                Preview next sweep
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </BbCardContent>
         </BbCard>
 
@@ -1293,6 +1432,15 @@
     private IReadOnlyList<WebhookView> _webhooks = [];
     private IReadOnlyList<GitCredentialListItem> _credentials = [];
 
+    /// <summary>
+    /// Card F-038: the saved policy evaluated against the project's current history - the card's counts, and the
+    /// number the next sweep would delete. Null only when the project could not be read.
+    /// </summary>
+    private RetentionEvaluation? _retention;
+
+    /// <summary>Card F-038: the same evaluation under the values the preview button posted (null when none was).</summary>
+    private RetentionEvaluation? _retentionPreview;
+
     /// <summary>Card F-026: every edge that names this project, in either direction.</summary>
     private IReadOnlyList<ProjectLinkView> _links = [];
 
@@ -1343,6 +1491,18 @@
 
     private string? SubmittedTimeZone => PreviewZone;
 
+    /// <summary>Card F-038: the stable code a refused retention save redirected back with.</summary>
+    [SupplyParameterFromQuery(Name = "retentionError")]
+    private string? RetentionErrorCode { get; set; }
+
+    /// <summary>Card F-038: the keep count the preview button echoed back (present-but-empty means "not set").</summary>
+    [SupplyParameterFromQuery(Name = "retentionPreviewKeep")]
+    private string? PreviewKeep { get; set; }
+
+    /// <summary>Card F-038: the day window the preview button echoed back (present-but-empty means "not set").</summary>
+    [SupplyParameterFromQuery(Name = "retentionPreviewDays")]
+    private string? PreviewDays { get; set; }
+
     /// <summary>Card F-026: the chain form's outcome code (<c>saved</c>, <c>deleted</c>, a refusal).</summary>
     [SupplyParameterFromQuery(Name = "links")]
     private string? LinkCode { get; set; }
@@ -1356,6 +1516,51 @@
 
     [SupplyParameterFromQuery(Name = "credentialKind")]
     private string? SubmittedCredentialKind { get; set; }
+
+    /// <summary>Card F-038: the refusal a retention save redirected back with, in words.</summary>
+    private string? RetentionMessage => RetentionErrorCodes.MessageFor(RetentionErrorCode);
+
+    /// <summary>Card F-038: the keep field's value - the preview echo when there is one, otherwise what is stored.</summary>
+    private string SubmittedKeep => PreviewKeep
+        ?? _retention?.Policy.Keep?.ToString(CultureInfo.InvariantCulture)
+        ?? string.Empty;
+
+    /// <summary>Card F-038: the day field's value, on the same rule as <see cref="SubmittedKeep"/>.</summary>
+    private string SubmittedDays => PreviewDays
+        ?? _retention?.Policy.Days?.ToString(CultureInfo.InvariantCulture)
+        ?? string.Empty;
+
+    /// <summary>
+    /// Card F-038: a policy in the words the card uses - "every build (no rule set)", or the union of the two
+    /// rules that are set. Not "0 rules": a blank field is a rule that keeps everything, and the card has to say
+    /// which rules are actually doing the work.
+    /// </summary>
+    private static string RetentionRuleText(RetentionPolicy policy)
+    {
+        if (policy.IsUnset)
+        {
+            return "every build (no rule set)";
+        }
+
+        var rules = new List<string>(2);
+        if (policy.Keep is { } keep)
+        {
+            rules.Add($"the newest {keep} build(s) of each branch");
+        }
+
+        if (policy.Days is { } days)
+        {
+            rules.Add($"builds newer than {days} day(s)");
+        }
+
+        return string.Join(" and ", rules);
+    }
+
+    /// <summary>Card F-038: one echoed field as a number, blank as "not set", garbage as "not set" too.</summary>
+    private static int? ParseOptionalCount(string? text) =>
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0
+            ? parsed
+            : null;
 
     /// <summary>
     /// Card F-026: what the chain form says. A refusal renders the service's own sentence (which carries the
@@ -1391,6 +1596,9 @@
         "project-enabled" =>
             "The project is enabled. Triggers queue runs again; canceled runs stay canceled and nothing was replayed.",
         "limits-saved" => "The project's limits were saved.",
+        // F-038's retention policy.
+        "retention-saved" =>
+            "The retention policy was saved. The next sweep applies it; nothing was deleted now.",
         // F-025's polling card.
         "polling-saved" => "The polling settings were saved.",
         // F-024's schedules.
@@ -1479,6 +1687,19 @@
         _upstreamLinks = [.. _links.Where(link => link.DownstreamProjectId == ProjectId)];
         _downstreamLinks = [.. _links.Where(link => link.UpstreamProjectId == ProjectId)];
         _chainTargets = [.. (await ProjectsService.GetProjectsAsync()).Where(project => project.Id != ProjectId)];
+
+        // F-038: the retention card. The saved policy is evaluated against the current history, so the counts
+        // and the "next sweep deletes" number are the sweep's own answer; a preview runs the same evaluation
+        // under the values the button posted and stores nothing.
+        var retentionPolicy = await RetentionGate.GetPolicyAsync(ProjectId) ?? new RetentionPolicy(null, null);
+        _retention = await RetentionGate.EvaluateAsync(ProjectId, retentionPolicy, Clock.GetUtcNow());
+        if (PreviewKeep is not null || PreviewDays is not null)
+        {
+            _retentionPreview = await RetentionGate.EvaluateAsync(
+                ProjectId,
+                new RetentionPolicy(ParseOptionalCount(PreviewKeep), ParseOptionalCount(PreviewDays)),
+                Clock.GetUtcNow());
+        }
 
         // F-017: the project's webhooks (any member of the organization may manage them). The
         // service re-checks membership; a failure here just leaves the list empty.

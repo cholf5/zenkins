@@ -31,6 +31,15 @@ public static class RunsServiceCollectionExtensions
         services.AddScoped<ProjectLinkService>();
         services.AddScoped<DownstreamTriggerService>();
         services.AddHostedService<DownstreamTriggerDispatcher>();
+
+        // F-038: the retention policy, its one deletion path (rows + artifact bytes), the terminal-state signal
+        // the run paths pulse, and the sweep that decides what "the next sweep" means. The interval is read from
+        // configuration on first resolution for the same reason RunOptions is (the host's own sources load late).
+        services.AddSingleton(sp => RetentionOptions.FromConfiguration(
+            sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton<RunTerminalSignal>();
+        services.AddScoped<RetentionService>();
+        services.AddHostedService<RetentionSweeper>();
         services.AddHostedService<LeaseSweeper>();
         return services;
     }

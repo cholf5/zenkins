@@ -72,6 +72,10 @@ public sealed class WorkerRunner(
             configureConnection,
             cancelSignal: cancelSignal);
 
+        // F-038: the runs this worker is executing, shared with the work-directory sweep below (it may not remove
+        // a live tree) and with every run loop (which reports its own run in and out).
+        var activity = new RunActivityRegistry();
+
         var heartbeat = HeartbeatLoopAsync(workerToken, cancelSignal, shutdown);
         var logStreamLoop = logStream.RunAsync(shutdown);
         var runLoops = Enumerable.Range(0, configuration.MaxConcurrency)
@@ -84,7 +88,8 @@ public sealed class WorkerRunner(
                 BackoffScheduler.Default(),
                 log,
                 errorLog,
-                cancelSignal).RunAsync(shutdown))
+                cancelSignal,
+                activity).RunAsync(shutdown))
             .ToArray();
 
         // I-005: the probe loops. Their own count (ProbeConcurrency), independent of the build slots, and
@@ -119,7 +124,12 @@ public sealed class WorkerRunner(
             log,
             errorLog).RunAsync(shutdown);
 
-        await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops, .. probeLoops, validationLoop]);
+        // F-038: the work-directory half of retention. Its own loop, so a slow disk never blocks a claim, and it
+        // is started whatever the concurrency is - the directories outlive the runs either way.
+        var workSweep = new WorkDirectorySweeper(workDirectories, activity, configuration, log)
+            .RunAsync(shutdown);
+
+        await Task.WhenAll([heartbeat, logStreamLoop, .. runLoops, .. probeLoops, validationLoop, workSweep]);
 
         await SendFinalHeartbeatAsync(workerToken);
         Log("stopped cleanly.");

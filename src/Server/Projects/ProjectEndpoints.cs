@@ -74,6 +74,11 @@ public static class ProjectEndpoints
         // F-025: the polling switch and interval, from the project's settings card.
         group.MapPost("/{projectId:guid}/polling", SavePollingAsync);
 
+        // F-038: the retention policy (keep N builds and/or D days), from the settings card. One form, two
+        // submits: the preview button names itself and answers "what would the next sweep delete?" with the
+        // same evaluation the sweep itself runs, without storing anything.
+        group.MapPost("/{projectId:guid}/retention", SaveRetentionAsync);
+
         return endpoints;
     }
 
@@ -490,6 +495,86 @@ public static class ProjectEndpoints
         };
     }
 
+    /// <summary>
+    /// Card F-038: saves the two retention rules, or previews what they would delete. Blank means "the rule is
+    /// not set" - the form expresses "keep everything" without a second toggle, and a body whose fields are
+    /// missing entirely is the same "keep everything" (F-019's rule: a lost body is a PRG answer, not a crash).
+    /// </summary>
+    private static async Task<IResult> SaveRetentionAsync(
+        Guid projectId,
+        [FromForm] ProjectRetentionForm form,
+        HttpContext httpContext,
+        RetentionService retention)
+    {
+        var userId = FindUserId(httpContext);
+        if (userId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!TryReadOptionalCount(form?.RetentionKeep, out var keep))
+        {
+            return Results.Redirect($"/projects/{projectId}/settings?retentionError={RetentionErrorCodes.KeepInvalid}");
+        }
+
+        if (!TryReadOptionalCount(form?.RetentionDays, out var days))
+        {
+            return Results.Redirect($"/projects/{projectId}/settings?retentionError={RetentionErrorCodes.DaysInvalid}");
+        }
+
+        // The preview echoes the two values back so the card computes the same numbers the save would store. A
+        // present-but-empty parameter is "this rule is unset", which is why the echo is not simply omitted.
+        if (string.Equals(form?.Action, "preview", StringComparison.Ordinal))
+        {
+            var query = QueryString.Create(new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                ["retentionPreviewKeep"] = form?.RetentionKeep ?? string.Empty,
+                ["retentionPreviewDays"] = form?.RetentionDays ?? string.Empty,
+            });
+            return Results.Redirect($"/projects/{projectId}/settings{query}");
+        }
+
+        var result = await retention.SavePolicyAsync(
+            userId,
+            projectId,
+            keep,
+            days,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            RetentionMutationStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/settings?notice=retention-saved"),
+            RetentionMutationStatus.Forbidden => ForbiddenText(result.Message),
+            RetentionMutationStatus.NotFound => Results.NotFound(),
+            _ => Results.Redirect(
+                $"/projects/{projectId}/settings?retentionError={result.ErrorCode ?? RetentionErrorCodes.OutOfRange}"),
+        };
+    }
+
+    /// <summary>Reads one retention field: blank is "unset", anything not a non-negative integer is refused.</summary>
+    private static bool TryReadOptionalCount(string? text, out int? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+
+        if (!int.TryParse(text.Trim(), System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private static IResult ForbiddenText(string? message) =>
+        Results.Text(message ?? "You are not allowed to perform this action.", "text/plain",
+            statusCode: StatusCodes.Status403Forbidden);
+
     /// <summary>The first field error's code, or the name field's when none was reported (F-019).</summary>
     private static string FirstCode(ProjectMutationResult result) =>
         result.FieldErrors?.FirstOrDefault()?.Code ?? ProjectErrorCodes.NameInvalid;
@@ -590,6 +675,23 @@ public static class ProjectEndpoints
 
         /// <summary>One of <see cref="ProjectLinkBranchPolicies"/>; blank means the default.</summary>
         public string? BranchPolicy { get; set; }
+    }
+
+    /// <summary>
+    /// Card F-038's retention form: the two rules as text (blank is unset - "keep everything"), plus the action
+    /// that distinguishes the preview submit from the save submit. The fields are not bound as numbers so a typo
+    /// reaches the handler's own check and comes back as a stable code instead of a binding failure.
+    /// </summary>
+    public sealed class ProjectRetentionForm
+    {
+        /// <summary>The "keep the newest N builds of each branch" rule; blank means not set.</summary>
+        public string? RetentionKeep { get; set; }
+
+        /// <summary>The "keep builds newer than D days" rule; blank means not set.</summary>
+        public string? RetentionDays { get; set; }
+
+        /// <summary><c>preview</c> when the preview button submitted the form, otherwise null (the save).</summary>
+        public string? Action { get; set; }
     }
 
     /// <summary>Card F-025's polling form: the checkbox and the interval, both as the browser sends them.</summary>

@@ -343,7 +343,7 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1577 fast / 1610 everything.** The fast figure is a counted
+**The current baseline is counted, and it is 1592 fast / 1625 everything.** The fast figure is a counted
 run of the tree that carries Q-023, measured with `--list-tests` on the filter in the table below (which now
 also excludes `Category=Load`); everything is that count plus the five slow categories (23), `Category=Load`
 (1) and Postgres (9), all counted in the same pass. Every per-card note in this file quotes the counts of
@@ -466,7 +466,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1577 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1592 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -476,7 +476,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **everything** (1610 on the tree that carries F-030, by the arithmetic above) but
+filter runs **everything** (1625 on the tree that carries F-038, by the arithmetic above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only
@@ -760,8 +760,25 @@ Run artifacts (PRD §3.7, card F-016) live in a local directory, not the databas
 | `Artifacts:PendingTimeoutMinutes` | `30` | How long an artifact may stay `Pending` with no write before the sweeper marks it `Incomplete`. Measured from the last write, so a legitimately slow large upload is not touched. |
 
 The caps are enforced by the server on every request (the worker also pre-checks with the same keys to
-fail early; a worker's console app reads them as `Artifacts__MaxFileBytes`). There is **no retention
-policy** in v1: an artifact lives until its run is deleted.
+fail early; a worker's console app reads them as `Artifacts__MaxFileBytes`). An artifact lives until its run
+is deleted, and card F-038's per-project retention policy (PRD §3.5's "构建保留策略与固定") is what deletes
+runs: the rows first, then this store directory, with `Artifacts:SweepIntervalSeconds`' sweeper closing the gap
+when a delete was interrupted between the two.
+
+### Build retention (the sweeper's knob)
+
+Card F-038's retention evaluation runs after every terminal run (a project id over an in-process signal, off
+the request that completed the build) and as a daily sweep over every project with a policy. One key tunes it,
+in [`src/Server/appsettings.json`](../src/Server/appsettings.json):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Retention:SweepIntervalHours` | `24` | How often the full sweep runs. The after-terminal evaluations do not wait for it. |
+
+The worker's half of the same policy is age-based and configured on the worker:
+`ZENKINS_WORK_RETENTION_HOURS` (default 168, `0` disables) removes `work/{run-id}` trees older than the window,
+never a run it is executing. The Server cannot reach a remote worker's disk, so the two halves are separate and
+both idempotent (PRD §3.5).
 
 ### Scheduled triggers (the sweeper's knobs)
 
