@@ -21,6 +21,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | M | | F-021 |
 | [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
+| [Q-023](issues/q-023-load-sensitive-timing-facts.md) | The timing facts fail under load and pass alone, so a red full run does not mean a regression | P2 | M | | none |
 
 ## Done
 
