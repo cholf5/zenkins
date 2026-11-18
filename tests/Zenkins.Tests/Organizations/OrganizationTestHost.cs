@@ -250,6 +250,40 @@ public sealed class OrganizationTestHost : IDisposable
         return await client.PostAsync(postUrl, new FormUrlEncodedContent(values));
     }
 
+    /// <summary>
+    /// Posts a form that carries an uploaded file (card F-041): the multipart sibling of
+    /// <see cref="PostFormAsync"/>. The antiforgery token still travels as a form field - the page's JS adds it
+    /// to whatever the form's <c>enctype</c> is - so the request is the one a browser sends for a trigger form
+    /// with a <c>file</c> parameter.
+    /// </summary>
+    /// <param name="fileFieldName">The input's name, e.g. <c>Parameters[LICENSE]</c>.</param>
+    public static async Task<HttpResponseMessage> PostMultipartFormAsync(
+        HttpClient client,
+        string pageUrl,
+        string postUrl,
+        IReadOnlyDictionary<string, string> fields,
+        string fileFieldName,
+        string fileName,
+        byte[] content)
+    {
+        var html = await AuthTestHost.GetStringAsync(client, pageUrl);
+        var token = ExtractAntiforgeryMetaToken(html);
+
+        using var form = new MultipartFormDataContent();
+        foreach (var (name, value) in fields)
+        {
+            form.Add(new StringContent(value, System.Text.Encoding.UTF8), name);
+        }
+
+        form.Add(new StringContent(token, System.Text.Encoding.UTF8), "__RequestVerificationToken");
+
+        var file = new ByteArrayContent(content);
+        file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        form.Add(file, fileFieldName, fileName);
+
+        return await client.PostAsync(postUrl, form);
+    }
+
     /// <summary>Reads the request token App.razor renders into the page for the plain HTML forms.</summary>
     public static string ExtractAntiforgeryMetaToken(string html)
     {

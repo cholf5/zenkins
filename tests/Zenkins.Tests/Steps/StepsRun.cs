@@ -159,12 +159,14 @@ internal sealed class StepsRun : IDisposable
         string? branch = null,
         string workerName = "steps-agent",
         HttpClient? actingClient = null,
-        Func<Guid, HttpClient, Task>? prepareProject = null)
+        Func<Guid, HttpClient, Task>? prepareProject = null,
+        IReadOnlyDictionary<string, string>? parameters = null,
+        (string FieldName, string FileName, byte[] Content)? file = null)
     {
         var run = new StepsRun(host, repository);
         try
         {
-            await run.StartProductRunAsync(branch, workerName, actingClient, prepareProject);
+            await run.StartProductRunAsync(branch, workerName, actingClient, prepareProject, parameters, file);
             return run;
         }
         catch
@@ -209,6 +211,12 @@ internal sealed class StepsRun : IDisposable
         var api = new WorkerApiClient(Host.Host.CreateClient());
         var backoff = new BackoffScheduler(TimeSpan.FromMilliseconds(5), TimeSpan.FromMilliseconds(20));
         var redactor = new GitLogFilter();
+
+        // F-041: the run's password-typed parameters, registered through the product's own function - the same
+        // call the worker loop makes, so a fact about masking is a fact about the product rather than about this
+        // harness. A claim without password parameters (the seeded path) registers nothing.
+        RunParameterPasswords.Register(Claim, redactor);
+
         var stamp = new StepStamp();
         // The step sink's own diagnostic channel. This harness never writes to it on a success path (nothing in
         // the product does either), so it is not asserted on - a "no plaintext here" check on an always-empty
@@ -237,6 +245,17 @@ internal sealed class StepsRun : IDisposable
             line.Stream == ProcessOutputStream.StdOut ? LogStream.StdOut : LogStream.StdErr,
             line.Line);
 
+        // F-041: the run's uploaded file parameters, materialised through the product's own function - the same
+        // call the worker loop makes, so a fact about the step reading a path is a fact about the product.
+        var parameterValues = Claim is null
+            ? null
+            : await RunParameterFileMaterializer.MaterializeAsync(
+                Claim,
+                Work,
+                (name, token) => api.FetchRunParameterFileAsync(WorkerToken, RunId, name, token),
+                Emit,
+                CancellationToken);
+
         var definitions = new PipelineDefinitionRunner(
             PipelineDefinitionRunner.CreateRuntime(PipelineRunner.CreateLogSink(Emit)));
         var runner = new PipelineRunner(
@@ -254,7 +273,7 @@ internal sealed class StepsRun : IDisposable
                 // composition rather than through a harness copy of it. The seeded second-organization
                 // path has no claim, so it falls back to the metadata the server would have written.
                 RunEnvironment = Claim is { } claim
-                    ? WorkerRunLoop.BuildRunEnvironment(claim, WorkerName)
+                    ? WorkerRunLoop.BuildRunEnvironment(claim, WorkerName, parameterValues)
                     : new RunEnvironment
                     {
                         Metadata = new Dictionary<string, string?>
@@ -351,9 +370,9 @@ internal sealed class StepsRun : IDisposable
     }
 
     /// <summary>
-    /// Runs the run's own temp cleanup through the product's type (card F-040 asserts that a materialised file
-    /// secret is inside the tree the cleanup owns, so the cleanup must be the product's, not a <c>Directory.Delete</c>
-    /// in the test).
+    /// Runs the run's own temp cleanup through the product's type. Cards F-040 and F-041 both assert that a
+    /// materialised file (a file secret, and an uploaded file parameter) is inside the tree the cleanup owns,
+    /// so the cleanup here has to be the product's own, not a <c>Directory.Delete</c> in the test.
     /// </summary>
     public void CleanupTemp() =>
         new WorkDirectoryService(Path.GetDirectoryName(Work.RootPath)!).CleanupTemp(Work);
@@ -421,7 +440,9 @@ internal sealed class StepsRun : IDisposable
         string? branch,
         string workerName,
         HttpClient? actingClient,
-        Func<Guid, HttpClient, Task>? prepareProject)
+        Func<Guid, HttpClient, Task>? prepareProject,
+        IReadOnlyDictionary<string, string>? parameters,
+        (string FieldName, string FileName, byte[] Content)? file)
     {
         Owner = await Host.Inner.SignInOwnerAsync();
         OrganizationId = await Host.OrganizationIdAsync();
@@ -446,7 +467,13 @@ internal sealed class StepsRun : IDisposable
         // The trigger is the acting user's: any member may trigger (PRD §3.1.2), and a member-triggered run must
         // read the organization's secrets exactly like the owner's (PRD §3.8 - the script is trusted code).
         WorkerName = workerName;
-        RunId = await RunTestHost.TriggerRunAsync(actingClient ?? Owner, ProjectId, branch: branch);
+        RunId = file is { } upload
+            ? await TriggerWithFileAsync(actingClient ?? Owner, upload, branch, parameters)
+            : await RunTestHost.TriggerRunAsync(
+                actingClient ?? Owner,
+                ProjectId,
+                branch: branch,
+                parameters: parameters);
 
         using var claimed = await RunTestHost.ClaimAsync(WorkerClient, WorkerToken);
         Assert.Equal(System.Net.HttpStatusCode.OK, claimed.StatusCode);
@@ -460,6 +487,45 @@ internal sealed class StepsRun : IDisposable
         Assert.Equal(System.Net.HttpStatusCode.OK, accepted.StatusCode);
 
         Work = new WorkDirectoryService(_workRoot).Prepare(RunId);
+    }
+
+    /// <summary>
+    /// Triggers the run with one uploaded file parameter (card F-041): the form a browser sends for a trigger
+    /// with a <c>file</c> input, antiforgery token included. Returns the queued run's id (asserts the PRG).
+    /// </summary>
+    private async Task<Guid> TriggerWithFileAsync(
+        HttpClient owner,
+        (string FieldName, string FileName, byte[] Content) upload,
+        string? branch,
+        IReadOnlyDictionary<string, string>? parameters)
+    {
+        // One ordinary field beside the token: a body whose fields all fail to bind arrives as a null form
+        // (F-019), and the token is not a model field - a real browser always posts the branch input too.
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Branch"] = branch ?? "main",
+        };
+
+        foreach (var (name, value) in parameters ?? new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            fields["Parameters[" + name + "]"] = value;
+        }
+
+        using var response = await OrganizationTestHost.PostMultipartFormAsync(
+            owner,
+            $"/projects/{ProjectId}",
+            $"/projects/{ProjectId}/runs/start",
+            fields,
+            upload.FieldName,
+            upload.FileName,
+            upload.Content);
+
+        Assert.True(
+            (int)response.StatusCode is 302 or 303,
+            $"triggering with a file answered {(int)response.StatusCode}: {response.Headers.Location}.");
+        var location = response.Headers.Location!.OriginalString;
+        Assert.StartsWith("/runs/", location, StringComparison.Ordinal);
+        return Guid.Parse(location["/runs/".Length..]);
     }
 
     private async Task SeedForeignRunAsync(Guid organizationId, string workerName)

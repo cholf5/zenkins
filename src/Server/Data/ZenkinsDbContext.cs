@@ -989,6 +989,16 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // ProjectParameterLimits when both the definitions and the supplied values are validated.
             entity.Property(run => run.ParametersJson);
 
+            // F-041: the password-typed values as Data Protection ciphertext, and the run's own record of which
+            // parameter is of which new type. Both are `text` with no typed cap: their size is bounded at the
+            // source (ProjectParameterLimits) and the ciphertext's length follows its plaintext.
+            entity.Property(run => run.ProtectedParametersJson);
+            entity.Property(run => run.ParameterDetailsJson);
+
+            // F-041: an uploaded file parameter's bytes, sealed. `text` like its siblings; the bound (1 MiB
+            // before sealing) is ProjectParameterLimits.MaxFileBytes, enforced in the handler and the pipeline.
+            entity.Property(run => run.ParameterFilesJson);
+
             // F-034: the frozen organization environment layer (another name → value object). Bounded at
             // the source by OrganizationEnvironmentValidation (100 variables, 4 KiB each), so the column
             // needs no typed cap of its own.

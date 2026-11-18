@@ -565,8 +565,10 @@ public static class ApiEndpoints
 
     /// <summary>
     /// One run as the API reports it: status, steps, failure reason, the numbers the server owns, and the
-    /// resource link. No parameter values (F-041 does not exist yet, so the API never echoes one), no
-    /// secret, no credential.
+    /// resource link. <b>No parameter values</b> - and since card F-041 that is a security rule as well as a
+    /// tidiness one: a <c>password</c> parameter is a per-run input that must never be readable back, and the
+    /// cheapest way to guarantee that is to have no field for any parameter to travel in. No secret, no
+    /// credential, no artifact URL either.
     /// </summary>
     public sealed record ApiRunResource(
         Guid Id,

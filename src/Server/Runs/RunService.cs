@@ -102,7 +102,15 @@ public sealed record RunTriggerInput(
     string? Branch,
     string? RequiredTags,
     string? TimeoutMinutes = null,
-    IReadOnlyDictionary<string, string>? Parameters = null);
+    IReadOnlyDictionary<string, string>? Parameters = null)
+{
+    /// <summary>
+    /// Card F-041: the <c>file</c> parameters' uploaded bytes, keyed by parameter name. Absent (or a name
+    /// missing from it) means "this trigger uploaded no file for that parameter", which resolves the parameter
+    /// to the empty value - the honest answer for a schedule or a poll.
+    /// </summary>
+    public IReadOnlyDictionary<string, byte[]>? Files { get; init; }
+}
 
 /// <summary>Result of triggering a run. <see cref="RunId"/> is the redirect target on success.</summary>
 /// <param name="Replayed">
@@ -247,7 +255,16 @@ public sealed record RunView(
     bool InlineDefinition = false,
     string? RequiredRequirementText = null,
     IReadOnlyList<string>? MissingWorkerLabels = null,
-    bool WaitingForWorker = false)
+    bool WaitingForWorker = false,
+
+    /// <summary>
+    /// Card F-041: which parameter is of which new kind, read from the <b>run's own</b> record rather than from the
+    /// project's current definitions - a definition retyped after the trigger must not change how history reads.
+    /// A <c>password</c> entry is already masked in <see cref="Parameters"/>; this is what tells the page it is a
+    /// mask, a <c>run</c> entry what it links to, and a <c>gitRef</c> entry that it is a ref. Empty for a run
+    /// triggered before the column existed, where every parameter is a plain string.
+    /// </summary>
+    IReadOnlyDictionary<string, RunParameterDetail>? ParameterDetails = null)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -543,7 +560,20 @@ public sealed record RunClaimResult(
     /// reads like a real build.
     /// </para>
     /// </summary>
-    int? Number = null)
+    int? Number = null,
+
+    /// <summary>
+    /// Card F-041: the names of the <c>password</c>-typed parameters in <see cref="Parameters"/>. The worker
+    /// registers their values with the run's redaction filter, so a step that echoes one logs the mask instead.
+    /// Names only - a name is not a secret, and the values travel in the map the worker already receives.
+    /// </summary>
+    IReadOnlyList<string>? PasswordParameters = null,
+
+    /// <summary>
+    /// Card F-041: the names of the <c>file</c>-typed parameters. The worker fetches each one's bytes over the
+    /// run-scoped route and materialises them into the run's own directory before any step starts. Names only.
+    /// </summary>
+    IReadOnlyList<string>? FileParameters = null)
 {
     /// <summary>The 204 answer: nothing eligible right now. Same for every other rejection reason -
     /// a worker polls again, it never learns why it got nothing.</summary>
@@ -645,6 +675,7 @@ public sealed class RunService(
     RunOptions options,
     WorkerMonitorOptions workerMonitorOptions,
     IHubContext<WorkerLogHub> workerLogHubs,
+    RunParameterProtector parameterProtector,
     ILogger<RunService> logger)
 {
     /// <summary>
@@ -898,16 +929,20 @@ public sealed class RunService(
             }
         }
 
-        // F-021: resolve the trigger's parameter values against the project's definitions - every
-        // defined name gets exactly one value (supplied, or default, or the type's neutral default),
-        // and the snapshot below is what the run and every step see. Works for both kinds.
-        var values = ProjectParameters.ResolveValues(
-            ReadParameterDefinitions(project.ParametersJson),
+        // F-021 + F-041: resolve the trigger's parameter values against the project's definitions - every
+        // defined name gets exactly one value (supplied, or default, or the type's neutral default), a
+        // password is split into the masked value map and the sealed value, and a run selection is checked
+        // against this project's own runs. The three documents below are what the run and every step see.
+        var parameters = await ResolveRunParametersAsync(
+            context,
+            project,
             input.Parameters,
-            out var parameterError);
-        if (values is null)
+            inheritedProtected: null,
+            uploadedFiles: input.Files,
+            cancellationToken);
+        if (parameters.Error is { } parametersError)
         {
-            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Parameter, parameterError!));
+            return RunTriggerResult.Invalid(parametersError);
         }
 
         var run = BuildQueuedRun(
@@ -922,7 +957,10 @@ public sealed class RunService(
             // F-020: a Freestyle run freezes the project's spec at trigger time - the same snapshot
             // discipline the branch and pipeline path follow (a later edit cannot move this run).
             pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
-            parametersJson: SerializeParameters(values),
+            parametersJson: parameters.ParametersJson,
+            protectedParametersJson: parameters.ProtectedParametersJson,
+            parameterDetailsJson: parameters.ParameterDetailsJson,
+            parameterFilesJson: parameters.ParameterFilesJson,
 
             // F-022: an inline run freezes the script the same way. The branch and commit stay empty
             // (there is no repository), while the pipeline path is pipeline.lua - the file the script
@@ -1442,10 +1480,22 @@ public sealed class RunService(
         // F-021: the original's values (or the form's overrides on top of them) are re-resolved against
         // today's definitions by the trigger's own routine - so a renamed, removed or retyped parameter is
         // refused with the same code a fresh trigger would give, and a newly declared one takes its default.
+        // Card F-041: a password's value in the original's snapshot is the <b>mask</b>, so it must not be carried
+        // forward as if it were a typed value. Only a submitted override can set a new one; an empty override (the
+        // form's "leave it as it is") is answered from the original's sealed document, which the caller below
+        // passes without ever holding the plaintext.
+        var passwordNames = (ReadParameterDefinitions(project.ParametersJson) ?? [])
+            .Where(definition => ProjectParameterTypes.IsMasked(definition.Type))
+            .Select(definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
         var supplied = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (name, value) in ReadParameters(original.ParametersJson) ?? new Dictionary<string, string>())
         {
-            supplied[name] = value;
+            if (!passwordNames.Contains(name))
+            {
+                supplied[name] = value;
+            }
         }
 
         foreach (var (name, value) in parameterOverrides ?? new Dictionary<string, string>())
@@ -1453,13 +1503,16 @@ public sealed class RunService(
             supplied[name] = value;
         }
 
-        var values = ProjectParameters.ResolveValues(
-            ReadParameterDefinitions(project.ParametersJson),
+        var parameters = await ResolveRunParametersAsync(
+            context,
+            project,
             supplied.Count == 0 ? null : supplied,
-            out var parameterError);
-        if (values is null)
+            RunParameterDocuments.ReadProtected(original.ProtectedParametersJson, parameterProtector),
+            MergeParameterFiles(original),
+            cancellationToken);
+        if (parameters.Error is { } parameterError)
         {
-            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Parameter, parameterError!));
+            return RunTriggerResult.Invalid(parameterError);
         }
 
         var run = new BuildRun
@@ -1487,7 +1540,10 @@ public sealed class RunService(
             PipelineSpecJson = originalWasFreestyle ? original.PipelineSpecJson : null,
             PipelineScriptText = originalIsInline ? original.PipelineScriptText : null,
 
-            ParametersJson = SerializeParameters(values),
+            ParametersJson = parameters.ParametersJson,
+            ProtectedParametersJson = parameters.ProtectedParametersJson,
+            ParameterDetailsJson = parameters.ParameterDetailsJson,
+            ParameterFilesJson = parameters.ParameterFilesJson,
             RebuiltFromRunId = original.Id,
         };
 
@@ -1597,6 +1653,18 @@ public sealed class RunService(
             return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.NotPipeline));
         }
 
+        var headless = await ResolveRunParametersAsync(
+            context,
+            project,
+            provided: null,
+            inheritedProtected: null,
+            uploadedFiles: null,
+            cancellationToken);
+        if (headless.Error is { } headlessError)
+        {
+            return RunTriggerResult.Invalid(headlessError);
+        }
+
         var run = BuildQueuedRun(
             activeOrganizationId.Value,
             project,
@@ -1607,10 +1675,14 @@ public sealed class RunService(
             triggerUserId: null,
             gitCommit,
             pipelineSpecJson: null,
-            // F-021: a webhook run has no user to fill the form, so the parameters resolve to the
-            // definitions' defaults - the honest answer for a headless trigger.
-            parametersJson: SerializeParameters(
-                ProjectParameters.ResolveValues(ReadParameterDefinitions(project.ParametersJson), null, out _)));
+            // F-021 + F-041: a webhook run has no user to fill the form, so the parameters resolve to the
+            // definitions' defaults (and a run parameter to the project's latest successful run) - the honest
+            // answer for a headless trigger. A resolution that cannot answer refuses the delivery instead of
+            // queueing a run with a silently missing value.
+            parametersJson: headless.ParametersJson,
+            protectedParametersJson: headless.ProtectedParametersJson,
+            parameterDetailsJson: headless.ParameterDetailsJson,
+            parameterFilesJson: headless.ParameterFilesJson);
         var staged = await StageQueuedRunAsync(context, run, idempotency: null, cancellationToken);
         if (staged.Status != RunOperationStatus.Success)
         {
@@ -1699,6 +1771,18 @@ public sealed class RunService(
                 new RunFieldError(ProjectFields.InlineScript, ProjectErrorCodes.InlineScriptRequired));
         }
 
+        var scheduled = await ResolveRunParametersAsync(
+            context,
+            project,
+            provided: null,
+            inheritedProtected: null,
+            uploadedFiles: null,
+            cancellationToken);
+        if (scheduled.Error is { } scheduledError)
+        {
+            return RunTriggerResult.Invalid(scheduledError);
+        }
+
         var run = BuildQueuedRun(
             activeOrganizationId.Value,
             project,
@@ -1713,10 +1797,13 @@ public sealed class RunService(
             pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
             // F-022: an inline run freezes the project's script at trigger time.
             pipelineScriptText: isInline ? project.InlineScript : null,
-            // F-021: a headless trigger has no user to fill the form, so the parameters resolve to the
-            // definitions' defaults - the same honest answer a webhook delivery gives.
-            parametersJson: SerializeParameters(
-                ProjectParameters.ResolveValues(ReadParameterDefinitions(project.ParametersJson), null, out _)));
+            // F-021 + F-041: a headless trigger resolves the definitions' defaults (a run parameter to the
+            // project's latest successful run), the same answer a webhook delivery gives - and a resolution
+            // that cannot answer refuses the tick instead of queueing a run with a missing value.
+            parametersJson: scheduled.ParametersJson,
+            protectedParametersJson: scheduled.ProtectedParametersJson,
+            parameterDetailsJson: scheduled.ParameterDetailsJson,
+            parameterFilesJson: scheduled.ParameterFilesJson);
 
         var staged = await StageQueuedRunAsync(context, run, idempotency: null, cancellationToken);
         if (staged.Status != RunOperationStatus.Success)
@@ -1738,6 +1825,229 @@ public sealed class RunService(
     }
 
     /// <summary>
+    /// The three parameter documents one trigger resolves to (card F-021 + card F-041), or the field error that
+    /// stopped it. A record rather than an <c>out</c> parameter because the resolution is asynchronous and needs
+    /// the database (a <c>run</c> selection), and one answer is easier to read at the call sites than two.
+    /// </summary>
+    private sealed record ResolvedRunParameters(
+        string? ParametersJson = null,
+        string? ProtectedParametersJson = null,
+        string? ParameterDetailsJson = null,
+        string? ParameterFilesJson = null,
+        RunFieldError? Error = null);
+
+    /// <summary>
+    /// Resolves a trigger's parameters into the run's three documents (cards F-021 + F-041): the value map every
+    /// reader shares, the sealed <c>password</c> values, and the per-parameter type record.
+    /// <para>
+    /// <b>The run kind is answered here, not in <see cref="ProjectParameters.ResolveValues"/>.</b> A
+    /// <c>run</c> parameter has to name one of <em>this project's</em> runs and its default is "the most recent
+    /// successful one" - both are facts of the database, so they are resolved where the database is (and inside
+    /// the caller's context, so the lookup sees the same snapshot the run row is written with). A selection that
+    /// names nothing, or a project with no successful run to default to, refuses the trigger with a typed reason
+    /// instead of queueing a run whose steps would read an empty number.
+    /// </para>
+    /// <para>
+    /// <b>A password never enters the value map.</b> <paramref name="provided"/> supplies it, the sealed document
+    /// keeps it, and the map gets <see cref="ProjectParameterTypes.MaskedValue"/> - so the page, the rebuild form
+    /// and any future reader of the row see the mask, whatever they do with the document.
+    /// <paramref name="inheritedProtected"/> is a rebuild's way to keep the original value without the caller ever
+    /// holding it: an empty supplied value means "carry the original forward".
+    /// </para>
+    /// </summary>
+    private async Task<ResolvedRunParameters> ResolveRunParametersAsync(
+        ZenkinsDbContext context,
+        Project project,
+        IReadOnlyDictionary<string, string>? provided,
+        IReadOnlyDictionary<string, string>? inheritedProtected,
+        IReadOnlyDictionary<string, byte[]>? uploadedFiles,
+        CancellationToken cancellationToken)
+    {
+        var definitions = ReadParameterDefinitions(project.ParametersJson);
+        var resolved = ProjectParameters.ResolveValues(definitions, provided, out var parameterError);
+        if (resolved is null)
+        {
+            return new ResolvedRunParameters(
+                Error: new RunFieldError(RunFields.Parameter, parameterError!));
+        }
+
+        var values = new Dictionary<string, string>(resolved, StringComparer.Ordinal);
+        Dictionary<string, string>? protectedValues = null;
+        Dictionary<string, RunParameterDetail>? details = null;
+
+        foreach (var definition in definitions ?? [])
+        {
+            switch (definition.Type)
+            {
+                case ProjectParameterTypes.Password:
+                {
+                    var secret = values[definition.Name];
+                    if (secret.Length == 0
+                        && inheritedProtected is not null
+                        && inheritedProtected.TryGetValue(definition.Name, out var inherited))
+                    {
+                        secret = inherited;
+                    }
+
+                    (protectedValues ??= new(StringComparer.Ordinal))[definition.Name] = secret;
+                    values[definition.Name] = ProjectParameterTypes.MaskedValue;
+                    (details ??= new(StringComparer.Ordinal))[definition.Name] =
+                        new RunParameterDetail(ProjectParameterTypes.Password);
+                    break;
+                }
+
+                case ProjectParameterTypes.Run:
+                {
+                    var selection = await ResolveRunSelectionAsync(
+                        context,
+                        project.Id,
+                        values[definition.Name],
+                        cancellationToken);
+                    if (selection is null)
+                    {
+                        return new ResolvedRunParameters(
+                            Error: new RunFieldError(
+                                RunFields.Parameter,
+                                values[definition.Name].Length == 0
+                                    ? RunErrorCodes.ParameterNoRun
+                                    : RunErrorCodes.ParameterInvalid));
+                    }
+
+                    values[definition.Name] = selection.Number.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    (details ??= new(StringComparer.Ordinal))[definition.Name] = new RunParameterDetail(
+                        ProjectParameterTypes.Run,
+                        selection.Id.ToString(),
+                        selection.GitCommit);
+                    break;
+                }
+
+                case ProjectParameterTypes.GitRef:
+                    (details ??= new(StringComparer.Ordinal))[definition.Name] =
+                        new RunParameterDetail(ProjectParameterTypes.GitRef);
+                    break;
+
+                case ProjectParameterTypes.File:
+                {
+                    // Card F-041: the step reads a path the worker writes, so the value the server records is the
+                    // run-relative location - truthful on the page and never a byte of the file. A trigger that
+                    // uploaded nothing (a schedule, a poll) leaves it empty; the worker then injects nothing and
+                    // the step can tell.
+                    var hasBytes = uploadedFiles is not null && uploadedFiles.ContainsKey(definition.Name);
+                    values[definition.Name] = hasBytes
+                        ? ProjectParameterLimits.FileLocation(definition.Name)
+                        : string.Empty;
+                    (details ??= new(StringComparer.Ordinal))[definition.Name] =
+                        new RunParameterDetail(ProjectParameterTypes.File);
+                    break;
+                }
+            }
+        }
+
+        return new ResolvedRunParameters(
+            SerializeParameters(values),
+            RunParameterDocuments.SerializeProtected(protectedValues, parameterProtector),
+            RunParameterDocuments.SerializeDetails(details),
+            RunParameterFiles.Serialize(uploadedFiles, parameterProtector));
+    }
+
+    /// <summary>
+    /// A rebuild's file inputs (card F-041): the original's files, carried forward verbatim - the same rule a
+    /// password follows, and the reason a rebuild never asks for either again. The rebuild form has no file input
+    /// on purpose: to change the uploaded file, trigger a fresh run.
+    /// </summary>
+    private IReadOnlyDictionary<string, byte[]>? MergeParameterFiles(BuildRun original)
+    {
+        var files = RunParameterFiles.ReadAll(original.ParameterFilesJson, parameterProtector);
+        return files.Count == 0 ? null : files;
+    }
+
+    /// <summary>
+    /// The run a <c>run</c> parameter selects (card F-041): the named number when the trigger supplied one, and
+    /// the project's most recent <b>successful</b> run when it supplied nothing - the same run the trigger form
+    /// prefills. Only this project's runs are eligible; a number that belongs to another project (or to no run)
+    /// answers <see langword="null"/>, which the caller turns into a typed refusal.
+    /// </summary>
+    private static async Task<BuildRun?> ResolveRunSelectionAsync(
+        ZenkinsDbContext context,
+        Guid projectId,
+        string selection,
+        CancellationToken cancellationToken)
+    {
+        if (selection.Length == 0)
+        {
+            return await context.BuildRuns
+                .AsNoTracking()
+                .Where(run => run.ProjectId == projectId && run.Status == BuildRunStatus.Success)
+                .OrderByDescending(run => run.Number)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        if (!ProjectParameterRules.IsRunNumber(selection, out var number))
+        {
+            return null;
+        }
+
+        return await context.BuildRuns
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                run => run.ProjectId == projectId && run.Number == number,
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// The parameter map a claim hands to the worker (cards F-021 + F-041): the run's plain values with the sealed
+    /// passwords opened and a run selection's <c>&lt;NAME&gt;_RUN_ID</c> / <c>&lt;NAME&gt;_COMMIT</c> added. This
+    /// is the <b>only</b> place a protected value is decrypted, and its output goes to the worker executing the
+    /// run - never to a page, a log line or an API response.
+    /// </summary>
+    private IReadOnlyDictionary<string, string>? BuildClaimParameters(BuildRun run)
+    {
+        Dictionary<string, string>? values = ReadParameters(run.ParametersJson) is { } plain
+            ? new Dictionary<string, string>(plain, StringComparer.Ordinal)
+            : null;
+
+        foreach (var (name, value) in RunParameterDocuments.ReadProtected(
+                     run.ProtectedParametersJson,
+                     parameterProtector))
+        {
+            (values ??= new(StringComparer.Ordinal))[name] = value;
+        }
+
+        foreach (var (name, detail) in RunParameterDocuments.ReadDetails(run.ParameterDetailsJson))
+        {
+            if (!ProjectParameterTypes.IsRunSelection(detail.Type) || detail.RunId is null)
+            {
+                continue;
+            }
+
+            (values ??= new(StringComparer.Ordinal))[name + "_RUN_ID"] = detail.RunId;
+
+            // Always set, empty when the selected run had no commit (a Freestyle run): `$X_COMMIT` would expand
+            // to nothing either way, and `env("X_COMMIT")` now agrees with the composed environment instead of
+            // answering "unset" for a variable this run deliberately provides.
+            values[name + "_COMMIT"] = detail.Commit ?? string.Empty;
+        }
+
+        return values is { Count: > 0 } ? values : null;
+    }
+
+    /// <summary>The names of the password-typed parameters in a run's claim (card F-041).</summary>
+    private static IReadOnlyList<string>? PasswordParameterNames(BuildRun run) =>
+        ParameterNamesOfType(run, ProjectParameterTypes.Password);
+
+    /// <summary>The names of the parameters of one kind in a run's own record (cards F-041).</summary>
+    private static IReadOnlyList<string>? ParameterNamesOfType(BuildRun run, string type)
+    {
+        var names = RunParameterDocuments.ReadDetails(run.ParameterDetailsJson)
+            .Where(entry => string.Equals(entry.Value.Type, type, StringComparison.Ordinal))
+            .Select(entry => entry.Key)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        return names.Length == 0 ? null : names;
+    }
+
+    /// <summary>
     /// The one run construction routine both trigger sources use: the tenant from the active request (the
     /// data layer rejects anything else), the branch and pipeline path snapshotted so a later project edit
     /// cannot move this run, and the trigger source's own attribution. Adding and saving is the caller's
@@ -1756,7 +2066,10 @@ public sealed class RunService(
         string? gitCommit,
         string? pipelineSpecJson,
         string? parametersJson,
-        string? pipelineScriptText = null) =>
+        string? pipelineScriptText = null,
+        string? protectedParametersJson = null,
+        string? parameterDetailsJson = null,
+        string? parameterFilesJson = null) =>
         new()
         {
             OrganizationId = organizationId,
@@ -1793,8 +2106,12 @@ public sealed class RunService(
             // Worker's own rule is "script and no repository" - not a kind or source word it cannot read.
             PipelineScriptText = pipelineScriptText,
 
-            // F-021: the resolved parameter values, frozen with everything else the run builds.
+            // F-021: the resolved parameter values, frozen with everything else the run builds. A password's
+            // entry here is the mask - the value itself is in ProtectedParametersJson (F-041).
             ParametersJson = parametersJson,
+            ProtectedParametersJson = protectedParametersJson,
+            ParameterDetailsJson = parameterDetailsJson,
+            ParameterFilesJson = parameterFilesJson,
 
             // F-017: a webhook delivery already names the commit; a manual trigger leaves it to the
             // worker's accepted report (F-013).
@@ -2221,10 +2538,22 @@ public sealed class RunService(
                     // so the worker never holds a second copy of it.
                     RunEnvironmentSnapshot.Merge(
                         RunEnvironmentSnapshot.Read(candidate.EnvironmentJson),
-                        ReadParameters(candidate.ParametersJson)),
+
+                        // F-041: the plain map plus the password values the page never sees plus a run
+                        // selection's two convenience variables. One map crosses the boundary, so the
+                        // worker needs no second rule.
+                        BuildClaimParameters(candidate)),
 
                     // F-036 (review M1): a non-positive number is "no number", never `#0`.
-                    candidate.Number is > 0 ? candidate.Number : null);
+                    candidate.Number is > 0 ? candidate.Number : null,
+
+                    // F-041: the names the worker must register with its redaction filter. Names only -
+                    // the values are in the map above, and a name is not a secret.
+                    PasswordParameterNames(candidate),
+
+                    // F-041: the file parameters' names. The bytes travel over their own run-scoped route,
+                    // because a claim carries names and never material (card F-040).
+                    ParameterNamesOfType(candidate, ProjectParameterTypes.File));
             }
         }
 
@@ -3751,7 +4080,12 @@ public sealed class RunService(
                 // labels no Worker carries. Computed from the same predicate the claim loop uses.
                 requirementFacts[run.Id].Item1,
                 requirementFacts[run.Id].Item2,
-                requirementFacts[run.Id].Item3);
+                requirementFacts[run.Id].Item3,
+
+                // F-041: which parameter is of which new kind, from the run's own record - so the page renders a
+                // masked entry as a mask, a run selection as a link and a ref as a ref, whatever the project's
+                // definitions say today. Empty for a run triggered before the column existed (all plain strings).
+                RunParameterDocuments.ReadDetails(run.ParameterDetailsJson));
         }).ToList();
     }
 

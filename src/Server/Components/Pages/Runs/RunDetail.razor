@@ -4,6 +4,8 @@
 @using Zenkins.Server.Artifacts
 @using Zenkins.Shared.Artifacts
 @using Zenkins.Shared.Pipelines
+@using Zenkins.Shared.Projects
+@using Zenkins.Server.Runs
 @inject UserSession UserSession
 @inject RunService RunsService
 @inject RunLogAccess RunLogAccess
@@ -141,10 +143,27 @@
                     {
                         <div>
                             <label for="@($"rebuild-parameter-{name}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@name</label>
-                            <input id="@($"rebuild-parameter-{name}")"
-                                   name="@($"Parameters[{name}]")"
-                                   value="@value"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
+                            @if (IsPasswordParameter(name))
+                            {
+                                @* F-041: the original's value is sealed, so the form cannot prefill it - and must
+                                   not, since prefilling a mask and re-submitting it would set the password to
+                                   "***". Empty means "keep the original". *@
+                                <input id="@($"rebuild-parameter-{name}")"
+                                       name="@($"Parameters[{name}]")"
+                                       type="password"
+                                       autocomplete="new-password"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
+                                <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                    Leave empty to rebuild with the same password; type a new one to replace it.
+                                </p>
+                            }
+                            else
+                            {
+                                <input id="@($"rebuild-parameter-{name}")"
+                                       name="@($"Parameters[{name}]")"
+                                       value="@value"
+                                       class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
+                            }
                         </div>
                     }
                     <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Rebuild with these parameters</BbButton>
@@ -388,9 +407,54 @@
                     <dl id="run-parameters" class="bb:grid bb:grid-cols-1 bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
                         @foreach (var (name, value) in parameters.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                         {
+                            var typed = ParameterDetail(name);
                             <div>
-                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@name</dt>
-                                <dd id="@($"run-parameter-{name}")" class="bb:whitespace-pre-wrap bb:break-all bb:font-mono">@(value.Length == 0 ? "(empty)" : value)</dd>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">
+                                    @name
+                                    @if (typed is not null)
+                                    {
+                                        <span class="bb:ml-1 bb:font-normal">(@ParameterTypeLabel(typed.Type))</span>
+                                    }
+                                </dt>
+                                @if (typed is not null && typed.Type == ProjectParameterTypes.Password)
+                                {
+                                    @* F-041: the stored value is already the mask, so this renders what the row
+                                       holds - a second, display-only mask would be one more place to get wrong. *@
+                                    <dd id="@($"run-parameter-{name}")" class="bb:font-mono">@(value.Length == 0 ? "(empty)" : value)</dd>
+                                }
+                                else if (typed is not null && typed.Type == ProjectParameterTypes.Run)
+                                {
+                                    <dd id="@($"run-parameter-{name}")" class="bb:font-mono">
+                                        @if (typed.RunId is { } selectedRunId)
+                                        {
+                                            <a href="@($"/runs/{selectedRunId}")" class="bb:underline bb:underline-offset-4">#@value</a>
+                                        }
+                                        else
+                                        {
+                                            <span>#@value</span>
+                                        }
+                                        @if (typed.Commit is { Length: >= 7 } commit)
+                                        {
+                                            <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@commit[..7]</span>
+                                        }
+                                    </dd>
+                                }
+                                else if (typed is not null && typed.Type == ProjectParameterTypes.File)
+                                {
+                                    @* F-041: the uploaded file's run-relative location. Deliberately no link: the
+                                       bytes live on the worker and the only route that serves them is
+                                       worker-authenticated - a file parameter may be a secret. *@
+                                    <dd id="@($"run-parameter-{name}")" class="bb:break-all bb:font-mono">
+                                        @(value.Length == 0 ? "(no file uploaded)" : value)
+                                    </dd>
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        Written on the worker inside this run's own directory; not downloadable.
+                                    </p>
+                                }
+                                else
+                                {
+                                    <dd id="@($"run-parameter-{name}")" class="bb:whitespace-pre-wrap bb:break-all bb:font-mono">@(value.Length == 0 ? "(empty)" : value)</dd>
+                                }
                             </div>
                         }
                     </dl>
@@ -541,6 +605,27 @@
 </div>
 
 @code {
+    /// <summary>
+    /// Card F-041: one parameter's own type on this run, from the run's record - empty for a run triggered before
+    /// the column existed, where every parameter is a plain string.
+    /// </summary>
+    private RunParameterDetail? ParameterDetail(string name) =>
+        _run?.ParameterDetails is { } details && details.TryGetValue(name, out var detail) ? detail : null;
+
+    /// <summary>Whether this run's <paramref name="name"/> parameter is a password (its value is the mask).</summary>
+    private bool IsPasswordParameter(string name) =>
+        ParameterDetail(name) is { } detail && ProjectParameterTypes.IsMasked(detail.Type);
+
+    /// <summary>The type as a person reads it, in the run page's parameter list.</summary>
+    private static string ParameterTypeLabel(string type) => type switch
+    {
+        ProjectParameterTypes.Password => "password",
+        ProjectParameterTypes.Run => "run",
+        ProjectParameterTypes.GitRef => "git ref",
+        ProjectParameterTypes.File => "file",
+        _ => type,
+    };
+
     /// <summary>The guid route (F-003's original, still the PRG target of every trigger).</summary>
     [Parameter]
     public Guid RunId { get; set; }

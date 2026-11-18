@@ -74,6 +74,16 @@ public static class PipelineFailureReasons
     /// <summary>The definition phase ran past the run's wall clock and was abandoned.</summary>
     public const string PipelineTimeout = "pipeline-timeout";
 
+    // ---- parameters ----------------------------------------------------
+
+    /// <summary>
+    /// Card F-041: a <c>file</c> parameter could not be materialised on the worker (the delivery was refused or
+    /// the write failed), so <b>no step was started</b>. A distinct reason from <c>step-failed</c> because nothing
+    /// ran and nothing about a step is at fault: the run's own input is missing, and a step that read an empty
+    /// path would fail far from the cause.
+    /// </summary>
+    public const string ParameterFileUnavailable = "parameter-file-unavailable";
+
     // ---- executor ------------------------------------------------------
 
     /// <summary>A step exited non-zero; its exit code is recorded on the run, nothing is invented.</summary>
@@ -113,6 +123,7 @@ public static class PipelineFailureReasons
         PipelineSyntax,
         PipelineInvalid,
         PipelineTimeout,
+        ParameterFileUnavailable,
         StepFailed,
         StepTimeout,
         StepRetryExhausted,

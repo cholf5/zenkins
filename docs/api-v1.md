@@ -158,9 +158,11 @@ The header is optional. Presented, it names **one request**, and these are the r
 }
 ```
 
-Deliberately absent: **build-parameter values** (F-041's password-typed parameters do not exist yet,
-and the API never echoes a parameter value), secrets, credentials, and any artifact URL. The status,
-steps, failure reason and numbers are the record.
+Deliberately absent: **build-parameter values**, secrets, credentials, and any artifact URL. The API
+never echoes a parameter value, and since F-041 that is a security rule as well as a tidiness one: a
+`password` parameter is a per-run input that must never be readable back through an API. A `gitRef` or
+`run` value is not sensitive, but it is frozen onto the run and read from the run page - the API's
+contract does not change with the type.
 
 `projectDisabled` is the project's **live** state, read when the resource was rendered - not a snapshot
 of the run's own moment. A run that was queued while the project was enabled reads `true` after the

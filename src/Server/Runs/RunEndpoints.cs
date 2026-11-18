@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Zenkins.Server.Workers;
 using Zenkins.Shared.Pipelines;
+using Zenkins.Shared.Projects;
 using Zenkins.Shared.RunCancellation;
 
 namespace Zenkins.Server.Runs;
@@ -46,7 +47,12 @@ public static class RunEndpoints
 
         // Trigger form (F-003 shape): cookie + antiforgery, PRG outcomes.
         var projects = endpoints.MapGroup("/projects").RequireAuthorization();
-        projects.MapPost("/{projectId:guid}/runs/start", StartRunAsync);
+        // F-041: the trigger form can carry uploaded file parameters, so the endpoint refuses a body bigger
+        // than the bound *before* the handler runs. The handler checks each file too - a caller cannot choose
+        // which of the two checks it hits, and a huge body never becomes a megabyte of memory in the app.
+        projects.MapPost("/{projectId:guid}/runs/start", StartRunAsync)
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(
+                ProjectParameterLimits.MaxFileBytes + (64 * 1024)));
 
         // User cancel (F-009): the run page's cancel button. Cookie + antiforgery like the other
         // form endpoints; the service enforces membership, the tenant filter makes a foreign run a
@@ -76,6 +82,11 @@ public static class RunEndpoints
         api.MapPost("/runs/{runId:guid}/steps", ReportStepAsync);
         api.MapPost("/runs/{runId:guid}/completed", CompleteAsync);
         api.MapPost("/runs/{runId:guid}/canceled", ReportCanceledAsync);
+
+        // Card F-041: a file parameter's bytes, run-scoped and worker-authenticated. POST with the name in the
+        // body - never in the URL - for the same reason F-040's secret delivery is: a name in a path lands in
+        // every access log. The refusal contract is F-040's, value for value.
+        api.MapPost("/runs/{runId:guid}/parameter-files", FetchRunParameterFileAsync);
 
         // Full-log download (F-008): cookie-authenticated like the pages; the tenant comes from the
         // session (never the URL), so a foreign run id is a plain 404 that leaks no bytes.
@@ -159,6 +170,26 @@ public static class RunEndpoints
     /// from #N" line is - and every refusal is a PRG back to the original with its stable code, except the
     /// hard authorization answers, which stay hard (the F-003 rule every form on this surface follows).
     /// </summary>
+    /// <summary>
+    /// The parameter name an uploaded input belongs to (card F-041). The form names a file input
+    /// <c>Parameters[NAME]</c> exactly like a text input, so one convention covers both and the parse is a
+    /// prefix/suffix strip rather than a second mapping to keep in step.
+    /// </summary>
+    private static string? ParameterNameOf(string? fieldName)
+    {
+        const string Prefix = "Parameters[";
+
+        if (fieldName is null
+            || !fieldName.StartsWith(Prefix, StringComparison.Ordinal)
+            || fieldName[^1] != ']')
+        {
+            return null;
+        }
+
+        var name = fieldName[Prefix.Length..^1];
+        return PipelineSpecSchema.IsReferenceNameShape(name) ? name : null;
+    }
+
     private static async Task<IResult> RebuildRunAsync(
         Guid runId,
         [FromForm] RebuildRunForm? form,
@@ -278,7 +309,44 @@ public static class RunEndpoints
             return Results.Redirect($"/projects/{projectId}?runError={RunErrorCodes.FieldInvalid}");
         }
 
-        var result = await runs.TriggerAsync(userId, projectId, form.ToInput(), httpContext.RequestAborted);
+        // F-041: the uploaded file parameters. The inputs are named `Parameters[NAME]`, so the mapping is the
+        // form's own convention rather than a second one; an input that names no parameter is ignored (the
+        // service refuses a name the project does not define, which is the same answer a text value gets).
+        // Read through the request rather than binding an IFormFileCollection parameter: a file parameter is
+        // optional, and a handler parameter of that type would make the endpoint accept *only* multipart - 415
+        // for the urlencoded posts every existing caller (and every test) sends. The form is already parsed for
+        // the model binding, so this is the same read, cached.
+        var requestForm = await httpContext.Request.ReadFormAsync(httpContext.RequestAborted);
+        var files = requestForm.Files;
+        Dictionary<string, byte[]>? uploads = null;
+        if (files is { Count: > 0 })
+        {
+            uploads = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            foreach (var file in files)
+            {
+                if (ParameterNameOf(file.Name) is not { } name)
+                {
+                    continue;
+                }
+
+                if (file.Length > ProjectParameterLimits.MaxFileBytes)
+                {
+                    return Results.Redirect(
+                        $"/projects/{projectId}?runError={RunErrorCodes.ParameterFileTooLarge}");
+                }
+
+                using var buffer = new MemoryStream();
+                await file.CopyToAsync(buffer, httpContext.RequestAborted);
+                uploads[name] = buffer.ToArray();
+            }
+        }
+
+        var input = form.ToInput() with
+        {
+            Files = uploads is { Count: > 0 } ? uploads : null,
+        };
+
+        var result = await runs.TriggerAsync(userId, projectId, input, httpContext.RequestAborted);
         return result.Status switch
         {
             RunOperationStatus.Success => Results.Redirect($"/runs/{result.RunId}"),
@@ -300,6 +368,48 @@ public static class RunEndpoints
             _ => Results.Redirect(
                 $"/projects/{projectId}?runError={result.FieldErrors?[0].Code ?? RunErrorCodes.FieldInvalid}"),
         };
+    }
+
+    /// <summary>
+    /// The run-scoped parameter-file fetch (card F-041): the bytes of one uploaded <c>file</c> parameter, for the
+    /// worker executing the run. A bad token is a bare 401 answered before any run or name lookup; every miss is
+    /// one bodyless 404, so neither the response nor the log can tell "not yours" from "does not exist".
+    /// </summary>
+    private static async Task<IResult> FetchRunParameterFileAsync(
+        Guid runId,
+        [FromBody] RunParameterFileRequest request,
+        HttpContext httpContext,
+        RunParameterFileService files)
+    {
+        var (status, bytes) = await files.FetchAsync(
+            WorkerEndpoints.BearerToken(httpContext),
+            runId,
+            request.Name,
+            httpContext.RequestAborted);
+
+        switch (status)
+        {
+            case RunParameterFileFetchStatus.Success:
+                // The body is an upload: explicitly uncacheable, so neither an intermediary nor a client keeps
+                // a copy. Raw bytes, not JSON - there is nothing to encode and nothing to read around.
+                httpContext.Response.Headers.CacheControl = "no-store";
+                return Results.Bytes(bytes!, "application/octet-stream");
+
+            case RunParameterFileFetchStatus.InvalidToken:
+                return Results.Unauthorized();
+
+            default:
+                return Results.NotFound();
+        }
+    }
+
+    /// <summary>
+    /// The worker's parameter-file request body: the name the step's <c>${…}</c>-free environment read. No value
+    /// and no organization id - the token selects the tenant and the path selects the run.
+    /// </summary>
+    public sealed class RunParameterFileRequest
+    {
+        public string? Name { get; set; }
     }
 
     private static async Task<IResult> ClaimAsync(
@@ -326,7 +436,9 @@ public static class RunEndpoints
                 result.Parameters,
                 result.Number,
                 result.PipelineScriptText,
-                result.DefinitionSource)),
+                result.DefinitionSource,
+                result.PasswordParameters,
+                result.FileParameters)),
         };
     }
 
@@ -609,7 +721,19 @@ public static class RunEndpoints
 
         // F-022: the run's definition shape word (repository | freestyle | inline). The Worker switches
         // on this, never on "is there a frozen spec?" - an inline run can carry both.
-        string? DefinitionSource = null);
+        string? DefinitionSource = null,
+
+        // F-041: the names of the password-typed parameters in Parameters. The Worker registers their values
+        // with the run's redaction filter, so a step that echoes one logs the mask. Names only; absent for a
+        // run with no password parameter (and from an older server that does not know the field).
+        IReadOnlyList<string>? PasswordParameters = null,
+
+        /// <summary>
+        /// Card F-041: the names of the <c>file</c>-typed parameters. Their bytes are <b>not</b> in this payload -
+        /// the worker fetches each one over the run-scoped parameter-file route, so a megabyte upload never
+        /// travels in a document every worker reads for every run.
+        /// </summary>
+        IReadOnlyList<string>? FileParameters = null);
 
     /// <param name="DeadlineAt">F-014: the accepted answer carries the run's frozen deadline.</param>
     public sealed record RunReportResponse(string Status, DateTimeOffset? DeadlineAt = null);

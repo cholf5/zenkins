@@ -498,6 +498,12 @@ namespace Zenkins.Server.Data.Migrations
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ParameterDetailsJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParameterFilesJson")
+                        .HasColumnType("text");
+
                     b.Property<string>("ParametersJson")
                         .HasColumnType("text");
 
@@ -514,6 +520,9 @@ namespace Zenkins.Server.Data.Migrations
 
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("ProtectedParametersJson")
+                        .HasColumnType("text");
 
                     b.Property<Guid?>("RebuiltFromRunId")
                         .HasColumnType("uuid");

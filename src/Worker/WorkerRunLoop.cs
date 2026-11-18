@@ -348,7 +348,8 @@ public sealed class WorkerRunLoop(
     /// </summary>
     internal static RunEnvironment BuildRunEnvironment(
         WorkerClaimResponse claim,
-        string workerName)
+        string workerName,
+        IReadOnlyDictionary<string, string>? parameterValues = null)
     {
         var metadata = new Dictionary<string, string?>(StringComparer.Ordinal)
         {
@@ -371,8 +372,9 @@ public sealed class WorkerRunLoop(
         {
             Metadata = metadata,
 
-            // One map: no absent-claim special case is needed, because an empty map is an empty layer.
-            Values = claim.Parameters ?? RunEnvironment.Empty.Values,
+            // One map: no absent-claim special case is needed, because an empty map is an empty layer. Card
+            // F-041 passes the map back with a file parameter's value replaced by the path the worker wrote.
+            Values = parameterValues ?? claim.Parameters ?? RunEnvironment.Empty.Values,
         };
     }
 
@@ -402,6 +404,11 @@ public sealed class WorkerRunLoop(
         // instant it is known. It is log hygiene, not a boundary (docs/lua-runtime.md §7).
         var redactor = new GitLogFilter();
 
+        // F-041: a password-typed parameter is a per-run input rather than a stored Secret, but it is just as
+        // unprintable. Registered here - before the runner exists and long before the first step can echo one -
+        // through the same function the end-to-end harness calls, so the rule has one implementation.
+        RunParameterPasswords.Register(claim, redactor);
+
         // The step whose segment the next line belongs to (card F-015). A holder rather than a captured
         // Guid?: the two output readers run on their own threads, so the value is published as one atomic
         // reference that a reader can never observe half-written.
@@ -424,6 +431,32 @@ public sealed class WorkerRunLoop(
             var stream = line.Stream == ProcessOutputStream.StdOut ? LogStream.StdOut : LogStream.StdErr;
             writers.Write(stream, redacted);
             logBuffer.Emit(stream, redacted, currentStep.Current);
+        }
+
+        // F-041: the run's uploaded file parameters, written into this run's own directory before anything else
+        // runs. A parameter that cannot be materialised fails the RUN here - no definition phase, no step -
+        // because a step reading an empty path would fail somewhere far from the cause. The bytes arrive over
+        // the run-scoped route (never the claim, card F-040), one file at a time.
+        IReadOnlyDictionary<string, string> parameterValues;
+        try
+        {
+            parameterValues = await RunParameterFileMaterializer.MaterializeAsync(
+                claim,
+                work,
+                (name, token) => api.FetchRunParameterFileAsync(workerToken, claim.RunId, name, token),
+                Emit,
+                shutdown);
+        }
+        catch (RunParameterFileException failure)
+        {
+            Emit($"zenkins: {failure.Message}");
+            logBuffer.CompleteInput();
+            if (logStreams.HasEverConnected)
+            {
+                await pump;
+            }
+
+            return new RunExecutionResult(null, PipelineFailureReasons.ParameterFileUnavailable);
         }
 
         // The pipeline layer's own dependencies: the run's log sink (the prelude's print/log), F-013's
@@ -466,7 +499,7 @@ public sealed class WorkerRunLoop(
                 // F-021/F-034: the run's server-resolved values (organization layer, then parameters) join
                 // the server-provided metadata as the next layer up, so every step of both kinds reads
                 // them by name and the one composition decides which layer won.
-                RunEnvironment = BuildRunEnvironment(claim, configuration.WorkerName),
+                RunEnvironment = BuildRunEnvironment(claim, configuration.WorkerName, parameterValues),
                 Log = Emit,
                 OnProcessOutput = OnOutput,
 

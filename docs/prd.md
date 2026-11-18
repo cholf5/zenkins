@@ -941,6 +941,49 @@ Parameters 是 Project 上的一组输入定义，两种 Kind 通用。触发时
 - 参数是配置而非 Secret：值显示在 Run 详情页、随 claim 传给 Worker，不做脱敏；敏感值应放入
   Secrets（§3.8）。
 
+#### 3.11.2.1 更多参数类型（F-041）
+
+F-021 的四种（`string` / `text` / `boolean` / `choice`）之上再加四种。定义仍然在项目上，值仍然在触发时
+冻结到 Run 上、注入每个步骤的环境变量，旧的定义与旧的 Run JSON 都照常可读。
+
+| 类型 | 触发时提交什么 | 步骤读到什么 | 页面/接口如何展示 |
+|---|---|---|---|
+| `password` | 表单里的密码框（或 API 值） | 值本身 | Run 页与所有列表显示 `***`；任何 API 不返回；日志里注册进 redactor，echo 出来是 `***` |
+| `run` | 本项目最近 N 个 Run 的单选（`#N status branch`），默认预填最近一次成功 | Run 的**编号**，外加 `<NAME>_RUN_ID` 与 `<NAME>_COMMIT` | Run 页显示 `#N` 并链到那个 Run |
+| `gitRef` | 自由文本 | 值本身 | Run 页按 ref 展示 |
+| `file` | 随触发上传的有界文件（≤1 MiB） | **路径**（在 Run 自己的目录里） | Run 页显示 run 内相对位置，**不提供下载** |
+
+四种新类型的共同规则：
+
+- **`password` 不是 Secret**：它是一次 Run 的输入，不是组织状态。因此触发一次部署不需要 Owner 权限，
+  而管理 Secret 需要。代价是它的生命周期与 Run 绑定：值随 Run 冻结、随 Run 结束而无意义。
+- **`password` 的存储**：Run 的值映射里只存掩码 `***`，真正的值以 Data Protection（purpose
+  `Zenkins.RunParameters.v1`）加密后单独存一列，只在**为执行该 Run 的 Worker 组装 claim 时**解开。因此
+  Run 的 JSON 快照无法用来还原密码，数据库转储离开 key ring 也一样。
+- **`password` 不允许默认值**：默认值会把明文写进项目行，正是这个类型要避免的。无人工触发（定时、
+  轮询、API 不带值）解析为空字符串。
+- **`run` 的默认值不是定义里的常量**：它解析为"本项目最近一次成功 Run"，定义里写死编号会随删除/新增
+  Run 失效。项目还没有成功 Run 时拒绝触发（`parameter-no-run`），而不是排一个读不到编号的 Run。
+- **`run` 生成的两个变量不可被同名参数覆盖**：声明 `NAME` 为 `run` 类型时，再声明 `NAME_RUN_ID` /
+  `NAME_COMMIT` 会在保存时被拒绝（与 `ZENKINS_*` 保留前缀同一条"不静默覆盖"规则）。
+- **`gitRef` 只做形状校验**：非空、无空白、不以 `-` 开头、≤200 字符。前两条是安全边界：ref 迟早会作为
+  值进入 argv，开头的 `-` 就是把值变成选项的方式，空白就是把一个参数变成两个的方式。
+- **`gitRef` 不是检出目标**：触发展示的 ref 只作为**步骤读到的值**。当触发已经钉住 commit（webhook push、
+  rebuild），检出的就是那个 commit——run 的 commit 是权威，参数不是。这一点在触发表单与本文档都写明。
+- **Rebuild 继承而不重问**：rebuild 直接沿用原 Run 的密码密文（表单留空 = 保持原值，填新值 = 替换），
+  所以重新部署不需要重新输入密码，也不需要把密码显示出来。文件参数同理：rebuild 沿用原 Run 的文件，
+  要换文件就重新触发一次。
+- **`file` 的字节不进 claim**：claim 只带名字（F-040 已把这条写成契约），字节放在 Run 上以同一个
+  purpose 密封，由**执行该 Run 的 Worker** 通过 run 级、worker 鉴权的投递路由按名字取。拒绝契约与
+  F-040 的 secret 投递逐字对齐：外部 Run、外部名字、别人的 Run、已结束的 Run 都是**同一个无 body 的 404**。
+- **`file` 落在 Run 自己的目录**：`work/{run-id}/temp/parameters/{NAME}`，Unix 上目录 `0700`、文件
+  `0600`（创建时即设定）；随 Run 的 temp 清理一起删除。步骤读到的是该文件的**绝对路径**；服务端在 Run
+  上记录的是 run 内相对位置（`temp/parameters/{NAME}`），页面上不提供任何下载入口——它可能是秘密。
+- **取不到就在步骤前失败**：Worker 无法物化某个文件参数时，整个 Run 以 `parameter-file-unavailable`
+  失败，连定义阶段都不跑——让步骤去读一个空路径只会把失败点推得离原因更远。
+- **`file` 的三个闸门**：定义里不许有默认值；请求管线（端点级 body 上限）与 handler（单个文件长度）两次
+  校验同一 1 MiB 上界；请求体超限是 413，handler 超限是 `parameter-file-too-large` 的 PRG 错误。
+
 #### 3.11.3 注入
 
 一个步骤的环境由**六层**构成，从低到高（同名时后者胜）：
@@ -964,7 +1007,8 @@ Parameters 是 Project 上的一组输入定义，两种 Kind 通用。触发时
 - 层叠顺序在 Worker 的**唯一**一个合成函数（`StepEnvironment.Compose`）里实现；`${env:NAME}` 是延迟引用，
   在步骤边界对合成后的同一张表求值，因此脚本与子进程不会对“哪一层胜”产生分歧。
 - 参数值与组织变量都是配置而非 Secret：随 claim 传给 Worker，在 Run 详情页可见，不脱敏；敏感值应放入
-  Secrets（§3.8）。
+  Secrets（§3.8）。**F-041 的 `password` 类型是这条规则的唯一例外**：它是每 Run 的输入而非组织状态，
+  因此不入 Secrets，但 Run 页显示 `***`、日志脱敏、API 不返回（§3.11.2.1）。
 
 ### 3.12 组织 API（API v1）
 

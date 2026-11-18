@@ -358,7 +358,10 @@
                 }
                 else
                 {
-                <form method="post" action="@($"/projects/{_project.Id}/runs/start")" data-zenkins-antiforgery>
+                @* F-041: always multipart, because a project may declare a file parameter and the browser has
+                   one form; a multipart body that carries no file binds exactly like the old urlencoded one, and
+                   the antiforgery token still travels as a form field. *@
+                <form method="post" enctype="multipart/form-data" action="@($"/projects/{_project.Id}/runs/start")" data-zenkins-antiforgery>
                     <div class="bb:space-y-4">
                         @if (RunRequestError is { } runRequestError)
                         {
@@ -439,6 +442,81 @@
                                               spellcheck="false"
                                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm">@parameter.DefaultValue</textarea>
                                 }
+                                else if (parameter.Type == ProjectParameterTypes.Password)
+                                {
+                                    @* F-041: a per-run input, not a stored Secret - any member may trigger a
+                                       deploy with one, and nothing about it survives the run on the page. *@
+                                    <input id="run-param-@(parameter.Name)"
+                                           name="@($"Parameters[{parameter.Name}]")"
+                                           type="password"
+                                           autocomplete="new-password"
+                                           spellcheck="false"
+                                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm" />
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        Typed per run: the run page and every list show ***, a step that echoes it
+                                        logs ***, and no API returns it. Not a stored Secret - it is an input to
+                                        this one run, so triggering does not need Owner rights. Leaving it empty
+                                        passes an empty value.
+                                    </p>
+                                }
+                                else if (parameter.Type == ProjectParameterTypes.Run)
+                                {
+                                    @* F-041: one of this project's runs, as "#N status branch". The selected
+                                       run's number is the value; the step also reads NAME_RUN_ID and NAME_COMMIT. *@
+                                    <select id="run-param-@(parameter.Name)"
+                                            name="@($"Parameters[{parameter.Name}]")"
+                                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm">
+                                        @foreach (var candidate in RunParameterOptions(parameter))
+                                        {
+                                            <option value="@candidate.Number"
+                                                    selected="@(candidate.Number?.ToString(CultureInfo.InvariantCulture) == RunParameterPrefill(parameter))">
+                                                @RunParameterLabel(candidate)
+                                            </option>
+                                        }
+                                    </select>
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        The step reads the run's number, plus
+                                        @($"{parameter.Name}_RUN_ID") and @($"{parameter.Name}_COMMIT").
+                                        @if (_parameterRuns.Count == 0)
+                                        {
+                                            <span>This project has no run to select yet, so a run parameter refuses the trigger.</span>
+                                        }
+                                        else
+                                        {
+                                            <span>The newest successful run is preselected.</span>
+                                        }
+                                    </p>
+                                }
+                                else if (parameter.Type == ProjectParameterTypes.File)
+                                {
+                                    @* F-041: the upload. The step reads a path, not the bytes, and the run page
+                                       never offers a download - the file may be a secret. *@
+                                    <input id="run-param-@(parameter.Name)"
+                                           name="@($"Parameters[{parameter.Name}]")"
+                                           type="file"
+                                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        At most @(ProjectParameterLimits.MaxFileBytes / 1024) KiB. The step reads a
+                                        <b>path</b> inside the run's own directory; the bytes are never shown on
+                                        this page and cannot be downloaded from it. Uploading nothing passes an
+                                        empty value.
+                                    </p>
+                                }
+                                else if (parameter.Type == ProjectParameterTypes.GitRef)
+                                {
+                                    <input id="run-param-@(parameter.Name)"
+                                           name="@($"Parameters[{parameter.Name}]")"
+                                           value="@parameter.DefaultValue"
+                                           autocomplete="off"
+                                           spellcheck="false"
+                                           placeholder="v1.2.3"
+                                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm" />
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        No whitespace, no leading dash. This is what the <b>step</b> reads: when the
+                                        trigger pins a commit (a webhook push, a rebuild) that commit is what gets
+                                        checked out, whatever this ref says.
+                                    </p>
+                                }
                                 else
                                 {
                                     <input id="run-param-@(parameter.Name)"
@@ -508,6 +586,13 @@
     private RunView? _newestRun;
     private int? _savedStepCount;
     private ProjectParameter[] _parameterDefinitions = [];
+
+    /// <summary>
+    /// Card F-041: the runs a <c>run</c> parameter may select, newest first and bounded - the same read the Runs
+    /// tab uses, so the form and the tab cannot disagree about what exists. Loaded only when the project declares
+    /// a run parameter, because every other page render has no use for it.
+    /// </summary>
+    private IReadOnlyList<RunView> _parameterRuns = [];
     private int _credentialCount;
     private string? _assignedCredentialName;
 
@@ -565,6 +650,10 @@
         RunErrorCodes.FieldInvalid => "That request could not be read, so no run was started. Try again.",
         RunErrorCodes.ParameterUnknown => "One of the supplied parameter names is not defined on this project.",
         RunErrorCodes.ParameterInvalid => "One of the supplied parameter values does not fit its type.",
+        RunErrorCodes.ParameterNoRun =>
+            "A run parameter asked for the project's previous run, and this project has no successful run yet.",
+        RunErrorCodes.ParameterFileTooLarge =>
+            $"An uploaded file parameter is over the {ProjectParameterLimits.MaxFileBytes / 1024} KiB bound, so no run was queued.",
 
         // Cards F-028 + F-029: the project itself refused the trigger. The code is all the redirect can
         // carry; the numbers (if any) are re-read here, so the message quotes what is true now.
@@ -575,6 +664,27 @@
             : "The project's queue is full, so no run was queued.",
         _ => null,
     };
+
+    /// <summary>
+    /// The runs a <c>run</c> parameter offers (card F-041): the project's own runs, newest first, so the number
+    /// in the value is one the trigger path will resolve. Empty for a project with no runs - the trigger then
+    /// refuses with <see cref="RunErrorCodes.ParameterNoRun"/> rather than queueing a run with no selection.
+    /// </summary>
+    private IEnumerable<RunView> RunParameterOptions(ProjectParameter parameter) => _parameterRuns;
+
+    /// <summary>
+    /// The preselected run: the newest <b>successful</b> one, which is also what the server resolves a headless
+    /// trigger to - the form's prefill and the schedule's default are one rule, not two.
+    /// </summary>
+    private string? RunParameterPrefill(ProjectParameter parameter)
+    {
+        var successful = _parameterRuns.FirstOrDefault(run => run.Status == BuildRunStatus.Success);
+        return (successful ?? _parameterRuns.FirstOrDefault())?.Number?.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>One option's label: <c>#N status branch</c>, the shape the card asks for.</summary>
+    private static string RunParameterLabel(RunView run) =>
+        $"#{(run.Number?.ToString(CultureInfo.InvariantCulture) ?? "?")} {run.Status} {run.GitBranch}";
 
     protected override async Task OnInitializedAsync()
     {
@@ -646,6 +756,11 @@
         // tab can never disagree about which run is newest.
         var runs = await RunsService.GetProjectRunsAsync(ProjectId);
         _newestRun = runs.Count > 0 ? runs[0] : null;
+
+        // F-041: the trigger form's run-parameter choices. Bounded like the runs list, newest first.
+        _parameterRuns = _parameterDefinitions.Any(definition => ProjectParameterTypes.IsRunSelection(definition.Type))
+            ? [.. runs.Take(20)]
+            : [];
 
         // F-029: the queue-cap refusal quotes the observed numbers, so read the count only for that
         // refusal - every other render of this page needs no count.

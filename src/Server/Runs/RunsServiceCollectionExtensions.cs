@@ -18,6 +18,13 @@ public static class RunsServiceCollectionExtensions
         // Scoped like the other request services: it reads the scoped request/circuit tenant,
         // sets the tenant for token-authenticated calls, and creates one context per operation.
         services.AddScoped<RunService>();
+
+        // F-041: the purpose-bound cipher for password-typed parameter values. Scoped like the secrets'
+        // protector; both wrap the application's one Data Protection key ring.
+        services.AddScoped<RunParameterProtector>();
+
+        // F-041: the run-scoped, worker-authenticated fetch a file parameter's bytes take.
+        services.AddScoped<RunParameterFileService>();
         services.AddHostedService<LeaseSweeper>();
         return services;
     }

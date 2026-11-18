@@ -17,6 +17,46 @@ namespace Zenkins.Tests.Api;
 [Trait("Category", "Api")]
 public sealed class ApiV1RunApiTests
 {
+    /// <summary>
+    /// Card F-041: a <c>password</c> parameter is a per-run input that must never be readable back, and the API's
+    /// run resource is the surface a caller would try. The resource carries no parameter values at all (card F-027),
+    /// so the type does not change the contract - this fact pins that the password is not the exception.
+    /// </summary>
+    [Fact]
+    public async Task A_password_parameter_value_never_appears_in_the_run_resource()
+    {
+        const string Name = "DEPLOY_PW";
+        const string Value = "api-pw-77c1f3";
+
+        using var host = await ApiV1TestHost.CreateAsync();
+        var (projectId, owner) = await host.CreateProjectAsync("api-password-param");
+        await host.SetParameterDefinitionsAsync(
+            projectId,
+            JsonSerializer.Serialize(
+                new[] { new Zenkins.Shared.Projects.ProjectParameter(Name, Zenkins.Shared.Projects.ProjectParameterTypes.Password) },
+                Zenkins.Shared.Projects.ProjectParameterJsonContext.Default.ProjectParameterArray));
+
+        var token = await host.MintTokenPlaintextAsync(owner, "deploy");
+        using var api = host.CreateApiClient(token);
+
+        using var triggered = await ApiV1TestHost.TriggerAsync(
+            api,
+            projectId,
+            new { parameters = new Dictionary<string, string>(StringComparer.Ordinal) { [Name] = Value } });
+        Assert.Equal(HttpStatusCode.Created, triggered.StatusCode);
+        using var created = await ApiV1TestHost.ReadJsonAsync(triggered);
+        var runId = created.RootElement.GetProperty("id").GetGuid();
+
+        using var read = await ApiV1TestHost.GetAsync(api, $"/api/v1/runs/{runId}");
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        var body = await read.Content.ReadAsStringAsync(CancellationToken);
+
+        Assert.DoesNotContain(Value, body, StringComparison.Ordinal);
+
+        // Not merely absent from the document: there is no parameter field at all for a password to leak through.
+        Assert.DoesNotContain("\"parameters\"", body, StringComparison.Ordinal);
+    }
+
     private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
 
     /// <summary>

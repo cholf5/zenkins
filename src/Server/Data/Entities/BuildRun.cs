@@ -240,6 +240,45 @@ public sealed class BuildRun : ITenantOwned
     public string? ParametersJson { get; set; }
 
     /// <summary>
+    /// The <b>sensitive</b> parameter values of this run (card F-041), as Data Protection ciphertext of a
+    /// name → plaintext object. Only <c>password</c>-typed parameters are here; everything else lives in
+    /// <see cref="ParametersJson"/>.
+    /// <para>
+    /// <b>Why a second column instead of putting the value in the first one.</b> The first column is what the
+    /// run page, the rebuild form and the claim read, and it must show the mask - so the plaintext is kept out
+    /// of it entirely. A database dump therefore cannot answer "what was the deploy password": the ciphertext
+    /// is useless without the key ring, exactly like <c>Secrets.Ciphertext</c>. The claim decrypts it for the
+    /// worker executing the run, the one reader that needs the real value.
+    /// </para>
+    /// </summary>
+    public string? ProtectedParametersJson { get; set; }
+
+    /// <summary>
+    /// The <c>file</c>-typed parameters' bytes (card F-041), as Data Protection ciphertext of a
+    /// name → base64 object, sealed with the same purpose as <see cref="ProtectedParametersJson"/>.
+    /// <para>
+    /// <b>Why the bytes are here and not in the claim.</b> A file parameter can be up to a megabyte; the claim
+    /// payload is the one document every worker reads for every run, and card F-040 settled that it carries
+    /// names, never material. The worker therefore asks for the file it needs, by name, over a run-scoped
+    /// route - the same shape a file <em>secret</em> already takes.
+    /// </para>
+    /// </summary>
+    public string? ParameterFilesJson { get; set; }
+
+    /// <summary>
+    /// The run's own record of which parameter is of which <b>new</b> type (card F-041), as a
+    /// name → <c>{type, runId, commit}</c> object. Only <c>password</c>/<c>run</c>/<c>gitRef</c> get an entry;
+    /// the four F-021 types are absent and therefore typed <c>string</c>.
+    /// <para>
+    /// The run page renders from this rather than from the project's current definitions, for the same reason
+    /// the values are snapshotted: a definition edited after the trigger must not change how history reads. A
+    /// <c>run</c> parameter's <c>runId</c>/<c>commit</c> live here too, because the injected
+    /// <c>&lt;NAME&gt;_RUN_ID</c> / <c>&lt;NAME&gt;_COMMIT</c> are derived from them when the claim is built.
+    /// </para>
+    /// </summary>
+    public string? ParameterDetailsJson { get; set; }
+
+    /// <summary>
     /// The organization environment layer this run executes with (card F-034): a JSON object of
     /// variable name → value, frozen at trigger time exactly like the branch, the spec and the
     /// parameter values. Null when the organization defined no variables when this run was queued.

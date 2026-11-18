@@ -89,6 +89,11 @@ public static class RunDisplay
 
         return reason switch
         {
+            // Card F-041: a file parameter that could not be materialised - nothing ran, and the fix is to look at
+            // the run's inputs rather than at a step.
+            PipelineFailureReasons.ParameterFileUnavailable =>
+                "A file parameter could not be prepared on the worker, so no step was started. The run log names "
+                + "the parameter; check that the upload is still there and run again.",
             PipelineFailureReasons.GitAuthRejected when gitCredentialAssigned == false =>
                 "The remote asked for credentials, and no Git credential is assigned to this project. "
                 + "Attach one on the project's settings tab - a credential stored on the worker host is "

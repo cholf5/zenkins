@@ -30,6 +30,21 @@ public static class RunErrorCodes
     public const string ParameterInvalid = "parameter-invalid";
 
     /// <summary>
+    /// Card F-041: an uploaded <c>file</c> parameter is over the bound. Its own code rather than
+    /// <see cref="ParameterInvalid"/>, because the fix is "upload a smaller file", not "correct the value" - and
+    /// the request pipeline refuses a bigger body with a 413 before this can even run, so this answers the
+    /// between-the-two case.
+    /// </summary>
+    public const string ParameterFileTooLarge = "parameter-file-too-large";
+
+    /// <summary>
+    /// Card F-041: a <c>run</c> parameter asked for "the previous run" and the project has no successful run to
+    /// give it. A distinct code from <see cref="ParameterInvalid"/>, because nothing about the submitted value is
+    /// wrong - the project has nothing to select yet, and "fix your input" would send the reader the wrong way.
+    /// </summary>
+    public const string ParameterNoRun = "parameter-no-run";
+
+    /// <summary>
     /// Card B-008: the caller's <c>Idempotency-Key</c> already names a different request - another
     /// project, or another payload - so it is refused instead of replaying that request's run.
     /// </summary>

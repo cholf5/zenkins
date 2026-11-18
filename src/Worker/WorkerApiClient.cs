@@ -102,6 +102,22 @@ public sealed record WorkerClaimResponse(
     string? PipelineScript = null,
 
     /// <summary>
+    /// Card F-041: the names of the <c>password</c>-typed parameters in <see cref="Parameters"/>. The worker
+    /// registers their values with the run's redaction filter before the first step starts, so a step that echoes
+    /// one logs the mask. Names only, and absent from an older server's claim - a claim without the field simply
+    /// registers nothing, which is exactly what a run without password parameters needs.
+    /// </summary>
+    IReadOnlyList<string>? PasswordParameters = null,
+
+    /// <summary>
+    /// Card F-041: the names of the <c>file</c>-typed parameters. The worker fetches each one's bytes over the
+    /// run-scoped route and writes them into the run's own directory before any step starts; the bytes are
+    /// deliberately not in this payload (card F-040's "the claim carries names only"). Absent from an older
+    /// server's claim, which is the same as a run with no file parameters.
+    /// </summary>
+    IReadOnlyList<string>? FileParameters = null,
+
+    /// <summary>
     /// F-022: the run's definition shape word (<see cref="Zenkins.Shared.Pipelines.RunDefinitionSources"/>).
     /// The Worker switches on this - not on "is there a frozen spec?" - because an inline run can carry
     /// both a script and a spec. Absent from an older server's JSON: the Worker then derives the shape
@@ -179,6 +195,12 @@ public sealed record WorkerSecretRequest(string Name);
 /// the decrypted payload, whose shape the kind decides - never a raw value the caller may use directly.
 /// </summary>
 public sealed record WorkerSecretResponse(string Name, string Value, string? Kind = null);
+
+/// <summary>
+/// The run-scoped parameter-file request (card F-041): the name of the uploaded <c>file</c> parameter the worker
+/// needs. The name travels in the body, never in the URL, so it stays out of access logs.
+/// </summary>
+public sealed record WorkerParameterFileRequest(string Name);
 
 /// <summary>
 /// A Git remote probe leased to this worker (card I-005): the probe's id, the repository snapshot to run
@@ -658,6 +680,38 @@ public sealed class WorkerApiClient(HttpClient httpClient)
             .ReadFromJsonAsync(WorkerJsonContext.Default.WorkerSecretResponse, inFlight.Timeout);
     }
 
+    /// <summary>
+    /// Fetches one uploaded <c>file</c> parameter's bytes for a run this worker is executing (card F-041). A 404
+    /// is <see langword="null"/> - every refusal is the same one, so the worker cannot tell the reasons apart
+    /// either. The response is raw bytes, never JSON: there is nothing to decode.
+    /// </summary>
+    public async Task<byte[]?> FetchRunParameterFileAsync(
+        string workerToken,
+        Guid runId,
+        string name,
+        CancellationToken cancellationToken)
+    {
+        using var inFlight = await SendAsync(
+            () => CreateRequest(
+                HttpMethod.Post,
+                $"api/workers/runs/{runId}/parameter-files",
+                workerToken,
+                new WorkerParameterFileRequest(name),
+                WorkerJsonContext.Default.WorkerParameterFileRequest),
+            cancellationToken);
+        if ((int)inFlight.Response.StatusCode == 404)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync(
+            inFlight.Response,
+            "fetching a run parameter file",
+            inFlight.Timeout,
+            isRunReport: true);
+        return await inFlight.Response.Content.ReadAsByteArrayAsync(cancellationToken);
+    }
+
     // ---------------------------------------------------------------------
     // Artifacts (card F-016): create → per-file stream → finalize
     // ---------------------------------------------------------------------
@@ -962,6 +1016,7 @@ public sealed record WorkerArtifactErrorResponse(string Error, string Message);
 [JsonSerializable(typeof(WorkerStepResponse))]
 [JsonSerializable(typeof(WorkerSecretRequest))]
 [JsonSerializable(typeof(WorkerSecretResponse))]
+[JsonSerializable(typeof(WorkerParameterFileRequest))]
 // I-005: the Git remote probe's claim and report (source-generated, like every other wire type).
 [JsonSerializable(typeof(WorkerProbeClaimResponse))]
 [JsonSerializable(typeof(GitProbeRef))]
