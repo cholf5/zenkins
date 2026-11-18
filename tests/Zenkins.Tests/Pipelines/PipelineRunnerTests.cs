@@ -933,32 +933,35 @@ public sealed class PipelineRunnerTests
         // AC-3, both directions. The earlier of the two limits governs, and which one it was is readable
         // from the log and from the two stored reasons (`step-timeout` vs `timed-out`).
 
-        // (a) The run's deadline is earlier: a 3600s step limit cannot fire first, so no step timer is
-        // installed, F-009's cancel stops the step, and the record says the run's deadline did it.
-        // Card Q-023: the clock is frozen at the deadline's origin, so "the run has 2s left" is a fact about
-        // the fixture rather than about how quickly this process was scheduled. Load can no longer flip which
-        // limit the comparison picks.
+        // (a) The run's deadline is earlier: a two-hour step limit cannot fire first, so no step timer is
+        // installed, the run's own cancellation stops the step, and the record says the run's deadline did it.
+        //
+        // Card Q-023 (second pass): the fixture owns both halves - the clock and the cancel - and nothing here
+        // waits on real time. The frozen clock makes "the run has an hour left" a fact about the fixture, and the
+        // cancel is raised the moment the step reports Running. The deadline is an hour out rather than two
+        // seconds away, because it is an *absolute* instant and the frozen clock only feeds this executor's
+        // comparison: git's per-command budget and the Lua definition phase measure that instant against the real
+        // clock. A two-second deadline was therefore a real two-second budget for the clone, and a loaded host
+        // spent it there - the run answered `git-timeout` before the step it is about had even reported Running.
         var deadlineClock = new ManualClock(DateTimeOffset.UtcNow);
-
-        // Card Q-023: the step's window is armed when the step is actually running, not when the harness is
-        // constructed. A saturated machine used to be able to spend the whole 2s before the first step, and
-        // the cancel then arrived as "the run was canceled" instead of "the run's deadline stopped the step".
         using var cancellation = new CancellationTokenSource();
         using (var repository = PipelineRepository.Create(
             PipelineTestData.Pipeline(
                 "deadline-governs",
-                PipelineTestData.StepWith("Long", timeoutSeconds: 3600, retry: null, "stream", "30000"))))
+                PipelineTestData.StepWith("Long", timeoutSeconds: 7200, retry: null, "stream", "30000"))))
         using (var run = new PipelineRunHarness(repository)
                {
-                   Deadline = deadlineClock.Now.AddSeconds(2),
+                   Deadline = deadlineClock.Now.AddHours(1),
                    Clock = deadlineClock,
-                   OnStepRunning = _ => cancellation.CancelAfter(TimeSpan.FromSeconds(2)),
+                   OnStepRunning = _ => cancellation.Cancel(),
                    CancellationFailureReason = () => StepCancellationReason.For(RunCancelReasons.Timeout),
                })
         {
             var outcome = await run.ExecuteAsync(cancellation.Token);
 
-            Assert.True(outcome.Canceled);
+            Assert.True(
+                outcome.Canceled,
+                $"the run answered {outcome.FailureReason ?? outcome.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "success"} instead of a cancellation.");
             var step = Terminal(run, 1);
             Assert.Equal(PipelineStepStatus.Failed, step.Status);
             Assert.Equal(PipelineStepFailureReasons.TimedOut, step.FailureReason);
