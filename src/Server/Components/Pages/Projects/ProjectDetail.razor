@@ -8,6 +8,7 @@
 @using Zenkins.Server.Webhooks
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
+@inject ProjectLinkService ChainLinkService
 @inject WebhookService WebhookManagement
 @inject RunService RunsService
 @inject GitCredentialService CredentialService
@@ -317,6 +318,70 @@
             </BbCardContent>
         </BbCard>
 
+        @* Card F-026, AC-1's "visible on the overview": a project's place in a chain is something a reader of
+           this page needs to know before they press Start run - "this also queues three other jobs" changes the
+           decision. The lists and the declaring form stay on the settings tab; this card answers only "is this
+           project part of a chain, and on which ends?". *@
+        @if (_upstreamLinks.Count > 0 || _downstreamLinks.Count > 0)
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Chain</BbCardTitle>
+                    <BbCardDescription>
+                        This project runs as part of a chain. The links are declared, and can be changed, on
+                        the settings tab.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl id="project-chain-summary" class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-2">
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered by (upstream)</dt>
+                            <dd class="bb:break-all">
+                                @if (_upstreamLinks.Count == 0)
+                                {
+                                    <span class="bb:text-muted-foreground">Nothing: no project's run queues this one.</span>
+                                }
+                                else
+                                {
+                                    @for (var index = 0; index < _upstreamLinks.Count; index++)
+                                    {
+                                        if (index > 0)
+                                        {
+                                            <span>, </span>
+                                        }
+                                        <span data-chain-summary-upstream="@_upstreamLinks[index].UpstreamProjectId">@_upstreamLinks[index].UpstreamProjectName</span>
+                                    }
+                                }
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggers (downstream)</dt>
+                            <dd class="bb:break-all">
+                                @if (_downstreamLinks.Count == 0)
+                                {
+                                    <span class="bb:text-muted-foreground">Nothing: this project's runs trigger nothing.</span>
+                                }
+                                else
+                                {
+                                    @for (var index = 0; index < _downstreamLinks.Count; index++)
+                                    {
+                                        if (index > 0)
+                                        {
+                                            <span>, </span>
+                                        }
+                                        <span data-chain-summary-downstream="@_downstreamLinks[index].DownstreamProjectId">@_downstreamLinks[index].DownstreamProjectName</span>
+                                    }
+                                }
+                            </dd>
+                        </div>
+                    </dl>
+                    <div class="bb:mt-4">
+                        <BbButton Href="@($"/projects/{_project.Id}/settings")" Variant="ButtonVariant.Outline">Manage chain links…</BbButton>
+                    </div>
+                </BbCardContent>
+            </BbCard>
+        }
+
         @if (!_canDelete)
         {
             <p class="bb:text-sm bb:text-muted-foreground">
@@ -584,6 +649,11 @@
     private bool _canDelete;
     private IReadOnlyList<WebhookView> _webhooks = [];
     private RunView? _newestRun;
+
+    /// <summary>Card F-026: the edges that name this project, split by direction for the overview's summary.</summary>
+    private IReadOnlyList<ProjectLinkView> _upstreamLinks = [];
+
+    private IReadOnlyList<ProjectLinkView> _downstreamLinks = [];
     private int? _savedStepCount;
     private ProjectParameter[] _parameterDefinitions = [];
 
@@ -719,6 +789,12 @@
         {
             return;
         }
+
+        // F-026: the chain summary. Two filtered reads of the same list, because the card answers two questions
+        // - "what queues me" and "what do I queue" - and an operator reading the overview cares about both.
+        var chainLinks = await ChainLinkService.GetForProjectAsync(ProjectId);
+        _upstreamLinks = [.. chainLinks.Where(link => link.DownstreamProjectId == ProjectId)];
+        _downstreamLinks = [.. chainLinks.Where(link => link.UpstreamProjectId == ProjectId)];
 
         // F-021: the trigger form renders the project's parameter definitions (both kinds). The
         // stored JSON was validated at save; a parse here only fails on a corrupted row, and the

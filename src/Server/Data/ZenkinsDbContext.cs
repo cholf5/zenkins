@@ -7,6 +7,7 @@ using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Git;
 using Zenkins.Server.Api;
 using Zenkins.Server.Projects;
+using Zenkins.Server.Runs;
 using Zenkins.Server.Secrets;
 using Zenkins.Server.Artifacts;
 using Zenkins.Server.Branches;
@@ -111,6 +112,12 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
     /// <summary>Encrypted organization secrets (F-012). Write-only above this layer: nothing outside
     /// <c>SecretService.TryGetValueAsync</c> ever decrypts a row, and no endpoint returns a value.</summary>
     public DbSet<Secret> Secrets => Set<Secret>();
+
+    /// <summary>Card F-026's upstream/downstream edges (tenant-owned).</summary>
+    public DbSet<ProjectLink> ProjectLinks => Set<ProjectLink>();
+
+    /// <summary>Card F-026's outbox: the downstream triggers a terminal run owes, settled by the dispatcher.</summary>
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     /// <summary>Plain (unencrypted) organization environment variables (F-034): the layer every
     /// project's steps receive, snapshotted onto each run at trigger time.</summary>
@@ -999,6 +1006,9 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
             // before sealing) is ProjectParameterLimits.MaxFileBytes, enforced in the handler and the pipeline.
             entity.Property(run => run.ParameterFilesJson);
 
+            // F-026: the chain facts a downstream run's steps read. `text` like its siblings; five short values.
+            entity.Property(run => run.UpstreamFactsJson);
+
             // F-034: the frozen organization environment layer (another name → value object). Bounded at
             // the source by OrganizationEnvironmentValidation (100 variables, 4 KiB each), so the column
             // needs no typed cap of its own.
@@ -1224,6 +1234,10 @@ public sealed class ZenkinsDbContext : IdentityUserContext<User>
         // column. The configuration lives next to the feature (src/Server/Git) so the model grows by one
         // call here, not by two blocks; the tenant predicate is installed there against this instance.
         modelBuilder.ConfigureGitCredentials(this);
+
+        // F-026: the upstream/downstream links and the outbox the chain's durability rides on. Configured next to
+        // the feature (same discipline as the Git credentials above).
+        modelBuilder.ConfigureDownstream(this);
 
         // F-016: the artifact entity (tenant-owned, unique (RunId, Name), cascade from the run). Same
         // shape as the call above: the storage rules live next to the feature (src/Server/Artifacts).

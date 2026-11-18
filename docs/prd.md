@@ -1103,6 +1103,34 @@ timeoutMinutes、parameters，校验规则与错误码与表单完全一致。�
 
 ---
 
+### 3.14 上下游作业（Upstream / Downstream）
+
+一个项目可以声明“X 成功后跑我”（upstream）与“我成功后跑 Y”（downstream），让 build → test → deploy
+这类链条不需要外部编排，且**环永远不能自转**。
+
+- **链路是一等数据**（`ProjectLink`）：上游项目、下游项目、“仅成功时触发”、分支策略。同一对项目只能有一条
+  同向边；删项目时两个方向的边一起消失（外键级联），不会留下悬空触发。
+- **分支策略**：`sameBranch`（默认，跟随上游构建的分支，配合多分支）或 `defaultBranch`（下游构建自己的默认
+  分支）。**下游构建不了这个分支时记为 `skipped-branch`，不是失败**——链做了它被告知要做的事，只是那个分支
+  在这个项目里不存在。
+- **两级环保护**：
+  1. **保存时图检查**：新边若让上游从下游可达，直接拒绝，并在消息里给出会闭合的路径（`A -> B -> C -> A`）。
+     自连同样拒绝。
+  2. **运行期跳数上限（20）**：只在分支策略下自转的链（A main → B main → A main）在图上没有环，图检查看不见；
+     跳数上限在第 21 跳停下，并在上游 run 上记 `skipped-hop-limit`。两条各自有独立的事实与变异。
+- **正好一次，且服务器死机不丢**：上游 Run 到达终态时，为每条匹配的下游链路写一行 **outbox**，与终态状态在
+  **同一个事务**里提交；提交后由派发器（后台服务）结算。行在被真正结算前一直是 `pending`，所以“排了下游”与
+  “标记已结算”之间崩掉会重派，而不是丢失。
+- **拒绝是结果，不是沉默**：派发器把每条链路的结局写回那一行——`queued` / `skipped-upstream-failed` /
+  `skipped-branch` / `skipped-disabled` / `skipped-hop-limit` / `skipped-missing` / `failed-trigger`，附一句
+  可渲染的原因。永久性拒绝（禁用、项目或链路已删、凭据缺失、下游无效、跳数上限）首趟即结算，**不无限重试**；
+  只有队列类拒绝退避重试，上限 5 次后结算为 `failed-trigger`。
+- **下游 Run 是普通 Run**：同一个 F-028/F-029 闸门、同一套编号、同一个 Worker 契约；额外记
+  `TriggerType = Upstream`、触发它的 run id 与跳数。参数取定义默认值（与定时触发同一条解析路径）。
+- **`UPSTREAM_*` 环境变量**：下游步骤额外读到 `UPSTREAM_PROJECT`、`UPSTREAM_RUN_ID`、`UPSTREAM_STATUS`、
+  `UPSTREAM_BRANCH`、`UPSTREAM_COMMIT`（在上游 Run 的终态上读取，不落到下游行里——上游被删就没有这些变量，
+  而不是编造值）。
+
 ## 4. UI 设计
 
 ### 4.1 设计原则

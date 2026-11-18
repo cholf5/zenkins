@@ -390,6 +390,79 @@
             </BbCardContent>
         </BbCard>
 
+        @* Card F-026: the chain this run is part of. "Triggered by" is the edge that caused it; "triggered"
+           lists what it caused, each with the outcome the dispatcher recorded - including the ones that produced
+           no run, because "nothing happened" is exactly what a reader must not be left with. *@
+        @if (_run.TriggeredByRunId is { } upstreamRunId || _run.DownstreamTriggers is { Count: > 0 })
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle As="h2">Chain</BbCardTitle>
+                    <BbCardDescription>
+                        The upstream/downstream links this run took part in. A link that produced no run says why.
+                    </BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <dl id="run-chain" class="bb:grid bb:grid-cols-1 bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
+                        @if (_run.TriggeredByRunId is { } triggeredBy)
+                        {
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered by</dt>
+                                <dd class="bb:font-mono">
+                                    <a href="@($"/runs/{triggeredBy}")" class="bb:underline bb:underline-offset-4">@(_run.TriggeredByRunNumber is { } upstreamNumber ? $"#{upstreamNumber}" : "an upstream run")</a>
+                                </dd>
+                            </div>
+                        }
+                        @if (_run.UpstreamFacts is { Count: > 0 } upstreamFacts)
+                        {
+                            @* F-026: the chain facts the steps read, in their own list - not among the build
+                               parameters, where they would look like something a person typed. *@
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Upstream facts</dt>
+                                <dd>
+                                    <ul id="run-upstream-facts" class="bb:space-y-1 bb:font-mono bb:text-xs">
+                                        @foreach (var (factName, factValue) in upstreamFacts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                                        {
+                                            <li>@factName=@(factValue.Length == 0 ? "(empty)" : factValue)</li>
+                                        }
+                                    </ul>
+                                </dd>
+                            </div>
+                        }
+                        @if (_run.DownstreamTriggers is { Count: > 0 } downstreams)
+                        {
+                            <div>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered</dt>
+                                <dd>
+                                    <ul class="bb:space-y-1">
+                                        @foreach (var link in downstreams)
+                                        {
+                                            <li id="@($"run-chain-{link.DownstreamProjectName}")">
+                                                <span class="bb:font-medium">@link.DownstreamProjectName</span>
+                                                @if (link.DownstreamRunId is { } downstreamRunId)
+                                                {
+                                                    <a href="@($"/runs/{downstreamRunId}")"
+                                                       class="bb:ml-1 bb:underline bb:underline-offset-4">@(link.DownstreamRunNumber is { } downstreamNumber ? $"#{downstreamNumber}" : "run")</a>
+                                                }
+                                                else
+                                                {
+                                                    <span class="bb:ml-1 bb:font-mono">@link.Outcome</span>
+                                                }
+                                                @if (link.Reason is { } linkReason)
+                                                {
+                                                    <span class="bb:ml-1 bb:text-xs bb:text-muted-foreground">@linkReason</span>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                </dd>
+                            </div>
+                        }
+                    </dl>
+                </BbCardContent>
+            </BbCard>
+        }
+
         @* F-021: what this run was triggered with. Values are the run's own snapshot - editing the
            project's definitions now never changes this card - and they are deliberately visible:
            parameters are configuration, not secrets. *@

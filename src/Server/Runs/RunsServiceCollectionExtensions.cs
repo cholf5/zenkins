@@ -25,6 +25,12 @@ public static class RunsServiceCollectionExtensions
 
         // F-041: the run-scoped, worker-authenticated fetch a file parameter's bytes take.
         services.AddScoped<RunParameterFileService>();
+
+        // F-026: the chain edges (and the save-time cycle check), the dispatcher's per-pass work, and the
+        // background half that works the outbox off after every terminal run.
+        services.AddScoped<ProjectLinkService>();
+        services.AddScoped<DownstreamTriggerService>();
+        services.AddHostedService<DownstreamTriggerDispatcher>();
         services.AddHostedService<LeaseSweeper>();
         return services;
     }

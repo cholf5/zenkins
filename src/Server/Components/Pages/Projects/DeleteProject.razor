@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
+@inject ProjectLinkService LinkService
 
 <PageTitle>Delete project · Zenkins</PageTitle>
 
@@ -42,7 +43,7 @@
                 <BbCardTitle As="h2">Delete “@_project.Name”?</BbCardTitle>
                 <BbCardDescription>
                     This permanently removes the project from this organization, together with its
-                    runs and its webhooks. It cannot be undone.
+                    runs, its webhooks and its upstream/downstream links. It cannot be undone.
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -57,6 +58,38 @@
                             <dd>@_project.PipelinePath</dd>
                         </div>
                     </dl>
+
+                    @* Card F-026, AC-8: a chain link disappears with either project, so the confirmation says
+                       which jobs lose a trigger before the request is made - "it cannot be undone" is not enough
+                       when a build->test->deploy chain quietly stops halfway. Both directions are listed, because
+                       deleting a middle project breaks the chain above it and below it. *@
+                    <div id="delete-chain-affected">
+                        <p class="bb:text-sm bb:font-medium">Chain links removed with it</p>
+                        @if (_upstreamLinks.Count + _downstreamLinks.Count == 0)
+                        {
+                            <p id="delete-chain-affected-none" class="bb:mt-1 bb:text-sm bb:text-muted-foreground">
+                                None. This project neither queues another one nor is queued by one, so deleting it
+                                removes no trigger in either direction.
+                            </p>
+                        }
+                        else
+                        {
+                            <ul class="bb:mt-1 bb:list-disc bb:space-y-1 bb:ps-5 bb:text-sm">
+                                @foreach (var link in _upstreamLinks)
+                                {
+                                    <li data-chain-affected-upstream="@link.UpstreamProjectId">Runs of this project stop being triggered by <span class="bb:font-medium">@link.UpstreamProjectName</span>.</li>
+                                }
+                                @foreach (var link in _downstreamLinks)
+                                {
+                                    <li data-chain-affected-downstream="@link.DownstreamProjectId">Runs of <span class="bb:font-medium">@link.DownstreamProjectName</span> stop being triggered by this project.</li>
+                                }
+                            </ul>
+                            <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                The links are removed by the same delete; a trigger already queued for a link that
+                                is gone settles as <code>skipped-missing</code> instead of failing.
+                            </p>
+                        }
+                    </div>
 
                     <form method="post" action="@($"/projects/{_project.Id}/delete")" data-zenkins-antiforgery class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete project</BbButton>
@@ -79,6 +112,11 @@
     private ProjectView? _project;
     private bool _canDelete;
 
+    /// <summary>Card F-026: the edges this delete would remove, split by direction for the two sentences.</summary>
+    private IReadOnlyList<ProjectLinkView> _upstreamLinks = [];
+
+    private IReadOnlyList<ProjectLinkView> _downstreamLinks = [];
+
     protected override async Task OnInitializedAsync()
     {
         // Establish the circuit tenant before the tenant-filtered lookup.
@@ -91,6 +129,15 @@
         }
 
         _project = await ProjectsService.GetProjectAsync(ProjectId);
+        if (_project is not null)
+        {
+            // Card F-026, AC-8: the jobs the chain would lose, read through the same tenant-filtered service the
+            // settings tab lists them with, so the confirmation names exactly the edges delete will remove.
+            var links = await LinkService.GetForProjectAsync(ProjectId);
+            _upstreamLinks = [.. links.Where(link => link.DownstreamProjectId == ProjectId)];
+            _downstreamLinks = [.. links.Where(link => link.UpstreamProjectId == ProjectId)];
+        }
+
         if (_project is null && HttpContext is not null)
         {
             // A real 404 for a foreign or missing id. The status-code-pages middleware must not

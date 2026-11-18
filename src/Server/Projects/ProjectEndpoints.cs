@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
+using Zenkins.Server.Runs;
 
 namespace Zenkins.Server.Projects;
 
@@ -50,6 +51,12 @@ public static class ProjectEndpoints
 
         // F-021: the parameters editor's save - the same shape, both kinds.
         group.MapPost("/{projectId:guid}/parameters", SaveParametersAsync);
+
+        // F-026: the chain edges, declared from the project's settings tab. Same form-post +
+        // antiforgery shape as every other project mutation; the service owns the graph check (a
+        // cycle is refused with the path that would close it) and the tenant-filtered lookups.
+        group.MapPost("/{projectId:guid}/links", SaveLinkAsync);
+        group.MapPost("/{projectId:guid}/links/{linkId:guid}/delete", DeleteLinkAsync);
 
         // F-022: the inline Pipeline editor's save and its definition-only Validate action. Both are
         // the same form-post + antiforgery shape as every other project mutation; the page that owns
@@ -157,6 +164,75 @@ public static class ProjectEndpoints
             ProjectMutationStatus.NotFound => Results.NotFound(),
             _ => Results.Redirect($"/projects/{projectId}/pipelines?error={ProjectErrorCodes.StepsInvalid}"),
         };
+    }
+
+    /// <summary>
+    /// Card F-026: declares one upstream/downstream edge from the settings tab. <c>Direction</c> says which
+    /// side the form was on - the same row either way. A refusal (a cycle, a duplicate, a self-link, a branch
+    /// policy that is neither known policy) is a PRG back to the tab with the service's own sentence in the
+    /// query, so the page can name the path that would close; nothing was written.
+    /// </summary>
+    private static async Task<IResult> SaveLinkAsync(
+        Guid projectId,
+        [FromForm] ProjectLinkForm form,
+        HttpContext httpContext,
+        ProjectLinkService links)
+    {
+        if (FindUserId(httpContext) is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // F-019's rule in miniature: a lost body is the page's PRG error, never a null reference.
+        if (form?.TargetProjectId is not { } targetProjectId || targetProjectId == Guid.Empty)
+        {
+            return Results.Redirect($"/projects/{projectId}/settings?links=target-required");
+        }
+
+        var result = await links.SaveAsync(
+            projectId,
+            targetProjectId,
+            isDownstream: !string.Equals(form.Direction, "upstream", StringComparison.Ordinal),
+            onlyOnSuccess: form.OnlyOnSuccess,
+            branchPolicy: form.BranchPolicy,
+            httpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            ProjectLinkStatus.Success =>
+                Results.Redirect($"/projects/{projectId}/settings?links=saved"),
+
+            // A foreign or missing project is the same bodyless 404 every tenant-owned row answers - and it
+            // is what an edge pointing outside the organization looks like from here.
+            ProjectLinkStatus.NotFound => Results.NotFound(),
+
+            // A cycle, a duplicate or an unknown policy is a well-formed request the graph refused: the
+            // service's sentence carries the path, so the reader can act on it instead of guessing.
+            _ => Results.Redirect(
+                $"/projects/{projectId}/settings?links=refused&reason={Uri.EscapeDataString(result.Message ?? string.Empty)}"),
+        };
+    }
+
+    /// <summary>
+    /// Card F-026: removes one edge named on the settings tab. The service resolves both ids through the
+    /// tenant filter, so a link of another organization - or one that does not touch this project - is the
+    /// same bodyless 404, and no row is touched.
+    /// </summary>
+    private static async Task<IResult> DeleteLinkAsync(
+        Guid projectId,
+        Guid linkId,
+        HttpContext httpContext,
+        ProjectLinkService links)
+    {
+        if (FindUserId(httpContext) is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var deleted = await links.DeleteAsync(projectId, linkId, httpContext.RequestAborted);
+        return deleted
+            ? Results.Redirect($"/projects/{projectId}/settings?links=deleted")
+            : Results.NotFound();
     }
 
     private static async Task<IResult> SaveParametersAsync(
@@ -491,6 +567,29 @@ public static class ProjectEndpoints
         public string? MaxQueuedRuns { get; set; }
 
         public ProjectLimitsInput ToInput() => new(MaxConcurrentRuns, QuietPeriodSeconds, MaxQueuedRuns);
+    }
+
+    /// <summary>
+    /// Card F-026's chain form: the other project, which side of this one it sits on, whether a failed
+    /// upstream still triggers, and the branch policy. The field names are the form's own, so the page and
+    /// this binding cannot drift.
+    /// </summary>
+    public sealed class ProjectLinkForm
+    {
+        /// <summary>The other end of the edge. Absent when the select was not submitted at all (F-019).</summary>
+        public Guid? TargetProjectId { get; set; }
+
+        /// <summary><c>downstream</c> (this project's terminal run queues the target) or <c>upstream</c>.</summary>
+        public string? Direction { get; set; }
+
+        /// <summary>
+        /// Whether only a successful upstream triggers. The unchecked form posts <c>false</c> through its
+        /// hidden twin, so this default only matters for a body that omitted the flag entirely.
+        /// </summary>
+        public bool OnlyOnSuccess { get; set; } = true;
+
+        /// <summary>One of <see cref="ProjectLinkBranchPolicies"/>; blank means the default.</summary>
+        public string? BranchPolicy { get; set; }
     }
 
     /// <summary>Card F-025's polling form: the checkbox and the interval, both as the browser sends them.</summary>

@@ -558,8 +558,17 @@ namespace Zenkins.Server.Data.Migrations
                         .HasMaxLength(450)
                         .HasColumnType("character varying(450)");
 
+                    b.Property<Guid?>("TriggeredByRunId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpstreamFactsJson")
+                        .HasColumnType("text");
+
+                    b.Property<int>("UpstreamHops")
+                        .HasColumnType("integer");
 
                     b.Property<Guid?>("WorkerId")
                         .HasColumnType("uuid");
@@ -839,6 +848,63 @@ namespace Zenkins.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.OutboxMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DownstreamRunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("LinkId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Outcome")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset?>("SettledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid>("UpstreamRunId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UpstreamRunId");
+
+                    b.HasIndex("Status", "NextAttemptAt");
+
+                    b.ToTable("OutboxMessages");
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Project", b =>
                 {
                     b.Property<Guid>("Id")
@@ -986,6 +1052,45 @@ namespace Zenkins.Server.Data.Migrations
 
                             t.HasCheckConstraint("CK_Projects_QuietPeriodSeconds", "\"QuietPeriodSeconds\" >= 0");
                         });
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.ProjectLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BranchPolicy")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DownstreamProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("OnlyOnSuccess")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UpstreamProjectId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DownstreamProjectId");
+
+                    b.HasIndex("UpstreamProjectId", "DownstreamProjectId")
+                        .IsUnique();
+
+                    b.ToTable("ProjectLinks");
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.ProjectSchedule", b =>
@@ -1668,6 +1773,15 @@ namespace Zenkins.Server.Data.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.OutboxMessage", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.BuildRun", null)
+                        .WithMany()
+                        .HasForeignKey("UpstreamRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Zenkins.Server.Data.Entities.Project", b =>
                 {
                     b.HasOne("Zenkins.Server.Data.Entities.GitCredential", null)
@@ -1680,6 +1794,25 @@ namespace Zenkins.Server.Data.Migrations
                         .HasForeignKey("OrganizationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Zenkins.Server.Data.Entities.ProjectLink", b =>
+                {
+                    b.HasOne("Zenkins.Server.Data.Entities.Project", "DownstreamProject")
+                        .WithMany()
+                        .HasForeignKey("DownstreamProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Zenkins.Server.Data.Entities.Project", "UpstreamProject")
+                        .WithMany()
+                        .HasForeignKey("UpstreamProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DownstreamProject");
+
+                    b.Navigation("UpstreamProject");
                 });
 
             modelBuilder.Entity("Zenkins.Server.Data.Entities.ProjectSchedule", b =>

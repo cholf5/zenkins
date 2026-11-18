@@ -264,7 +264,29 @@ public sealed record RunView(
     /// mask, a <c>run</c> entry what it links to, and a <c>gitRef</c> entry that it is a ref. Empty for a run
     /// triggered before the column existed, where every parameter is a plain string.
     /// </summary>
-    IReadOnlyDictionary<string, RunParameterDetail>? ParameterDetails = null)
+    IReadOnlyDictionary<string, RunParameterDetail>? ParameterDetails = null,
+
+    /// <summary>
+    /// Card F-026: the upstream run that caused this one, when a chain edge triggered it. The id is what the page
+    /// links to; <see cref="TriggeredByRunNumber"/> is the <c>#N</c> it prints. Both null for every other trigger.
+    /// </summary>
+    Guid? TriggeredByRunId = null,
+
+    /// <summary>The upstream run's number, or null when it has none (a row from before F-036, or a deleted run).</summary>
+    int? TriggeredByRunNumber = null,
+
+    /// <summary>
+    /// Card F-026: the downstream triggers this run owed, each with the outcome the dispatcher recorded - queued
+    /// with its run, or skipped/failed with the reason. Empty for a run that declares no downstreams, so the page
+    /// renders the chain section only when there is a chain to show.
+    /// </summary>
+    IReadOnlyList<RunChainLink>? DownstreamTriggers = null,
+
+    /// <summary>
+    /// Card F-026: the chain facts this run's steps read (a downstream run only), from the run's own frozen
+    /// record. Rendered in the chain section as their own list - never among the build parameters.
+    /// </summary>
+    IReadOnlyDictionary<string, string>? UpstreamFacts = null)
 {
     /// <summary>The step names in declaration order - what the run page lists (F-014).</summary>
     public string[] StepNames => Pipeline is { } spec ? [.. spec.Steps.Select(step => step.Name)] : [];
@@ -439,6 +461,23 @@ public static class RunReruns
         return null;
     }
 }
+
+/// <summary>
+/// One downstream trigger an upstream run owed (card F-026), as the run page renders it: which project, what became
+/// of it, and why when nothing ran. <see cref="Outcome"/> is a <see cref="DownstreamOutcomes"/> value, so the page
+/// can render every case instead of printing a free-text status.
+/// </summary>
+/// <param name="DownstreamProjectName">The project the link names.</param>
+/// <param name="DownstreamRunId">The queued run, when the outcome is <c>queued</c>.</param>
+/// <param name="DownstreamRunNumber">Its number, for the <c>#N</c> a person reads.</param>
+/// <param name="Outcome">A <see cref="DownstreamOutcomes"/> value.</param>
+/// <param name="Reason">The dispatcher's one-line explanation, null for a queued run.</param>
+public sealed record RunChainLink(
+    string DownstreamProjectName,
+    Guid? DownstreamRunId,
+    int? DownstreamRunNumber,
+    string Outcome,
+    string? Reason);
 
 /// <summary>One reason a finished run cannot be re-run (code for the URL, sentence for the page).</summary>
 public sealed record RunRerunRefusal(string Code, string Message);
@@ -2032,6 +2071,39 @@ public sealed class RunService(
         return values is { Count: > 0 } ? values : null;
     }
 
+    /// <summary>
+    /// The chain facts a <b>downstream</b> run's steps read (card F-026): they were frozen onto the run at trigger
+    /// time and are merged into the claim map here, beside the parameters - one map crosses the boundary, so the
+    /// worker needs no rule of its own for them.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? MergeUpstreamFacts(
+        BuildRun run,
+        IReadOnlyDictionary<string, string>? parameters)
+    {
+        if (string.IsNullOrWhiteSpace(run.UpstreamFactsJson))
+        {
+            return parameters;
+        }
+
+        var facts = JsonSerializer.Deserialize(
+            run.UpstreamFactsJson,
+            ProjectParameterJsonContext.Default.DictionaryStringString);
+        if (facts is not { Count: > 0 })
+        {
+            return parameters;
+        }
+
+        var values = parameters is null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(parameters, StringComparer.Ordinal);
+        foreach (var (name, value) in facts)
+        {
+            values[name] = value;
+        }
+
+        return values;
+    }
+
     /// <summary>The names of the password-typed parameters in a run's claim (card F-041).</summary>
     private static IReadOnlyList<string>? PasswordParameterNames(BuildRun run) =>
         ParameterNamesOfType(run, ProjectParameterTypes.Password);
@@ -2045,6 +2117,103 @@ public sealed class RunService(
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
         return names.Length == 0 ? null : names;
+    }
+
+    /// <summary>
+    /// Queues one <b>downstream</b> run for a chain edge (card F-026). The caller (the outbox dispatcher) passes its
+    /// own context so the run and the outbox row that owes it settle in one unit of work - a crash between them
+    /// would either queue a downstream twice or lose it.
+    /// <para>
+    /// <b>The same staging path as every other trigger.</b> A downstream run is an ordinary queued run: the F-028
+    /// gate and the F-029 queue cap apply, the numbering is the project's, and the worker contract is unchanged.
+    /// What makes it a chain run is that it records <c>TriggerType = Upstream</c>, the run that caused it, and how
+    /// many links deep it is - the counter the runtime loop protection reads.
+    /// </para>
+    /// </summary>
+    /// <param name="branch">
+    /// The branch the link's policy chose, empty for a project with no repository. The caller has already decided
+    /// it: the policy belongs to the <em>link</em>, not to the trigger path.
+    /// </param>
+    public async Task<RunTriggerResult> QueueUpstreamRunAsync(
+        ZenkinsDbContext context,
+        Guid projectId,
+        Guid upstreamRunId,
+        int hops,
+        string branch,
+        IReadOnlyDictionary<string, string> upstreamFacts,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var activeOrganizationId = tenantContext.OrganizationId;
+        if (activeOrganizationId is null)
+        {
+            // The outbox row selects the tenant; reaching here without one is a wiring fault, not a user error.
+            return RunTriggerResult.Forbidden("No organization is selected for this downstream trigger.");
+        }
+
+        var project = await context.Projects.SingleOrDefaultAsync(
+            candidate => candidate.Id == projectId,
+            cancellationToken);
+        if (project is null)
+        {
+            return RunTriggerResult.NotFound();
+        }
+
+        // The same refusal a schedule gives: a Freestyle project whose steps were never saved cannot run anything.
+        var isFreestyle = project.Kind == ProjectKinds.Freestyle;
+        if (isFreestyle && project.FreestyleSpecJson is null)
+        {
+            return RunTriggerResult.Invalid(new RunFieldError(RunFields.Steps, RunErrorCodes.StepsMissing));
+        }
+
+        // F-021 + F-041: a downstream run is a headless trigger, so its parameters resolve exactly the way a
+        // schedule's and a webhook delivery's do - the definitions' defaults, a run selection's latest successful
+        // run, a password sealed (empty: nobody typed one) and a file's upload (none). One resolver, one answer.
+        var parameters = await ResolveRunParametersAsync(
+            context,
+            project,
+            provided: null,
+            inheritedProtected: null,
+            uploadedFiles: null,
+            cancellationToken);
+        if (parameters.Error is { } parameterError)
+        {
+            return RunTriggerResult.Invalid(parameterError);
+        }
+
+        var isInline = project.PipelineSource == ProjectSources.Inline;
+        var run = BuildQueuedRun(
+            activeOrganizationId.Value,
+            project,
+            isFreestyle || isInline ? string.Empty : branch,
+            requiredTags: string.Empty,
+            timeoutSeconds: null,
+            BuildRunTriggerType.Upstream,
+            triggerUserId: null,
+            gitCommit: null,
+            pipelineSpecJson: isFreestyle ? project.FreestyleSpecJson : null,
+            parametersJson: parameters.ParametersJson,
+            pipelineScriptText: isInline ? project.InlineScript : null,
+            protectedParametersJson: parameters.ProtectedParametersJson,
+            parameterDetailsJson: parameters.ParameterDetailsJson,
+            parameterFilesJson: parameters.ParameterFilesJson);
+
+        run.TriggeredByRunId = upstreamRunId;
+        run.UpstreamHops = hops;
+        run.UpstreamFactsJson = upstreamFacts.Count == 0
+            ? null
+            : JsonSerializer.Serialize(
+                new Dictionary<string, string>(upstreamFacts),
+                ProjectParameterJsonContext.Default.DictionaryStringString);
+
+        return await QueueStagedRunAsync(
+            context,
+            run,
+            BuildRunTriggerType.Upstream,
+            actingUserId: null,
+            idempotency: null,
+            cancellationToken);
     }
 
     /// <summary>
@@ -2541,8 +2710,8 @@ public sealed class RunService(
 
                         // F-041: the plain map plus the password values the page never sees plus a run
                         // selection's two convenience variables. One map crosses the boundary, so the
-                        // worker needs no second rule.
-                        BuildClaimParameters(candidate)),
+                        // worker needs no second rule. F-026: a downstream run's chain facts ride on top.
+                        MergeUpstreamFacts(candidate, BuildClaimParameters(candidate))),
 
                     // F-036 (review M1): a non-positive number is "no number", never `#0`.
                     candidate.Number is > 0 ? candidate.Number : null,
@@ -3265,6 +3434,12 @@ public sealed class RunService(
             run.ExitCode = exitCode;
             run.FailureReason = failureReason;
             run.EndedAt = now;
+
+            // Card F-026: the downstream triggers this completion owes are staged on the SAME context, so they
+            // commit with the terminal status or not at all. A Server that dies here leaves the obligation on disk;
+            // the dispatcher settles it after commit (or on the next start).
+            await DownstreamTriggers.StageAsync(context, run, target, now, cancellationToken);
+
             await context.SaveChangesAsync(cancellationToken);
 
             // F-023: `pipeline-missing` is the worker's proof that this branch's checkout has no
@@ -4003,6 +4178,71 @@ public sealed class RunService(
                 return (requirement.ReadableForm, missing, waiting);
             });
 
+        // Card F-026: the chain, read in two bounded lookups - the upstream runs that caused these ones (for the
+        // "triggered by #N" link) and the downstream obligations these runs owed (for the "triggered ..." list).
+        var upstreamRunIds = runs
+            .Select(run => run.TriggeredByRunId)
+            .Where(id => id is not null)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+        var upstreamNumbers = upstreamRunIds.Length == 0
+            ? new Dictionary<Guid, int>()
+            : await context.BuildRuns
+                .AsNoTracking()
+                .Where(run => upstreamRunIds.Contains(run.Id))
+                .Select(run => new { run.Id, run.Number })
+                .ToDictionaryAsync(run => run.Id, run => run.Number, cancellationToken);
+
+        var chainRunIds = runs.Select(run => run.Id).ToArray();
+        var outboxRows = await context.OutboxMessages
+            .AsNoTracking()
+            .Where(message => chainRunIds.Contains(message.UpstreamRunId))
+            .Select(message => new
+            {
+                message.UpstreamRunId,
+                message.DownstreamRunId,
+                message.Outcome,
+                message.Reason,
+                Link = context.ProjectLinks
+                    .Where(link => link.Id == message.LinkId)
+                    .Select(link => link.DownstreamProject.Name)
+                    .FirstOrDefault(),
+            })
+            .ToListAsync(cancellationToken);
+
+        var downstreamRunNumbers = outboxRows
+            .Select(row => row.DownstreamRunId)
+            .Where(id => id is not null)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+        var downstreamNumbers = downstreamRunNumbers.Length == 0
+            ? new Dictionary<Guid, int>()
+            : await context.BuildRuns
+                .AsNoTracking()
+                .Where(run => downstreamRunNumbers.Contains(run.Id))
+                .Select(run => new { run.Id, run.Number })
+                .ToDictionaryAsync(run => run.Id, run => run.Number, cancellationToken);
+
+        var chainLinks = outboxRows
+            .GroupBy(row => row.UpstreamRunId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<RunChainLink>)
+                [
+                    .. group
+                        .Select(row => new RunChainLink(
+                            row.Link ?? "(deleted project)",
+                            row.DownstreamRunId,
+                            row.DownstreamRunId is { } queued && downstreamNumbers.TryGetValue(queued, out var queuedNumber)
+                                ? queuedNumber
+                                : null,
+                            row.Outcome ?? "pending",
+                            row.Reason))
+                        .OrderBy(link => link.DownstreamProjectName, StringComparer.Ordinal),
+                ]);
+
         var projectIds = runs.Select(run => run.ProjectId).Distinct().ToArray();
         var credentialAssigned = await context.Projects
             .Where(project => projectIds.Contains(project.Id))
@@ -4085,7 +4325,19 @@ public sealed class RunService(
                 // F-041: which parameter is of which new kind, from the run's own record - so the page renders a
                 // masked entry as a mask, a run selection as a link and a ref as a ref, whatever the project's
                 // definitions say today. Empty for a run triggered before the column existed (all plain strings).
-                RunParameterDocuments.ReadDetails(run.ParameterDetailsJson));
+                RunParameterDocuments.ReadDetails(run.ParameterDetailsJson),
+
+                // F-026: the chain this run is part of - who caused it, and what it caused.
+                run.TriggeredByRunId,
+                run.TriggeredByRunId is { } causedBy && upstreamNumbers.TryGetValue(causedBy, out var causedByNumber)
+                    ? causedByNumber
+                    : null,
+                chainLinks.TryGetValue(run.Id, out var links) ? links : null,
+                string.IsNullOrWhiteSpace(run.UpstreamFactsJson)
+                    ? null
+                    : JsonSerializer.Deserialize(
+                        run.UpstreamFactsJson,
+                        ProjectParameterJsonContext.Default.DictionaryStringString));
         }).ToList();
     }
 

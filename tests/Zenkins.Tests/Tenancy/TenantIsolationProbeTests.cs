@@ -431,6 +431,36 @@ public sealed class TenantIsolationProbeTests : IClassFixture<TwoOrgsFixture>
             CancellationToken);
 
     // ---------------------------------------------------------------------------------------------
+    // F-026: the chain edges and the outbox obligation they are delivered through
+
+    [Fact]
+    public Task A_cross_tenant_project_link_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<ProjectLink>(
+            _fixture,
+            () => new ProjectLink
+            {
+                // Only the tenant field is wrong: both projects and the policy are legal.
+                UpstreamProjectId = TwoOrgsFixture.ProjectAId,
+                DownstreamProjectId = TwoOrgsFixture.ProjectBId,
+                OnlyOnSuccess = true,
+                BranchPolicy = ProjectLinkBranchPolicies.DefaultBranch,
+            },
+            CancellationToken);
+
+    [Fact]
+    public Task A_cross_tenant_outbox_write_is_rejected() =>
+        TenantIsolationProbes.AssertCrossTenantWriteRejectedAsync<OutboxMessage>(
+            _fixture,
+            () => new OutboxMessage
+            {
+                // The obligation a terminal run stages: the upstream run, the link and the kind are legal.
+                Kind = OutboxKinds.DownstreamTrigger,
+                UpstreamRunId = TwoOrgsFixture.BuildRunAId,
+                LinkId = Guid.NewGuid(),
+            },
+            CancellationToken);
+
+    // ---------------------------------------------------------------------------------------------
     // F-025: polled branch heads and the change ledger shared by polling and webhooks
 
     [Fact]

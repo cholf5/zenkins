@@ -343,7 +343,7 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1510 fast / 1543 everything.** The fast figure is a counted
+**The current baseline is counted, and it is 1526 fast / 1559 everything.** The fast figure is a counted
 run of the tree that carries Q-023, measured with `--list-tests` on the filter in the table below (which now
 also excludes `Category=Load`); everything is that count plus the five slow categories (23), `Category=Load`
 (1) and Postgres (9), all counted in the same pass. Every per-card note in this file quotes the counts of
@@ -466,7 +466,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1510 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1526 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -476,7 +476,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **everything** (1543 on the tree that carries Q-023, by the arithmetic above) but
+filter runs **everything** (1559 on the tree that carries F-026, by the arithmetic above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only
@@ -933,6 +933,17 @@ history for both providers. Consequences:
   It must print `No changes have been made to the model since the last migration.` With the SQLite
   provider the same command reports pending changes (store type names differ), which is why the
   `PendingModelChangesWarning` is suppressed for SQLite only.
+- **Order matters: add the `DbSet` first, then generate.** `migrations add` diffs the model against
+  `ZenkinsDbContextModelSnapshot.cs`, and a table's name comes from its `DbSet` property. Adding an entity
+  and generating before the `DbSet` exists gives singular table names (`ProjectLink`); adding the
+  `DbSet` afterwards and generating again does **not** produce the tables - it produces a `RenameTable`
+  migration that assumes the singular ones already exist, and every test host then fails with
+  `no such table: ProjectLink`. This was hit once (card F-026) and cost an hour.
+- **A snapshot polluted that way cannot be fixed by deleting the migration files.** The snapshot keeps
+  the wrong model, so the next `migrations add` diffs against it. Restore it from git
+  (`git checkout HEAD -- src/Server/Data/Migrations/ZenkinsDbContextModelSnapshot.cs`), delete the
+  generated `<timestamp>_<Name>.cs` and `.Designer.cs`, and generate again - the result must contain the
+  `CreateTable` calls, and `ModelSnapshotTests` must be green.
 - **Apply to SQLite for development**: either let the Development startup migration do it, or run
   `dotnet ef database update --project src/Server` with the default provider.
 - If you need to undo a migration without a PostgreSQL server, delete the generated `<timestamp>_<Name>.cs`

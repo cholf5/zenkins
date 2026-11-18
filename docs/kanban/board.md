@@ -12,7 +12,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
-| [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | M | | F-036 |
 | [F-030](issues/f-030-stage-grouping.md) | Stage grouping: named stages in the frozen spec, with status and duration | P2 | L | | F-014, F-015, F-020 |
 | [F-031](issues/f-031-post-actions.md) | Post actions: always / on-success / on-failure steps after the last step | P2 | M | | F-030, F-009 |
 | [F-038](issues/f-038-build-retention.md) | Build retention: keep N builds and/or D days, delete the rest for real | P2 | M | | F-016, F-036 |
@@ -106,3 +105,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-040](issues/f-040-credential-types.md) | More credential types: username/password pairs and secret files, bindable per step | P2 | 2026-11-18 |
 | [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | 2026-11-18 |
 | [Q-023](issues/q-023-load-sensitive-timing-facts.md) | The timing facts fail under load and pass alone, so a red full run does not mean a regression | P2 | 2026-11-18 |
+| [F-026](issues/f-026-upstream-downstream-jobs.md) | Upstream and downstream jobs: run a job after another one succeeds | P2 | 2026-11-18 |

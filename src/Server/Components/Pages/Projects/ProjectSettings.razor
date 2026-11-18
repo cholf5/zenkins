@@ -12,6 +12,7 @@
 @inject TimeProvider Clock
 @inject ScheduleOptions ScheduleConfiguration
 @inject GitCredentialService CredentialService
+@inject ProjectLinkService LinkService
 @inject NavigationManager Navigation
 
 @* D-003: the Settings tab - everything that configures the project. The webhook cards moved here
@@ -53,6 +54,14 @@
         {
             <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
                 <p>@notice</p>
+            </div>
+        }
+
+        @if (ChainNotice is { } chainNotice)
+        {
+            <div role="status" id="project-chain-notice"
+                 class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                <p>@chainNotice</p>
             </div>
         }
 
@@ -213,6 +222,171 @@
                         </div>
                     </form>
                 }
+            </BbCardContent>
+        </BbCard>
+
+        @* Card F-026: the chain edges are declared here and nowhere else. Two lists and one form, because an
+           edge always has a direction: each list is titled with what it means for this project ("runs after"
+           / "queues a run of") rather than with the column name, and every row states the two rules the edge
+           carries - whether a failed upstream still triggers, and which branch the downstream builds. *@
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle As="h2">Upstream and downstream</BbCardTitle>
+                <BbCardDescription>
+                    A chain runs projects in order: when an upstream run reaches a terminal state the server
+                    queues the downstream exactly once, in the same transaction, and the run page names the run
+                    that caused it. A link that would close a cycle is refused below with the path that would
+                    close it; a chain that only loops through branch policies stops after
+                    @ProjectLinkService.MaxUpstreamHops hops.
+                </BbCardDescription>
+            </BbCardHeader>
+            <BbCardContent>
+                <div id="project-chain" class="bb:space-y-6">
+                    @if (ChainMessage is { } chainMessage)
+                    {
+                        <div id="project-chain-message" role="alert"
+                             class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                            <p>@chainMessage</p>
+                        </div>
+                    }
+
+                    <div id="project-chain-upstream">
+                        <h3 class="bb:text-sm bb:font-medium">Runs after these projects (upstream)</h3>
+                        <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                            A terminal run of one of these projects queues a run of this one.
+                        </p>
+                        @if (_upstreamLinks.Count == 0)
+                        {
+                            <p id="project-chain-upstream-empty" class="bb:mt-2 bb:text-sm bb:text-muted-foreground">
+                                None: nothing queues a run of this project.
+                            </p>
+                        }
+                        else
+                        {
+                            <ul class="bb:mt-2 bb:space-y-2">
+                                @foreach (var link in _upstreamLinks)
+                                {
+                                    <li class="bb:rounded-md bb:border bb:border-input bb:p-3"
+                                        data-chain-upstream-id="@link.Id"
+                                        data-chain-project-id="@link.UpstreamProjectId">
+                                        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-2">
+                                            <div>
+                                                <p class="bb:font-medium">@link.UpstreamProjectName</p>
+                                                <p class="bb:text-xs bb:text-muted-foreground">
+                                                    @OnlyOnSuccessText(link.OnlyOnSuccess) · @BranchPolicyText(link)
+                                                </p>
+                                            </div>
+                                            <form method="post"
+                                                  action="@($"/projects/{_project.Id}/links/{link.Id}/delete")"
+                                                  data-zenkins-antiforgery>
+                                                <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Remove</BbButton>
+                                            </form>
+                                        </div>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+
+                    <div id="project-chain-downstream">
+                        <h3 class="bb:text-sm bb:font-medium">Queues a run of these projects (downstream)</h3>
+                        <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                            A terminal run of this project queues a run of each of these.
+                        </p>
+                        @if (_downstreamLinks.Count == 0)
+                        {
+                            <p id="project-chain-downstream-empty" class="bb:mt-2 bb:text-sm bb:text-muted-foreground">
+                                None: this project's runs trigger nothing.
+                            </p>
+                        }
+                        else
+                        {
+                            <ul class="bb:mt-2 bb:space-y-2">
+                                @foreach (var link in _downstreamLinks)
+                                {
+                                    <li class="bb:rounded-md bb:border bb:border-input bb:p-3"
+                                        data-chain-downstream-id="@link.Id"
+                                        data-chain-project-id="@link.DownstreamProjectId">
+                                        <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-2">
+                                            <div>
+                                                <p class="bb:font-medium">@link.DownstreamProjectName</p>
+                                                <p class="bb:text-xs bb:text-muted-foreground">
+                                                    @OnlyOnSuccessText(link.OnlyOnSuccess) · @BranchPolicyText(link)
+                                                </p>
+                                            </div>
+                                            <form method="post"
+                                                  action="@($"/projects/{_project.Id}/links/{link.Id}/delete")"
+                                                  data-zenkins-antiforgery>
+                                                <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Remove</BbButton>
+                                            </form>
+                                        </div>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+
+                    @if (_chainTargets.Count == 0)
+                    {
+                        <p id="project-chain-no-targets" class="bb:text-sm bb:text-muted-foreground">
+                            This is the organization's only project, so there is nothing to link yet.
+                        </p>
+                    }
+                    else
+                    {
+                        <form id="project-chain-form"
+                              method="post"
+                              action="@($"/projects/{_project.Id}/links")"
+                              data-zenkins-antiforgery>
+                            <div class="bb:grid bb:grid-cols-1 bb:gap-4 bb:sm:grid-cols-2">
+                                <div>
+                                    <label for="chain-target" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Project</label>
+                                    <select id="chain-target"
+                                            name="TargetProjectId"
+                                            required
+                                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                                        @foreach (var target in _chainTargets)
+                                        {
+                                            <option value="@target.Id">@target.Name</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="chain-direction" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Direction</label>
+                                    <select id="chain-direction"
+                                            name="Direction"
+                                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                                        <option value="downstream">Its run queues a run of that project (downstream)</option>
+                                        <option value="upstream">That project's run queues a run of this one (upstream)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="chain-policy" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branch</label>
+                                    <select id="chain-policy"
+                                            name="BranchPolicy"
+                                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                                        <option value="@ProjectLinkBranchPolicies.SameBranch">Build the branch the upstream built</option>
+                                        <option value="@ProjectLinkBranchPolicies.DefaultBranch">Build its own default branch</option>
+                                    </select>
+                                    <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+                                        A branch the downstream cannot build is recorded as a skip on the upstream
+                                        run, never as a failure.
+                                    </p>
+                                </div>
+                                <div class="bb:flex bb:items-end">
+                                    <label for="chain-only-on-success" class="bb:flex bb:items-center bb:gap-2 bb:text-sm">
+                                        <input id="chain-only-on-success" type="checkbox" name="OnlyOnSuccess" value="true" checked />
+                                        <input type="hidden" name="OnlyOnSuccess" value="false" />
+                                        <span>Only when the upstream succeeds</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="bb:mt-4">
+                                <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Add link</BbButton>
+                            </div>
+                        </form>
+                    }
+                </div>
             </BbCardContent>
         </BbCard>
 
@@ -1119,6 +1293,18 @@
     private IReadOnlyList<WebhookView> _webhooks = [];
     private IReadOnlyList<GitCredentialListItem> _credentials = [];
 
+    /// <summary>Card F-026: every edge that names this project, in either direction.</summary>
+    private IReadOnlyList<ProjectLinkView> _links = [];
+
+    /// <summary>Card F-026: the edges where another project's run queues a run of this one.</summary>
+    private IReadOnlyList<ProjectLinkView> _upstreamLinks = [];
+
+    /// <summary>Card F-026: the edges where this project's run queues a run of another one.</summary>
+    private IReadOnlyList<ProjectLinkView> _downstreamLinks = [];
+
+    /// <summary>Card F-026: the projects this one may be linked to (every other project of the organization).</summary>
+    private IReadOnlyList<ProjectView> _chainTargets = [];
+
     /// <summary>Card F-018: the project's current assignment (which credential, by whom, when), or null.</summary>
     private GitCredentialAssignmentView? _assignment;
 
@@ -1157,11 +1343,41 @@
 
     private string? SubmittedTimeZone => PreviewZone;
 
+    /// <summary>Card F-026: the chain form's outcome code (<c>saved</c>, <c>deleted</c>, a refusal).</summary>
+    [SupplyParameterFromQuery(Name = "links")]
+    private string? LinkCode { get; set; }
+
+    /// <summary>Card F-026: the service's sentence for a refused edge - the closing path lives here.</summary>
+    [SupplyParameterFromQuery(Name = "reason")]
+    private string? LinkReason { get; set; }
+
     [SupplyParameterFromQuery(Name = "credentialName")]
     private string? SubmittedCredentialName { get; set; }
 
     [SupplyParameterFromQuery(Name = "credentialKind")]
     private string? SubmittedCredentialKind { get; set; }
+
+    /// <summary>
+    /// Card F-026: what the chain form says. A refusal renders the service's own sentence (which carries the
+    /// path a cycle would close, or that the pair is already linked), because "not saved" alone leaves the
+    /// reader with nothing to change.
+    /// </summary>
+    private string? ChainMessage => LinkCode switch
+    {
+        null => null,
+        "saved" => null,
+        "deleted" => null,
+        "target-required" => "Choose the project to link.",
+        "refused" => string.IsNullOrWhiteSpace(LinkReason) ? "The link was not accepted." : LinkReason,
+        _ => "The link was not accepted.",
+    };
+
+    private string? ChainNotice => LinkCode switch
+    {
+        "saved" => "The link was saved. Its edges are listed below.",
+        "deleted" => "The link was removed; the runs it already queued stay.",
+        _ => null,
+    };
 
     private string? Notice => NoticeCode switch
     {
@@ -1256,6 +1472,14 @@
             return;
         }
 
+        // F-026: the chain card. The links are this project's edges in both directions; the targets are
+        // every other project of the organization, which is what the add form offers. Both reads go
+        // through the tenant filter, so another organization's projects are simply not there.
+        _links = await LinkService.GetForProjectAsync(ProjectId);
+        _upstreamLinks = [.. _links.Where(link => link.DownstreamProjectId == ProjectId)];
+        _downstreamLinks = [.. _links.Where(link => link.UpstreamProjectId == ProjectId)];
+        _chainTargets = [.. (await ProjectsService.GetProjectsAsync()).Where(project => project.Id != ProjectId)];
+
         // F-017: the project's webhooks (any member of the organization may manage them). The
         // service re-checks membership; a failure here just leaves the list empty.
         if (_session is { HasOrganization: true } session)
@@ -1332,6 +1556,17 @@
         ScheduleOutcomes.Missed => BadgeVariant.Destructive,
         _ => BadgeVariant.Secondary,
     };
+
+    /// <summary>Card F-026: the flag in words - what a reader needs, not the column name.</summary>
+    private static string OnlyOnSuccessText(bool onlyOnSuccess) => onlyOnSuccess
+        ? "only on success"
+        : "on any terminal state";
+
+    /// <summary>Card F-026: which branch the downstream builds, in the policy's own words.</summary>
+    private static string BranchPolicyText(ProjectLinkView link) =>
+        link.BranchPolicy == ProjectLinkBranchPolicies.DefaultBranch
+            ? $"builds {link.DownstreamProjectName}'s default branch"
+            : $"builds the branch {link.UpstreamProjectName} built";
 
     /// <summary>
     /// A real 404 for a foreign or missing id. The status-code-pages middleware must not re-execute

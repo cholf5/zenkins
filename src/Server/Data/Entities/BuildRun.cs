@@ -68,6 +68,13 @@ public static class BuildRunTriggerType
     public const string Replay = "Replay";
 
     /// <summary>
+    /// Card F-026's upstream link: another project's run finished and this run is its downstream. Nobody was signed
+    /// in, so it carries no <see cref="BuildRun.TriggerUserId"/>; <see cref="BuildRun.TriggeredByRunId"/> names the
+    /// run that caused it, which is what the page's "triggered by #N" link is built from.
+    /// </summary>
+    public const string Upstream = "Upstream";
+
+    /// <summary>
     /// Card F-024's scheduled trigger: the cron clock queued the run with the definitions' defaults. Like a
     /// webhook delivery nobody was signed in, so it carries no <see cref="BuildRun.TriggerUserId"/>; in every
     /// other respect it is the run a member's click queues - the same F-028/F-029 gate, the same queue, the
@@ -238,6 +245,34 @@ public sealed class BuildRun : ITenantOwned
     /// layer. Null when the project declares no parameters.
     /// </summary>
     public string? ParametersJson { get; set; }
+
+    /// <summary>
+    /// The upstream run that caused this one (card F-026), or <see langword="null"/> for every other trigger kind.
+    /// It is the "triggered by #N" link and the anchor of the chain a run page renders. No foreign key on purpose:
+    /// a deleted upstream run must not delete the downstream run that already happened - the chain then shows a
+    /// run that no longer exists rather than losing the fact that something triggered this one.
+    /// </summary>
+    public Guid? TriggeredByRunId { get; set; }
+
+    /// <summary>
+    /// The chain facts a downstream run's steps read (card F-026), as a name → value object:
+    /// <c>UPSTREAM_PROJECT</c>, <c>UPSTREAM_RUN_ID</c>, <c>UPSTREAM_STATUS</c>, <c>UPSTREAM_BRANCH</c> and
+    /// <c>UPSTREAM_COMMIT</c>.
+    /// <para>
+    /// <b>A column of its own, not an existing one.</b> They are neither the organization environment layer
+    /// (which the run page labels as such) nor build parameters (which the page lists as parameters): putting them
+    /// in either would make the page describe them wrongly. Frozen at trigger time like every other run snapshot,
+    /// so a later edit to the upstream project's name cannot rewrite what this run's steps were told.
+    /// </para>
+    /// </summary>
+    public string? UpstreamFactsJson { get; set; }
+
+    /// <summary>
+    /// How many upstream links deep this run is (card F-026): 0 for a run nobody triggered, upstream's hops + 1 for
+    /// a downstream run. The runtime half of the loop protection - a chain that only loops through branch policies
+    /// is not a graph cycle, so the graph check cannot see it and this counter is what stops it.
+    /// </summary>
+    public int UpstreamHops { get; set; }
 
     /// <summary>
     /// The <b>sensitive</b> parameter values of this run (card F-041), as Data Protection ciphertext of a

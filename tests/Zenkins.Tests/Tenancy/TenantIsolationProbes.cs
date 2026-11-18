@@ -60,6 +60,12 @@ public static class TenantIsolationProbes
             // entities do not need: the snapshot reader the trigger uses returns only the active tenant's
             // layer, and the page/mutation probes live in TenantIsolationHttpSurfaceProbeTests.
             typeof(OrganizationEnvironmentVariable),
+
+            // F-026: the chain edges and the outbox obligation behind them. The HTTP half is probed by
+            // TenantIsolationLinkProbeTests (a foreign project id in the route, in the body or in the link id is
+            // one bare 404 and nothing is written, and the settings page renders no foreign edge); the rows
+            // themselves get the generic write probe in TenantIsolationProbeTests, like every other entity here.
+            typeof(ProjectLink), typeof(OutboxMessage),
         ];
 
     /// <summary>
