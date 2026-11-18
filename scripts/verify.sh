@@ -50,7 +50,7 @@ run_suite() {
 }
 
 run_suite "build (Release)" dotnet build -c Release
-run_suite "Fast suite"      dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres"
+run_suite "Fast suite"      dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load"
 run_suite "Milestone"       dotnet test -c Release --filter "Category=Milestone"
 run_suite "Recovery"        dotnet test -c Release --filter "Category=Recovery"
 run_suite "PublishSmoke"    dotnet test -c Release --filter "Category=PublishSmoke"

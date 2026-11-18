@@ -343,14 +343,30 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1503 fast / 1535 all seven.** The fast figure was measured
-with `--list-tests` on the documented filter rather than added up from per-card attribute counts; the
-all-seven figure adds the other harnesses counted in the same pass - 23 across the five slow categories
-and 9 in Postgres - so 1503 + 32 = 1535. Every per-card note in this file quotes the
-counts of *its own* tree and they are history, not a target: F-034's "1341 -> 1366" and this file's own
-earlier "1341 / 1370" re-baseline were both accurate when written and are both behind HEAD now. When a
-card changes the count, re-baseline here in the same breath rather than leaving the next reader to
-notice - that is what went wrong twice.
+**The current baseline is counted, and it is 1510 fast / 1543 everything.** The fast figure is a counted
+run of the tree that carries Q-023, measured with `--list-tests` on the filter in the table below (which now
+also excludes `Category=Load`); everything is that count plus the five slow categories (23), `Category=Load`
+(1) and Postgres (9), all counted in the same pass. Every per-card note in this file quotes the counts of
+*its own* tree and they are history, not a target: F-034's "1341 -> 1366" and this file's own earlier
+"1341 / 1370" re-baseline were both accurate when written and are both behind HEAD now. When a card changes
+the count, re-baseline here in the same breath rather than leaving the next reader to notice - that is what
+went wrong twice, and what the count-drift cards kept rediscovering.
+
+### Reading a run: `scripts/suite-duration.sh`
+
+One run is enough to tell where the time went - that is what the script is for, and it replaces eyeballing
+three logs side by side:
+
+```bash
+dotnet test -c Release --no-build --output detailed > /tmp/fast.log
+scripts/suite-duration.sh /tmp/fast.log 10
+```
+
+It prints the summary block, the slowest areas with their share of **summed test time** (the label says so,
+because collections run in parallel and a per-test sum can exceed wall clock), the failed tests, and the
+slowest single tests. Per-test timings only exist under `--output detailed` - this runner is
+Microsoft.Testing.Platform, so `--logger "console;verbosity=detailed"` is rejected with exit 5 - and if the
+log has none the script says so and exits non-zero instead of printing zeros.
 
 ### Six suites: the fast one, and five acceptance harnesses
 
@@ -439,7 +455,7 @@ deliberately no second PowerShell transcript of the gate to drift against.
 
 ```bash
 dotnet build -c Release                                                                                                        # the harnesses run the built binaries
-dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres"   # the fast suite
+dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load"   # the fast suite
 dotnet test -c Release --filter "Category=Milestone"                                                                           # the milestone acceptance harness
 dotnet test -c Release --filter "Category=Recovery"                                                                            # the recovery acceptance harness
 dotnet test -c Release --filter "Category=PublishSmoke"                                                                        # the publish-smoke acceptance harness
@@ -450,7 +466,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 | Suite | Filter | Needs | Typical duration |
 |---|---|---|---|
-| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1503 tests, snapshot of the revision) |
+| Fast | `Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load` | `dotnet build -c Release` | ~6 min on the reference machine, ~10-11 min on a slow one (1510 tests, snapshot of the revision) |
 | Milestone | `Category=Milestone` | `dotnet build -c Release`, `git` on `PATH`, loopback only | ~35 s (12 tests) |
 | Recovery | `Category=Recovery` | the same as Milestone: `dotnet build -c Release`, `git` on `PATH`, loopback only, no network | ~30 s (4 tests) |
 | PublishSmoke | `Category=PublishSmoke` | the same as Milestone, plus the SDK (it publishes three self-contained artifacts for the local RID) | ~40 s warm (2 tests); a cold NuGet cache pays the runtime-pack downloads first |
@@ -460,7 +476,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
 own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
-filter runs **all seven** (1535 on the tree that carries F-041, by the arithmetic below) but
+filter runs **everything** (1543 on the tree that carries Q-023, by the arithmetic above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
 run is the flakiest way to execute the suite, so run the suites by their filters. The harnesses only

@@ -241,6 +241,13 @@ public sealed class PipelineRunner
     private readonly Func<string?, string?, CancellationToken, Task<bool>> _definitionReporter;
     private readonly IReadOnlyDictionary<string, string?> _inheritedEnvironment;
 
+    /// <summary>
+    /// Card Q-023: the clock the deadline comparison reads. The default is the wall clock - production is
+    /// unchanged - and a fact passes a manual one so "which limit is earlier" stops depending on how late
+    /// this process got scheduled.
+    /// </summary>
+    private readonly TimeProvider _time;
+
     /// <param name="options">The run's knobs (work directory, repository, branch, deadline, logging).</param>
     /// <param name="definitions">The definition phase (F-011's runtime plus the Lua prelude).</param>
     /// <param name="credentialProvider">Fetches the project's credential material for this run, or null.</param>
@@ -259,8 +266,10 @@ public sealed class PipelineRunner
         PipelineRunOptions options,
         PipelineDefinitionRunner definitions,
         Func<CancellationToken, Task<GitCredentialMaterial?>> credentialProvider,
-        Func<string?, string?, CancellationToken, Task<bool>> definitionReporter)
+        Func<string?, string?, CancellationToken, Task<bool>> definitionReporter,
+        TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(credentialProvider);
@@ -673,10 +682,8 @@ public sealed class PipelineRunner
             // timer is installed at all and F-009's deadline (the run's cancellation token) enforces its
             // own - the step then dies as `timed-out`, exactly as it did before this card.
             var ownTimeout = step.OwnTimeout;
-            var runRemaining = _options.Deadline - DateTimeOffset.UtcNow;
-            var ownTimeoutGoverns = ownTimeout is { } own
-                && runRemaining > TimeSpan.Zero
-                && own <= runRemaining;
+            var runRemaining = _options.Deadline - _time.GetUtcNow();
+            var ownTimeoutGoverns = RunDeadlineComparison.OwnGoverns(ownTimeout, runRemaining);
             if (ownTimeout is { } declared)
             {
                 Log(ownTimeoutGoverns
@@ -1229,4 +1236,21 @@ public sealed class PipelineRunner
     /// merely defence in depth - it is the only thing that keeps such a line out of the log.
     /// </summary>
     private void Log(string line) => _options.Log?.Invoke(_options.Redactor.Redact(line));
+}
+
+/// <summary>
+/// Card Q-023: which of the two limits is the earlier one - a pure decision, so the question can be asked
+/// without a run in flight (a fact pins it under CPU pressure, where comparing against the wall clock used to
+/// flip the answer).
+/// </summary>
+public static class RunDeadlineComparison
+{
+    /// <summary>
+    /// Whether the step's own limit fires before the run's remaining deadline. The step's limit governs only
+    /// when there is one, the run still has time left, and that limit is not later than the time left.
+    /// </summary>
+    public static bool OwnGoverns(TimeSpan? ownTimeout, TimeSpan runRemaining) =>
+        ownTimeout is { } own
+        && runRemaining > TimeSpan.Zero
+        && own <= runRemaining;
 }

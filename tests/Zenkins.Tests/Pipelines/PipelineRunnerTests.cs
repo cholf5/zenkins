@@ -808,16 +808,26 @@ public sealed class PipelineRunnerTests
 
         // (a) The run's deadline is earlier: a 3600s step limit cannot fire first, so no step timer is
         // installed, F-009's cancel stops the step, and the record says the run's deadline did it.
+        // Card Q-023: the clock is frozen at the deadline's origin, so "the run has 2s left" is a fact about
+        // the fixture rather than about how quickly this process was scheduled. Load can no longer flip which
+        // limit the comparison picks.
+        var deadlineClock = new ManualClock(DateTimeOffset.UtcNow);
+
+        // Card Q-023: the step's window is armed when the step is actually running, not when the harness is
+        // constructed. A saturated machine used to be able to spend the whole 2s before the first step, and
+        // the cancel then arrived as "the run was canceled" instead of "the run's deadline stopped the step".
+        using var cancellation = new CancellationTokenSource();
         using (var repository = PipelineRepository.Create(
             PipelineTestData.Pipeline(
                 "deadline-governs",
                 PipelineTestData.StepWith("Long", timeoutSeconds: 3600, retry: null, "stream", "30000"))))
         using (var run = new PipelineRunHarness(repository)
                {
-                   Deadline = DateTimeOffset.UtcNow.AddSeconds(2),
+                   Deadline = deadlineClock.Now.AddSeconds(2),
+                   Clock = deadlineClock,
+                   OnStepRunning = _ => cancellation.CancelAfter(TimeSpan.FromSeconds(2)),
                    CancellationFailureReason = () => StepCancellationReason.For(RunCancelReasons.Timeout),
                })
-        using (var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
         {
             var outcome = await run.ExecuteAsync(cancellation.Token);
 
@@ -834,11 +844,16 @@ public sealed class PipelineRunnerTests
         }
 
         // (b) The step's limit is earlier: it fires, and the log says so - the reverse sentence.
+        var stepClock = new ManualClock(DateTimeOffset.UtcNow);
         using (var repository = PipelineRepository.Create(
             PipelineTestData.Pipeline(
                 "step-governs",
                 PipelineTestData.StepWith("Short", timeoutSeconds: 2, retry: null, "stream", "30000"))))
-        using (var run = new PipelineRunHarness(repository) { Deadline = DateTimeOffset.UtcNow.AddMinutes(2) })
+        using (var run = new PipelineRunHarness(repository)
+               {
+                   Deadline = stepClock.Now.AddMinutes(2),
+                   Clock = stepClock,
+               })
         {
             var outcome = await run.ExecuteAsync(CancellationToken);
 
@@ -1021,6 +1036,20 @@ public sealed class PipelineRunnerTests
 
         public DateTimeOffset Deadline { get; init; } = DateTimeOffset.UtcNow.AddMinutes(2);
 
+        /// <summary>
+        /// Card Q-023: the clock the runner reads when it decides which limit is earlier. Real by default; a
+        /// fact that must not depend on scheduling passes <see cref="ManualClock"/>.
+        /// </summary>
+        public TimeProvider Clock { get; init; } = TimeProvider.System;
+
+        /// <summary>
+        /// Card Q-023: called when a step reports that it is <b>running</b>. A fact that cancels "two seconds
+        /// into the step" arms its timer here instead of at construction, so a slow machine cannot deliver the
+        /// cancel before the step ever started (which used to turn "the step timed out" into "the run was
+        /// canceled").
+        /// </summary>
+        public Action<int>? OnStepRunning { get; init; }
+
         public IReadOnlyDictionary<string, string?> GitEnvironment { get; init; } =
             new Dictionary<string, string?>();
 
@@ -1140,8 +1169,12 @@ public sealed class PipelineRunnerTests
                     // world happens here, and the report records the state it was in.
                     BeforeFirstStep?.Invoke();
                     return Task.FromResult(!RejectDefinitionReport);
-                });
+                },
+                // Card Q-023: the clock the deadline comparison reads. Real unless a fact passes a manual
+                // one, so production and every other test are unchanged.
+                Clock);
 
+            StepSink.OnRunning = index => OnStepRunning?.Invoke(index);
             return await runner.RunAsync(cancellationToken);
         }
 
@@ -1165,6 +1198,9 @@ public sealed class PipelineRunnerTests
 
         public List<PipelineStepReport> Reports { get; } = [];
 
+        /// <summary>Invoked when a report says the step is running (card Q-023's arming point).</summary>
+        public Action<int>? OnRunning { get; set; }
+
         public Task<PipelineStepReceipt> ReportAsync(
             PipelineStepReport report,
             CancellationToken cancellationToken)
@@ -1176,6 +1212,11 @@ public sealed class PipelineRunnerTests
             }
 
             Reports.Add(report);
+            if (string.Equals(report.Status, PipelineStepStatus.Running, StringComparison.Ordinal))
+            {
+                OnRunning?.Invoke(report.Index);
+            }
+
             return Task.FromResult(PipelineStepReceipt.Recorded(id));
         }
     }
@@ -1193,4 +1234,16 @@ public sealed class PipelineRunnerTests
         /// <summary>Whether any step had already written its marker when the report was sent.</summary>
         public bool MarkerExistedAtReport => MarkerExisted;
     }
+}
+
+/// <summary>
+/// Card Q-023: a clock that does not move. A fact that asks "which limit is earlier" passes this one when the
+/// answer must not depend on scheduling - the comparison reads a known instant instead of however much wall
+/// clock the machine spent before reaching it.
+/// </summary>
+internal sealed class ManualClock(DateTimeOffset now) : TimeProvider
+{
+    public DateTimeOffset Now { get; } = now;
+
+    public override DateTimeOffset GetUtcNow() => Now;
 }

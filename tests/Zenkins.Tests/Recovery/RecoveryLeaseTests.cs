@@ -94,7 +94,10 @@ public sealed class RecoveryLeaseTests
             var run = await host.ReadRunAsync(heldRunId);
             Assert.Equal("Lost", run.Status);
             Assert.Single(await host.ReadProjectRunsAsync(heldProject));
-        }, window: null, cancellationToken);
+        },
+        window: null,
+        cancellationToken,
+        description: "the held run stays Running on its worker, and the other worker never receives it");
 
         // ----- Control: work exists again, and B really can claim it. -----
         var controlRunId = await host.TriggerRunAsync(controlProject);

@@ -379,13 +379,17 @@ internal class RecoveryHost : MilestoneHost
         TimeSpan? window,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + (window ?? GraceObservation);
-        while (DateTime.UtcNow < deadline)
-        {
-            var run = await ReadRunAsync(runId);
-            Assert.Equal(expected, run.Status);
-            await Task.Delay(100, cancellationToken);
-        }
+        // Card Q-023: the same TimingAssert the other windows use - every sample must hold, and a failure
+        // names the property, the elapsed time and the budget.
+        await TimingAssert.AssertHoldsAsync(
+            async token =>
+            {
+                var run = await ReadRunAsync(runId);
+                Assert.Equal(expected, run.Status);
+            },
+            window ?? GraceObservation,
+            $"run {runId} stays {expected}",
+            cancellationToken);
     }
 
     /// <summary>
@@ -399,13 +403,15 @@ internal class RecoveryHost : MilestoneHost
         CancellationToken cancellationToken,
         params string[] allowedStates)
     {
-        var deadline = DateTime.UtcNow + SettleWindow;
-        while (DateTime.UtcNow < deadline)
-        {
-            var run = await ReadRunAsync(runId);
-            Assert.Contains(run.Status, allowedStates);
-            await Task.Delay(200, cancellationToken);
-        }
+        await TimingAssert.AssertHoldsAsync(
+            async token =>
+            {
+                var run = await ReadRunAsync(runId);
+                Assert.Contains(run.Status, allowedStates);
+            },
+            SettleWindow,
+            $"run {runId} stays in {string.Join(" or ", allowedStates)}",
+            cancellationToken);
     }
 
     /// <summary>
@@ -415,14 +421,22 @@ internal class RecoveryHost : MilestoneHost
     public async Task AssertHoldsAsync(
         Func<Task> assertion,
         TimeSpan? window,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(assertion))] string description = "")
     {
-        var deadline = DateTime.UtcNow + (window ?? SettleWindow);
-        while (DateTime.UtcNow < deadline)
-        {
-            await assertion();
-            await Task.Delay(200, cancellationToken);
-        }
+        // Card Q-023: one shared implementation (TimingAssert) - "holds" still means "every sample passes",
+        // and a failure names the property, the elapsed time and the budget instead of a bare exception.
+        await TimingAssert.AssertHoldsAsync(
+            _ =>
+            {
+                assertion();
+                return Task.CompletedTask;
+            },
+            window ?? SettleWindow,
+            // AC-2: the failure says WHICH property. The call site's own lambda is the description, so ten
+            // call sites get ten different sentences without ten edits.
+            TimingAssert.NormalizeDescription(description),
+            cancellationToken);
     }
 
     /// <summary>Waits until the worker row for <paramref name="name"/> is in <paramref name="status"/>.</summary>
@@ -431,19 +445,19 @@ internal class RecoveryHost : MilestoneHost
         string status,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        while (DateTime.UtcNow < deadline)
-        {
-            var row = await TryReadWorkerRowAsync(name);
-            if (row is { } found && string.Equals(found.Status, status, StringComparison.Ordinal))
+        // Card Q-023: this is what the wait shape is for - a state that is expected to arrive, not a property
+        // that must persist. It returns the moment the row reads that status.
+        await TimingAssert.WaitUntilAsync(
+            async token =>
             {
-                return;
-            }
-
-            await Task.Delay(100, cancellationToken);
-        }
-
-        Assert.Fail($"worker '{name}' never reached status '{status}'.{Environment.NewLine}{FormatDiagnostics()}");
+                var row = await TryReadWorkerRowAsync(name);
+                Assert.True(
+                    row is { } found && string.Equals(found.Status, status, StringComparison.Ordinal),
+                    $"worker '{name}' is {row?.Status ?? "missing"}, not {status}");
+            },
+            TimeSpan.FromSeconds(20),
+            $"worker '{name}' reaches {status}",
+            cancellationToken);
     }
 
     // -------------------------------------------------------------------------------------------

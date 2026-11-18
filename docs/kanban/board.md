@@ -19,7 +19,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-039](issues/f-039-completion-notifications.md) | Completion notifications: signed outbound webhooks on failure, success and recovery | P2 | M | | F-026, F-036, F-037 |
 | [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | M | | F-020, F-022 |
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | M | | F-023 |
-| [Q-023](issues/q-023-load-sensitive-timing-facts.md) | The timing facts fail under load and pass alone, so a red full run does not mean a regression | P2 | M | | none |
 
 ## Done
 
@@ -106,3 +105,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-033](issues/f-033-step-worker-requirements.md) | Per-step worker requirements and label expressions (the runs_on the PRD promises) | P2 | 2026-11-18 |
 | [F-040](issues/f-040-credential-types.md) | More credential types: username/password pairs and secret files, bindable per step | P2 | 2026-11-18 |
 | [F-041](issues/f-041-parameter-types.md) | More parameter types: password, file, run and git ref | P2 | 2026-11-18 |
+| [Q-023](issues/q-023-load-sensitive-timing-facts.md) | The timing facts fail under load and pass alone, so a red full run does not mean a regression | P2 | 2026-11-18 |
