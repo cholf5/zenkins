@@ -271,6 +271,19 @@ loop (`dotnet run` from a clone).
 > switch) onto `/setup`, because `/account/login` is no longer an anonymous page on an empty
 > deployment. No new category and no new exclusion - the sextuple filter is unchanged.
 
+> B-010 (the project form's kind switch) added **10** facts on 2026-11-19, all in the fast suite: 4 in
+> `Category=ProjectUi` (`ProjectFormFieldGroupsTests` renders the real create form in its three states
+> and asserts every field group is present with `hidden`/`disabled` saying which applies, plus a
+> Freestyle edit page that carries no repository or inline field at all) and a **6-row** `Theory` over
+> the four form scripts, where every `.addEventListener(` must be a `document.addEventListener(` - the
+> pre-fix files bind one or two handlers to forms and go red. No new category and no new exclusion. It
+> also repaired two test-harness defects that F-044 left behind (its Owner seed read the antiforgery
+> token off the wizard's form-less welcome page, and the wizard facts compared `PathAndQuery` on a
+> `Location` that TestServer may answer relatively); F-044's owner should confirm both. **The full gate
+> was not run for this card** - the operator asked for code-only, so the figures in the paragraph above
+> stand and this one claims only what `ProjectFormFieldGroupsTests` (10) and the repaired
+> `SetupWizardTests` row did.
+
 ## 1. Prerequisites
 
 **.NET 10 SDK — that is the only prerequisite.**

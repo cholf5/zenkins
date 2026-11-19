@@ -8,6 +8,20 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **The project form's kind switch works wherever the reader came from (B-010).** Choosing
+  **Freestyle** on the create form used to leave the repository fields (and their `required`) on
+  screen, so the browser refused the submit with "fill out this field"; the definition-source choice
+  stayed visible for a kind that has none, and choosing **Pipeline script** revealed no script box at
+  all until a refused create echoed the choice back. The shape of the form was decided in two places -
+  the Server decided which fields *existed* (always the repository half on a fresh page) and one
+  script decided which were *visible* - and that script bound its handlers to radios it found when the
+  document loaded, which an in-app navigation replaces without re-running it. Now every field group is
+  rendered in every state and `hidden` + `disabled` say whether it applies (so a page whose script
+  never ran is already right), the script keeps that state on a `change` delegated to the document and
+  re-applies it on `enhancedload`, and the Freestyle steps editor, the parameters editor and the
+  snippet buttons - which had the same load-time binding - listen on the document too. A kind-locked
+  edit form still shows nothing for a half the project does not own.
+
 - **First-run setup wizard (F-044).** An empty deployment now answers its first browser with a
   three-step wizard instead of a registration form. The welcome page shows this deployment's facts -
   version, database target, key-ring and artifact directories - and a real schema check: a database

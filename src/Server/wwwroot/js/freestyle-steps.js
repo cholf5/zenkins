@@ -142,61 +142,57 @@
         renumber(list);
     }
 
-    function init() {
-        var forms = document.querySelectorAll(FORM_SELECTOR);
-        for (var f = 0; f < forms.length; f++) {
-            (function (form) {
-                form.addEventListener("submit", function () {
-                    serialize(form);
-                });
-
-                form.addEventListener("click", function (event) {
-                    var button = event.target.closest ? event.target.closest("[data-freestyle-action]") : null;
-                    if (!button) {
-                        return;
-                    }
-
-                    var section = button.closest("[data-freestyle-list-section]");
-                    var row = button.closest(ROW_SELECTOR);
-                    var list = section ? section.querySelector(LIST_SELECTOR) : null;
-                    switch (button.getAttribute("data-freestyle-action")) {
-                        case "add":
-                            if (section) {
-                                addStep(section);
-                            }
-                            break;
-                        case "insert-snippet":
-                            if (form && section) {
-                                insertSnippetStep(form, section);
-                            }
-                            break;
-                        case "remove":
-                            if (row && list) {
-                                row.parentNode.removeChild(row);
-                                renumber(list);
-                            }
-                            break;
-                        case "move-up":
-                            if (row && list) {
-                                moveStep(list, row, -1);
-                            }
-                            break;
-                        case "move-down":
-                            if (row && list) {
-                                moveStep(list, row, 1);
-                            }
-                            break;
-                    }
-
-                    event.preventDefault();
-                });
-            })(forms[f]);
+    // B-010: both handlers live on `document`. This file is a plain <script> in App.razor, loaded once
+    // per document, so a handler bound to a form at load time is bound to a node that a later Blazor
+    // navigation or re-render has already replaced - the editor would look alive and save nothing.
+    // Capture phase for the submit, before js/antiforgery.js fills its token and before anything the
+    // page itself might read: the hidden fields must be current whatever the order.
+    document.addEventListener("submit", function (event) {
+        var form = event.target && event.target.closest ? event.target.closest(FORM_SELECTOR) : null;
+        if (form) {
+            serialize(form);
         }
-    }
+    }, true);
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
-    } else {
-        init();
-    }
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest ? event.target.closest("[data-freestyle-action]") : null;
+        if (!button) {
+            return;
+        }
+
+        var form = button.closest(FORM_SELECTOR);
+        var section = button.closest("[data-freestyle-list-section]");
+        var row = button.closest(ROW_SELECTOR);
+        var list = section ? section.querySelector(LIST_SELECTOR) : null;
+        switch (button.getAttribute("data-freestyle-action")) {
+            case "add":
+                if (section) {
+                    addStep(section);
+                }
+                break;
+            case "insert-snippet":
+                if (form && section) {
+                    insertSnippetStep(form, section);
+                }
+                break;
+            case "remove":
+                if (row && list) {
+                    row.parentNode.removeChild(row);
+                    renumber(list);
+                }
+                break;
+            case "move-up":
+                if (row && list) {
+                    moveStep(list, row, -1);
+                }
+                break;
+            case "move-down":
+                if (row && list) {
+                    moveStep(list, row, 1);
+                }
+                break;
+        }
+
+        event.preventDefault();
+    });
 })();

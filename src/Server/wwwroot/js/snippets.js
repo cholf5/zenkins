@@ -93,25 +93,19 @@
         }
     }
 
-    function init() {
-        document.addEventListener("click", function (event) {
-            var button = event.target.closest ? event.target.closest("[data-snippet-insert],[data-snippet-copy]") : null;
-            if (!button) {
-                return;
-            }
+    // B-010: installed here, on `document`, rather than from a DOMContentLoaded scan of the page - the
+    // script loads once per document, and a Blazor navigation replaces the buttons it would have found.
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest ? event.target.closest("[data-snippet-insert],[data-snippet-copy]") : null;
+        if (!button) {
+            return;
+        }
 
-            event.preventDefault();
-            if (button.hasAttribute("data-snippet-insert")) {
-                onInsert(button);
-            } else {
-                onCopy(button);
-            }
-        });
-    }
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
-    } else {
-        init();
-    }
+        event.preventDefault();
+        if (button.hasAttribute("data-snippet-insert")) {
+            onInsert(button);
+        } else {
+            onCopy(button);
+        }
+    });
 })();

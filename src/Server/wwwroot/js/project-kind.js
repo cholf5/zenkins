@@ -1,9 +1,17 @@
 // F-020/F-022: the project form's selectors. A Freestyle project has no repository, no default branch
 // and no pipeline path; a Pipeline project has a definition source, and an inline one has a script
-// instead of the repository fields. The hidden half's inputs are disabled so the browser's own
-// `required` validation cannot block the submission and the inputs submit nothing. The server-side
-// validation (ProjectService) remains the authority; this is form hygiene, exactly like
-// js/antiforgery.js.
+// instead of the repository fields.
+//
+// B-010: every half of the form is rendered by the server in every state, and `hidden` + `disabled`
+// carry whether it applies - the server renders the state it knows, this script keeps it true while
+// the reader switches. The hidden half's inputs are disabled so the browser's own `required`
+// validation cannot block the submission and the inputs submit nothing. The server-side validation
+// (ProjectService) remains the authority; this is form hygiene, exactly like js/antiforgery.js.
+//
+// B-010: the listeners live on `document`, never on the controls themselves. Blazor navigations and
+// re-renders replace the form's DOM without re-running this file (it is a plain <script> in App.razor,
+// loaded once per document), so a handler bound to a control at load time is bound to a node that may
+// no longer exist - which is how a Freestyle choice used to leave the repository fields on screen.
 (function () {
     "use strict";
 
@@ -15,15 +23,15 @@
     var FREESTYLE_VALUE = "freestyle";
     var INLINE_VALUE = "inline";
 
-    function disableAll(root, disabled) {
+    function setEnabled(root, enabled) {
         if (!root) {
             return;
         }
 
-        root.hidden = disabled;
+        root.hidden = !enabled;
         var inputs = root.querySelectorAll("input, select, textarea");
         for (var i = 0; i < inputs.length; i++) {
-            inputs[i].disabled = disabled;
+            inputs[i].disabled = !enabled;
         }
     }
 
@@ -43,32 +51,24 @@
         var isFreestyle = kindChoice.value === FREESTYLE_VALUE;
         var isInline = !isFreestyle && sourceChoice !== null && sourceChoice.value === INLINE_VALUE;
 
-        disableAll(sourceFields, isFreestyle);
-        disableAll(repositoryFields, isFreestyle || isInline);
-        disableAll(inlineFields, isFreestyle || !isInline);
+        setEnabled(sourceFields, !isFreestyle);
+        setEnabled(repositoryFields, !isFreestyle && !isInline);
+        setEnabled(inlineFields, !isFreestyle && isInline);
     }
 
-    function init() {
-        var kindRadios = document.querySelectorAll(KIND_CHOICE_SELECTOR);
-        var sourceRadios = document.querySelectorAll(SOURCE_CHOICE_SELECTOR);
-        if (kindRadios.length === 0 && sourceRadios.length === 0) {
+    document.addEventListener("change", function (event) {
+        var target = event.target;
+        if (!target || !target.matches) {
             return;
         }
 
-        apply();
-        var i;
-        for (i = 0; i < kindRadios.length; i++) {
-            kindRadios[i].addEventListener("change", apply);
+        if (target.matches(KIND_CHOICE_SELECTOR) || target.matches(SOURCE_CHOICE_SELECTOR)) {
+            apply();
         }
+    });
 
-        for (i = 0; i < sourceRadios.length; i++) {
-            sourceRadios[i].addEventListener("change", apply);
-        }
-    }
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
-    } else {
-        init();
-    }
+    // The browser's own arrival at the form: a full page load, and (for the statically rendered pages
+    // that use it) an enhanced navigation that patched a new form into this document.
+    apply();
+    document.addEventListener("enhancedload", apply);
 })();

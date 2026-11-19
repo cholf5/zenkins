@@ -121,8 +121,11 @@
     {
         @* F-022: the create form's definition source, only for the Pipeline kind. The JS hides this
            section for Freestyle and swaps the repository fields for the script editor per selection;
-           the service is the authority (ProjectValidation.ValidatePipelineSource). *@
-        <div data-project-source-fields class="bb:space-y-2">
+           the service is the authority (ProjectValidation.ValidatePipelineSource). B-010: the hidden
+           state is rendered here too, so a page that never runs the script (a navigation without a
+           document reload) still shows the right half instead of a Freestyle choice over repository
+           fields. *@
+        <div data-project-source-fields hidden="@(!DefinitionFieldsEnabled)" class="bb:space-y-2">
             <span class="bb:text-sm bb:font-medium">@L10n["Definition"]</span>
             <div class="bb:grid bb:gap-2 bb:sm:grid-cols-2" role="radiogroup" aria-label="@L10n["Pipeline definition source"]">
                 <label class="bb:flex bb:cursor-pointer bb:items-start bb:gap-3 bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-sm">
@@ -130,6 +133,7 @@
                            name="PipelineSource"
                            value="@ProjectSources.Repository"
                            checked="@(SelectedSource == ProjectSources.Repository)"
+                           disabled="@(!DefinitionFieldsEnabled)"
                            data-project-source-choice
                            class="bb:mt-0.5" />
                     <span>
@@ -144,6 +148,7 @@
                            name="PipelineSource"
                            value="@ProjectSources.Inline"
                            checked="@(SelectedSource == ProjectSources.Inline)"
+                           disabled="@(!DefinitionFieldsEnabled)"
                            data-project-source-choice
                            class="bb:mt-0.5" />
                     <span>
@@ -161,12 +166,17 @@
         </div>
     }
 
-    @if (ShowInlineFields)
+    @if (RenderInlineFields)
     {
-        <div data-project-inline-fields class="bb:space-y-2">
+        @* B-010: the create form renders this half in every state and lets hidden/disabled say whether
+           it applies. Rendering it only once the posted source was inline meant a fresh create page had
+           no script box to reveal when the reader picked "Pipeline script" - the first submit was
+           always refused with inline-script-required. *@
+        <div data-project-inline-fields hidden="@(!InlineFieldsEnabled)" class="bb:space-y-2">
             <label for="project-inline-script" class="bb:text-sm bb:font-medium">@L10n["Pipeline script"]</label>
             <textarea id="project-inline-script"
                       name="InlineScript"
+                      disabled="@(!InlineFieldsEnabled)"
                       rows="14"
                       maxlength="65536"
                       spellcheck="false"
@@ -184,14 +194,19 @@
         </div>
     }
 
-    @if (ShowRepositoryFields)
+    @if (RenderRepositoryFields)
     {
-        <div data-project-repository-fields class="bb:space-y-4">
+        @* B-010: on the create form these fields always exist and hidden/disabled says whether they
+           apply - the browser's own `required` validation can only be switched off by disabling the
+           input, and a half that is not rendered cannot be disabled. Without this a Freestyle choice
+           kept the repository fields (and their `required`) on screen whenever the JS had not run. *@
+        <div data-project-repository-fields hidden="@(!RepositoryFieldsEnabled)" class="bb:space-y-4">
             <div class="bb:space-y-2">
                 <label for="project-repository-url" class="bb:text-sm bb:font-medium">@L10n["Repository URL"]</label>
             <input id="project-repository-url"
                    name="RepositoryUrl"
                    value="@RepositoryUrl"
+                   disabled="@(!RepositoryFieldsEnabled)"
                    required
                    maxlength="2048"
                    autocomplete="off"
@@ -214,6 +229,7 @@
             <input id="project-default-branch"
                    name="DefaultBranch"
                    value="@DefaultBranch"
+                   disabled="@(!RepositoryFieldsEnabled)"
                    required
                    maxlength="200"
                    autocomplete="off"
@@ -233,6 +249,7 @@
             <input id="project-pipeline-path"
                    name="PipelinePath"
                    value="@PipelinePath"
+                   disabled="@(!RepositoryFieldsEnabled)"
                    maxlength="512"
                    autocomplete="off"
                    spellcheck="false"
@@ -256,6 +273,7 @@
             <label for="project-branch-discovery" class="bb:text-sm bb:font-medium">@L10n["Branch discovery"]</label>
             <select id="project-branch-discovery"
                     name="BranchDiscovery"
+                    disabled="@(!RepositoryFieldsEnabled)"
                     aria-invalid="@(BranchDiscoveryError is null ? null : "true")"
                     aria-describedby="@(BranchDiscoveryError is null ? null : "project-branch-discovery-error")"
                     class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
@@ -369,12 +387,34 @@
 
     private string KindLabel => SelectedKind == ProjectKinds.Freestyle ? L10n["Freestyle"] : L10n["Pipeline"];
 
-    /// <summary>Whether the repository fields render at all: unlocked (the create form - the JS then
-    /// toggles them per selection) or locked onto the Pipeline kind. A kind-locked Freestyle edit
-    /// form renders none - the fields do not exist for that kind, and the service keeps them null.</summary>
-    private bool ShowRepositoryFields => SelectedKind == ProjectKinds.Pipeline && SelectedSource == ProjectSources.Repository;
+    /// <summary>
+    /// Whether the repository fields render at all. The unlocked create form always renders them
+    /// (B-010) so the JS can reveal them again after any selection; a kind-locked edit form renders
+    /// them only for the shape that owns them - a Freestyle or inline project has no repository, and
+    /// the service keeps its fields null.
+    /// </summary>
+    private bool RenderRepositoryFields =>
+        KindLocked
+            ? SelectedKind == ProjectKinds.Pipeline && SelectedSource == ProjectSources.Repository
+            : true;
 
-    private bool ShowInlineFields => !KindLocked && SelectedKind == ProjectKinds.Pipeline && SelectedSource == ProjectSources.Inline;
+    /// <summary>
+    /// Whether the inline script box renders at all. The create form always renders it (B-010); a
+    /// kind-locked form never does - an inline script is edited on the Pipelines tab, not here.
+    /// </summary>
+    private bool RenderInlineFields => !KindLocked;
+
+    /// <summary>Whether the repository fields apply to the current selection (they are rendered
+    /// disabled, and therefore submit nothing, when they do not).</summary>
+    private bool RepositoryFieldsEnabled =>
+        SelectedKind == ProjectKinds.Pipeline && SelectedSource == ProjectSources.Repository;
+
+    /// <summary>Whether the inline script box applies to the current selection.</summary>
+    private bool InlineFieldsEnabled =>
+        SelectedKind == ProjectKinds.Pipeline && SelectedSource == ProjectSources.Inline;
+
+    /// <summary>Whether the definition-source choice applies: a Freestyle project has none.</summary>
+    private bool DefinitionFieldsEnabled => SelectedKind == ProjectKinds.Pipeline;
 
     /// <summary>F-022: the definition source the create form starts on (the historical repository default).</summary>
     private string SelectedSource => PipelineSource == ProjectSources.Inline

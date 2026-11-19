@@ -44,47 +44,45 @@
         }
     }
 
-    function init() {
-        var forms = document.querySelectorAll(FORM_SELECTOR);
-        for (var f = 0; f < forms.length; f++) {
-            (function (form) {
-                form.addEventListener("submit", function () {
-                    serialize(form);
-                });
-
-                form.addEventListener("click", function (event) {
-                    var button = event.target.closest ? event.target.closest("[data-parameter-action]") : null;
-                    if (!button) {
-                        return;
-                    }
-
-                    switch (button.getAttribute("data-parameter-action")) {
-                        case "add":
-                            var template = form.querySelector("#parameter-row-template");
-                            var list = form.querySelector("[data-parameter-rows-list]");
-                            if (template && list) {
-                                list.appendChild(template.content.firstElementChild.cloneNode(true));
-                                renumber(form);
-                            }
-                            break;
-                        case "remove":
-                            var row = button.closest(ROW_SELECTOR);
-                            if (row) {
-                                row.remove();
-                                renumber(form);
-                            }
-                            break;
-                    }
-
-                    event.preventDefault();
-                });
-            })(forms[f]);
+    // B-010: both handlers live on `document` for the same reason js/freestyle-steps.js does - the
+    // script loads once per document, while a Blazor navigation replaces this form's nodes. Deriving
+    // the form from the event means a row added a moment ago is handled by the same code.
+    document.addEventListener("submit", function (event) {
+        var form = event.target && event.target.closest ? event.target.closest(FORM_SELECTOR) : null;
+        if (form) {
+            serialize(form);
         }
-    }
+    }, true);
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
-    } else {
-        init();
-    }
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest ? event.target.closest("[data-parameter-action]") : null;
+        if (!button) {
+            return;
+        }
+
+        var form = button.closest(FORM_SELECTOR);
+        if (!form) {
+            return;
+        }
+
+        switch (button.getAttribute("data-parameter-action")) {
+            case "add":
+                var template = form.querySelector("#parameter-row-template");
+                var list = form.querySelector("[data-parameter-rows-list]");
+                if (template && list) {
+                    list.appendChild(template.content.firstElementChild.cloneNode(true));
+                    renumber(form);
+                }
+                break;
+            case "remove":
+                var row = button.closest(ROW_SELECTOR);
+                if (row) {
+                    row.remove();
+                    renumber(form);
+                }
+                break;
+        }
+
+        event.preventDefault();
+    });
 })();
