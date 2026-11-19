@@ -1,4 +1,5 @@
 using Xunit;
+using Zenkins.Tests.Localization;
 using Zenkins.Server.Projects;
 
 namespace Zenkins.Tests.Projects;
@@ -185,7 +186,7 @@ public sealed class ProjectValidationTests
         Assert.All(codes, code =>
         {
             Assert.NotNull(ProjectErrorCodes.FieldFor(code));
-            Assert.False(string.IsNullOrWhiteSpace(ProjectErrorCodes.MessageFor(code)));
+            Assert.False(string.IsNullOrWhiteSpace(ProjectErrorCodes.MessageFor(code, TestText.English)));
         });
     }
 }

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Zenkins.Server.Workers;
+using Zenkins.Server.Localization;
 
 namespace Zenkins.Server.Git;
 
@@ -115,7 +116,8 @@ public static class GitCredentialEndpoints
     private static async Task<IResult> CreateAsync(
         [FromForm] CreateGitCredentialForm form,
         HttpContext httpContext,
-        GitCredentialService credentials)
+        GitCredentialService credentials,
+        Localizer L10n)
     {
         var userId = FindUserId(httpContext);
         if (userId is null)
@@ -135,7 +137,7 @@ public static class GitCredentialEndpoints
             GitCredentialMutationStatus.Success => SuccessOutcome(result, form?.ProjectId, NoticeCreated),
             GitCredentialMutationStatus.Forbidden => Forbidden(result),
             GitCredentialMutationStatus.NotFound => Results.NotFound(),
-            _ => Invalid(result, form?.ProjectId, form?.Name, form?.Kind),
+            _ => Invalid(result, form?.ProjectId, form?.Name, form?.Kind, L10n),
         };
     }
 
@@ -143,7 +145,8 @@ public static class GitCredentialEndpoints
         Guid credentialId,
         [FromForm] RotateGitCredentialForm form,
         HttpContext httpContext,
-        GitCredentialService credentials)
+        GitCredentialService credentials,
+        Localizer L10n)
     {
         var userId = FindUserId(httpContext);
         if (userId is null)
@@ -161,7 +164,7 @@ public static class GitCredentialEndpoints
             GitCredentialMutationStatus.Success => SuccessOutcome(result, form?.ProjectId, NoticeRotated),
             GitCredentialMutationStatus.Forbidden => Forbidden(result),
             GitCredentialMutationStatus.NotFound => Results.NotFound(),
-            _ => Invalid(result, form?.ProjectId, submittedName: null, submittedKind: form?.Kind),
+            _ => Invalid(result, form?.ProjectId, submittedName: null, submittedKind: form?.Kind, L10n),
         };
     }
 
@@ -169,7 +172,8 @@ public static class GitCredentialEndpoints
         Guid credentialId,
         [FromForm] DeleteGitCredentialForm form,
         HttpContext httpContext,
-        GitCredentialService credentials)
+        GitCredentialService credentials,
+        Localizer L10n)
     {
         var userId = FindUserId(httpContext);
         if (userId is null)
@@ -192,7 +196,7 @@ public static class GitCredentialEndpoints
             // refused, and the refusal names them - on the settings tab when the form came from there,
             // as the D-006-shaped answer (409 + the names) otherwise.
             GitCredentialMutationStatus.Referenced =>
-                ReferencedOutcome(result, form?.ProjectId, form?.Name),
+                ReferencedOutcome(result, form?.ProjectId, form?.Name, L10n),
             _ => Results.NotFound(),
         };
     }
@@ -404,7 +408,8 @@ public static class GitCredentialEndpoints
         GitCredentialMutationResult result,
         string? projectId,
         string? submittedName,
-        string? submittedKind)
+        string? submittedKind,
+        Localizer L10n)
     {
         if (!TryReadProjectId(projectId, out var projectIdentifier))
         {
@@ -413,7 +418,7 @@ public static class GitCredentialEndpoints
                 new GitCredentialErrorResponse(
                     error?.Field ?? GitCredentialFields.Value,
                     error?.Code ?? GitCredentialErrorCodes.FieldInvalid,
-                    GitCredentialErrorCodes.MessageFor(error?.Code)),
+                    GitCredentialErrorCodes.MessageFor(error?.Code, L10n)),
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -444,7 +449,8 @@ public static class GitCredentialEndpoints
     private static IResult ReferencedOutcome(
         GitCredentialMutationResult result,
         string? projectId,
-        string? submittedName)
+        string? submittedName,
+        Localizer L10n)
     {
         if (TryReadProjectId(projectId, out var projectIdentifier))
         {
@@ -459,7 +465,7 @@ public static class GitCredentialEndpoints
         return Results.Json(
             new GitCredentialReferencedResponse(
                 GitCredentialErrorCodes.CredentialInUse,
-                GitCredentialErrorCodes.MessageFor(GitCredentialErrorCodes.CredentialInUse),
+                GitCredentialErrorCodes.MessageFor(GitCredentialErrorCodes.CredentialInUse, L10n),
                 result.ReferencingProjects ?? []),
             statusCode: StatusCodes.Status409Conflict);
     }

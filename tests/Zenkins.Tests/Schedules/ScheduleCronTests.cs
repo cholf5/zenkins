@@ -1,4 +1,5 @@
 using Xunit;
+using Zenkins.Tests.Localization;
 using Zenkins.Server.Schedules;
 
 namespace Zenkins.Tests.Schedules;
@@ -197,12 +198,12 @@ public sealed class ScheduleCronTests
 
         Assert.Null(ScheduleEvaluator.NextDueAt(never, Zone("UTC"), after));
 
-        var preview = SchedulePreview.Compute("0 0 30 2 *", "UTC", after);
+        var preview = SchedulePreview.Compute("0 0 30 2 *", "UTC", after, TestText.English);
         Assert.False(preview.IsValid);
         Assert.Equal(ScheduleErrorCodes.CronNeverFires, preview.ErrorCode);
 
         // A 29-February expression is not "never": it fires within the eight-year lookahead.
-        var leapDay = SchedulePreview.Compute("0 0 29 2 *", "UTC", after);
+        var leapDay = SchedulePreview.Compute("0 0 29 2 *", "UTC", after, TestText.English);
         Assert.True(leapDay.IsValid);
         Assert.Equal(new DateTimeOffset(2028, 2, 29, 0, 0, 0, TimeSpan.Zero), leapDay.DueTimes[0]);
     }
@@ -218,11 +219,11 @@ public sealed class ScheduleCronTests
         Assert.True(ScheduleEvaluator.TryResolveZone("UTC", out var utc));
         Assert.Equal(TimeSpan.Zero, utc.GetUtcOffset(after));
 
-        Assert.Equal(ScheduleErrorCodes.TimeZoneUnknown, SchedulePreview.Compute("0 3 * * *", "Mars/Olympus", after).ErrorCode);
-        Assert.Equal(ScheduleErrorCodes.TimeZoneRequired, SchedulePreview.Compute("0 3 * * *", null, after).ErrorCode);
+        Assert.Equal(ScheduleErrorCodes.TimeZoneUnknown, SchedulePreview.Compute("0 3 * * *", "Mars/Olympus", after, TestText.English).ErrorCode);
+        Assert.Equal(ScheduleErrorCodes.TimeZoneRequired, SchedulePreview.Compute("0 3 * * *", null, after, TestText.English).ErrorCode);
 
         // The preview a valid pair answers with is the card's "next three due times".
-        var preview = SchedulePreview.Compute("0 3 * * *", "Europe/Berlin", after);
+        var preview = SchedulePreview.Compute("0 3 * * *", "Europe/Berlin", after, TestText.English);
         Assert.True(preview.IsValid);
         Assert.Equal(3, preview.DueTimes.Count);
         Assert.Equal(new DateTimeOffset(2026, 11, 17, 2, 0, 0, TimeSpan.Zero), preview.DueTimes[0]);

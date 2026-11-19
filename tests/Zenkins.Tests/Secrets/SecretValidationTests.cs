@@ -1,4 +1,5 @@
 using Xunit;
+using Zenkins.Tests.Localization;
 using Zenkins.Server.Secrets;
 
 namespace Zenkins.Tests.Secrets;
@@ -115,7 +116,7 @@ public sealed class SecretValidationTests
         foreach (var code in codes)
         {
             Assert.NotNull(SecretErrorCodes.FieldFor(code));
-            Assert.False(string.IsNullOrWhiteSpace(SecretErrorCodes.MessageFor(code)));
+            Assert.False(string.IsNullOrWhiteSpace(SecretErrorCodes.MessageFor(code, TestText.English)));
         }
 
         Assert.Equal(SecretFields.Name, SecretErrorCodes.FieldFor(SecretErrorCodes.NameDuplicate));

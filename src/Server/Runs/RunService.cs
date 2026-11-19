@@ -9,6 +9,7 @@ using Zenkins.Server.Data.Tenancy;
 using Zenkins.Server.Notifications;
 using Zenkins.Server.Environments;
 using Zenkins.Server.Git;
+using Zenkins.Server.Localization;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Workers;
@@ -811,6 +812,7 @@ public sealed class RunService(
     IHubContext<WorkerLogHub> workerLogHubs,
     RunParameterProtector parameterProtector,
     RunTerminalSignal terminalSignal,
+    Localizer L10n,
     ILogger<RunService> logger)
 {
     /// <summary>
@@ -996,7 +998,7 @@ public sealed class RunService(
                 actingUserId);
             return RunTriggerResult.Refused(
                 disabledCode,
-                ProjectTriggerGuard.DisabledMessage(project.DisabledReason));
+                ProjectTriggerGuard.DisabledMessage(project.DisabledReason, L10n));
         }
 
         // F-020: a Freestyle project runs its frozen spec and has no branch to name. The branch input
@@ -1240,7 +1242,7 @@ public sealed class RunService(
                 project.OrganizationId,
                 project.Id,
                 disabledCode);
-            return RunTriggerResult.Refused(disabledCode, ProjectTriggerGuard.DisabledMessage(project.DisabledReason));
+            return RunTriggerResult.Refused(disabledCode, ProjectTriggerGuard.DisabledMessage(project.DisabledReason, L10n));
         }
 
         // F-029: the queue cap. Counted under the same lock, so "below the cap" stays true until this
@@ -1259,7 +1261,7 @@ public sealed class RunService(
                 cap);
             return RunTriggerResult.Refused(
                 ProjectTriggerRefusals.QueueFull,
-                ProjectTriggerGuard.QueueFullMessage(queued, cap));
+                ProjectTriggerGuard.QueueFullMessage(queued, cap, L10n));
         }
 
         // F-034: the organization environment layer is resolved *here*, in the one insert path every

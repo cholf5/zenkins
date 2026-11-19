@@ -3,11 +3,11 @@
 @inject UserSession UserSession
 @inject ProjectService ProjectsService
 
-<PageTitle>Edit project · Zenkins</PageTitle>
+<PageTitle>@L10n["Edit project"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Edit project</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Edit project"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
@@ -33,8 +33,7 @@
             <BbCardHeader>
                 <BbCardTitle As="h2">@_project.Name</BbCardTitle>
                 <BbCardDescription>
-                    Members and Owners may edit a project. The repository URL is re-validated on the
-                    server; only HTTPS and SSH git URLs are accepted.
+                    @L10n["Members and Owners may edit a project. The repository URL is re-validated on the server; only HTTPS and SSH git URLs are accepted."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -42,7 +41,7 @@
                    radio) and a Freestyle project renders no repository fields at all - the service
                    keeps them untouched for that kind. *@
                 <ProjectFormCard Action="@($"/projects/{_project.Id}/edit")"
-                                 SubmitLabel="Save changes"
+                                 SubmitLabel="@L10n["Save changes"]"
                                  CancelHref="@($"/projects/{_project.Id}")"
                                  Name="@EffectiveName"
                                  Kind="@_project.Kind"
@@ -53,13 +52,13 @@
                                  PipelinePath="@EffectivePipelinePath"
                                  BranchDiscovery="@EffectiveBranchDiscovery"
                                  ErrorCode="@ErrorCode"
-                                 FolderName="@(_project.FolderName ?? "Root")"
+                                 FolderName="@(_project.FolderName ?? L10n["Root"])"
                                  ConflictName="@ConflictName" />
             </BbCardContent>
         </BbCard>
 
         <p class="bb:text-sm bb:text-muted-foreground">
-            <a href="/projects/@_project.Id" class="bb:font-medium bb:underline bb:underline-offset-4">Back to project</a>
+            <a href="/projects/@_project.Id" class="bb:font-medium bb:underline bb:underline-offset-4">@L10n["Back to project"]</a>
         </p>
     }
 </div>
@@ -109,7 +108,7 @@
 
     private string? EffectiveBranchDiscovery => SubmittedBranchDiscovery ?? _project?.BranchDiscovery;
 
-    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
+    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode, L10n);
 
     protected override async Task OnInitializedAsync()
     {

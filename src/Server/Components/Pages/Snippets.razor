@@ -10,15 +10,15 @@
    body, what the inserted text will look like (for a script step), the secret references it carries (the same
    scanner as a typed step), and the one rule that matters: editing or deleting a snippet never reaches a saved
    project or a run, because nothing references the row. *@
-<PageTitle>Snippets · Zenkins</PageTitle>
+<PageTitle>@L10n["Snippets"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Snippets</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Snippets"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
-            <BbBadge Variant="BadgeVariant.Outline">Your role: @organization.Role</BbBadge>
+            <BbBadge Variant="BadgeVariant.Outline">@L10n["Your role: {0}", DisplayText.Role(organization.Role, L10n)]</BbBadge>
         }
     </div>
 
@@ -30,12 +30,9 @@
     {
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Reusable step snippets</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Reusable step snippets"]</BbCardTitle>
                 <BbCardDescription>
-                    A snippet is text an editor copies into a project's definition: a script body for a
-                    Freestyle step, or a piece of <code>pipeline.lua</code> for a pipeline. <b>Inserting copies
-                    the text at that moment.</b> Editing or deleting a snippet never changes a saved project,
-                    a frozen spec or a run - nothing references the snippet.
+                    @L10n["A snippet is text an editor copies into a project's definition: a script body for a Freestyle step, or a piece of"] <code>pipeline.lua</code> @L10n["for a pipeline."] <b>@L10n["Inserting copies the text at that moment."]</b> @L10n["Editing or deleting a snippet never changes a saved project, a frozen spec or a run - nothing references the snippet."]
                 </BbCardDescription>
             </BbCardHeader>
         </BbCard>
@@ -56,18 +53,16 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">New snippet</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["New snippet"]</BbCardTitle>
                 <BbCardDescription>
-                    A name is unique in this organization. The kind decides where it is offered and what
-                    bounds its body: a script step is bounded like a Freestyle script (32 KiB), a Lua
-                    fragment like an inline pipeline script (64 KiB).
+                    @L10n["A name is unique in this organization. The kind decides where it is offered and what bounds its body: a script step is bounded like a Freestyle script (32 KiB), a Lua fragment like an inline pipeline script (64 KiB)."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <form method="post" action="/snippets/create" data-zenkins-antiforgery class="bb:flex bb:flex-col bb:gap-3">
                     <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
                         <div>
-                            <label for="snippet-name" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Name</label>
+                            <label for="snippet-name" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Name"]</label>
                             <input id="snippet-name"
                                    name="Name"
                                    required
@@ -76,20 +71,20 @@
                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                         </div>
                         <div>
-                            <label for="snippet-kind" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Kind</label>
+                            <label for="snippet-kind" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Kind"]</label>
                             <select id="snippet-kind"
                                     name="Kind"
                                     class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
                                 @foreach (var kind in StepSnippetKinds.All)
                                 {
-                                    <option value="@kind">@StepSnippetKinds.LabelFor(kind)</option>
+                                    <option value="@kind">@KindLabel(kind)</option>
                                 }
                             </select>
                         </div>
                     </div>
                     <div>
                         <label for="snippet-description" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">
-                            Description (optional)
+                            @L10n["Description (optional)"]
                         </label>
                         <input id="snippet-description"
                                name="Description"
@@ -98,7 +93,7 @@
                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                     </div>
                     <div>
-                        <label for="snippet-body" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Body</label>
+                        <label for="snippet-body" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Body"]</label>
                         <textarea id="snippet-body"
                                   name="Body"
                                   rows="8"
@@ -107,12 +102,11 @@
                                   autocomplete="off"
                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs"></textarea>
                         <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                            <code>${secret:NAME}</code> and <code>${env:NAME}</code> references in the body are
-                            captured by the same scanner as a typed step when the text is saved into a project.
+                            <code>${secret:NAME}</code> @L10n["and"] <code>${env:NAME}</code> @L10n["references in the body are captured by the same scanner as a typed step when the text is saved into a project."]
                         </p>
                     </div>
                     <div>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create snippet</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Create snippet"]</BbButton>
                     </div>
                 </form>
             </BbCardContent>
@@ -121,7 +115,7 @@
         @if (_snippets.Count == 0)
         {
             <p id="snippets-empty" class="bb:text-sm bb:text-muted-foreground">
-                This organization has no snippets yet.
+                @L10n["This organization has no snippets yet."]
             </p>
         }
         else
@@ -133,9 +127,9 @@
                         <BbCardHeader>
                             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                                 <BbCardTitle As="h2">@snippet.Name</BbCardTitle>
-                                <BbBadge Variant="BadgeVariant.Outline">@StepSnippetKinds.LabelFor(snippet.Kind)</BbBadge>
+                                <BbBadge Variant="BadgeVariant.Outline">@KindLabel(snippet.Kind)</BbBadge>
                                 <span class="bb:text-xs bb:text-muted-foreground">
-                                    updated @snippet.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC
+                                    @L10n["updated {0} UTC", snippet.UpdatedAt.ToString("yyyy-MM-dd HH:mm")]
                                 </span>
                             </div>
                             @if (snippet.Description is { Length: > 0 } description)
@@ -152,23 +146,23 @@
                                 @* The preview AC: what the inserted step will look like, computed from the body and
                                    the snippet's own name - no other project state is guessed at. *@
                                 <div id="@($"snippet-preview-{snippet.Id}")" class="bb:mt-3 bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-xs">
-                                    <p class="bb:font-medium">Resulting step</p>
+                                    <p class="bb:font-medium">@L10n["Resulting step"]</p>
                                     <dl class="bb:mt-1 bb:grid bb:grid-cols-1 bb:gap-1 bb:sm:grid-cols-3">
                                         <div>
-                                            <dt class="bb:text-muted-foreground">Name</dt>
+                                            <dt class="bb:text-muted-foreground">@L10n["Name"]</dt>
                                             <dd>@snippet.Name</dd>
                                         </div>
                                         <div>
-                                            <dt class="bb:text-muted-foreground">Env</dt>
-                                            <dd>none (added on the step after insertion)</dd>
+                                            <dt class="bb:text-muted-foreground">@L10n["Env"]</dt>
+                                            <dd>@L10n["none (added on the step after insertion)"]</dd>
                                         </div>
                                         <div>
-                                            <dt class="bb:text-muted-foreground">Artifacts</dt>
-                                            <dd>none (added on the step after insertion)</dd>
+                                            <dt class="bb:text-muted-foreground">@L10n["Artifacts"]</dt>
+                                            <dd>@L10n["none (added on the step after insertion)"]</dd>
                                         </div>
                                     </dl>
                                     <p class="bb:mt-2">
-                                        <span class="bb:text-muted-foreground">Secret references: </span>
+                                        <span class="bb:text-muted-foreground">@L10n["Secret references:"] </span>
                                         @(SecretReferencesLabel(snippet.Body))
                                     </p>
                                 </div>
@@ -176,18 +170,17 @@
                             else
                             {
                                 <p id="@($"snippet-fragment-{snippet.Id}")" class="bb:mt-3 bb:text-xs bb:text-muted-foreground">
-                                    Pipeline text: insert it into a script; the product never rewrites your
-                                    repository file.
+                                    @L10n["Pipeline text: insert it into a script; the product never rewrites your repository file."]
                                 </p>
                             }
 
                             <details class="bb:mt-3">
-                                <summary class="bb:cursor-pointer bb:text-sm bb:font-medium">Edit</summary>
+                                <summary class="bb:cursor-pointer bb:text-sm bb:font-medium">@L10n["Edit"]</summary>
                                 <form method="post" action="@($"/snippets/{snippet.Id}/edit")"
                                       data-zenkins-antiforgery class="bb:mt-3 bb:flex bb:flex-col bb:gap-3">
                                     <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
                                         <div>
-                                            <label for="@($"snippet-name-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Name</label>
+                                            <label for="@($"snippet-name-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Name"]</label>
                                             <input id="@($"snippet-name-{snippet.Id}")"
                                                    name="Name"
                                                    value="@snippet.Name"
@@ -197,19 +190,19 @@
                                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                                         </div>
                                         <div>
-                                            <label for="@($"snippet-kind-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Kind</label>
+                                            <label for="@($"snippet-kind-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Kind"]</label>
                                             <select id="@($"snippet-kind-{snippet.Id}")"
                                                     name="Kind"
                                                     class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
                                                 @foreach (var kind in StepSnippetKinds.All)
                                                 {
-                                                    <option value="@kind" selected="@(kind == snippet.Kind)">@StepSnippetKinds.LabelFor(kind)</option>
+                                                    <option value="@kind" selected="@(kind == snippet.Kind)">@KindLabel(kind)</option>
                                                 }
                                             </select>
                                         </div>
                                     </div>
                                     <div>
-                                        <label for="@($"snippet-description-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Description</label>
+                                        <label for="@($"snippet-description-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Description"]</label>
                                         <input id="@($"snippet-description-{snippet.Id}")"
                                                name="Description"
                                                value="@snippet.Description"
@@ -218,7 +211,7 @@
                                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                                     </div>
                                     <div>
-                                        <label for="@($"snippet-body-input-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Body</label>
+                                        <label for="@($"snippet-body-input-{snippet.Id}")" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Body"]</label>
                                         <textarea id="@($"snippet-body-input-{snippet.Id}")"
                                                   name="Body"
                                                   rows="8"
@@ -227,14 +220,14 @@
                                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs">@snippet.Body</textarea>
                                     </div>
                                     <div>
-                                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Save snippet</BbButton>
+                                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Save snippet"]</BbButton>
                                     </div>
                                 </form>
                                 <form method="post" action="@($"/snippets/{snippet.Id}/delete")"
                                       data-zenkins-antiforgery class="bb:mt-3">
-                                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete snippet</BbButton>
+                                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">@L10n["Delete snippet"]</BbButton>
                                     <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">
-                                        Projects that already inserted it keep their copied text.
+                                        @L10n["Projects that already inserted it keep their copied text."]
                                     </span>
                                 </form>
                             </details>
@@ -258,13 +251,13 @@
 
     private string? Notice => NoticeCode switch
     {
-        "created" => "The snippet was created.",
-        "updated" => "The snippet was updated. Projects that already inserted its text are unchanged.",
-        "deleted" => "The snippet was deleted. Projects that already inserted its text keep it.",
+        "created" => L10n["The snippet was created."],
+        "updated" => L10n["The snippet was updated. Projects that already inserted its text are unchanged."],
+        "deleted" => L10n["The snippet was deleted. Projects that already inserted its text keep it."],
         _ => null,
     };
 
-    private string? Error => SnippetErrorCodes.MessageFor(ErrorCode);
+    private string? Error => SnippetErrorCodes.MessageFor(ErrorCode, L10n);
 
     protected override async Task OnInitializedAsync()
     {
@@ -279,12 +272,24 @@
     }
 
     /// <summary>
+    /// A snippet kind as a person reads it (card F-035). The label is resolved here rather than in
+    /// <see cref="StepSnippetKinds"/>: the shared contract cannot reach the UI's localizer, and the
+    /// stored value is the kind code, never this text.
+    /// </summary>
+    private string KindLabel(string kind) => kind switch
+    {
+        StepSnippetKinds.ScriptStep => L10n["Script step (Freestyle)"],
+        StepSnippetKinds.LuaFragment => L10n["Lua fragment (pipeline)"],
+        _ => kind,
+    };
+
+    /// <summary>
     /// The secret references the body carries, read by the same scanner the save path uses (card D-006) - the
     /// preview tells the author what the inserted step will record, not a second parser's guess.
     /// </summary>
-    private static string SecretReferencesLabel(string body)
+    private string SecretReferencesLabel(string body)
     {
         var references = StepReference.ReferencesIn(body);
-        return references.Count == 0 ? "none" : string.Join(", ", references);
+        return references.Count == 0 ? L10n["none"] : string.Join(", ", references);
     }
 }

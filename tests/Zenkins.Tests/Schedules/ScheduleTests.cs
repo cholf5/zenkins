@@ -4,6 +4,7 @@ using Xunit;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Schedules;
 using Zenkins.Tests.Auth;
+using Zenkins.Tests.Localization;
 using Zenkins.Tests.Organizations;
 
 namespace Zenkins.Tests.Schedules;
@@ -289,7 +290,8 @@ public sealed class ScheduleTests
                 occurrences[^1].Outcome,
                 occurrences[^1].RunNumber,
                 occurrences[^1].CollapsedDueTimes,
-                occurrences[^1].Detail),
+                occurrences[^1].Detail,
+                TestText.English),
             StringComparison.Ordinal);
 
         // Review L1: the marker sits on a row the page never shows (it lists the newest ten), so the *count*

@@ -7,7 +7,7 @@
 
 @* Card F-021: the Parameters tab, both kinds. The definitions are project data; a run carries the
    values it was triggered with, so editing here never moves a queued or running run. *@
-<PageTitle>Parameters · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+<PageTitle>@L10n["Parameters"] · @(_project?.Name ?? L10n["Project"]) · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
     @if (_project is null)
@@ -20,7 +20,7 @@
     {
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                <BbCardTitle As="h1" tabindex="-1">Parameters · @_project.Name</BbCardTitle>
+                <BbCardTitle As="h1" tabindex="-1">@L10n["Parameters"] · @_project.Name</BbCardTitle>
             </div>
         </div>
 
@@ -36,12 +36,9 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Build parameters</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Build parameters"]</BbCardTitle>
                 <BbCardDescription>
-                    The inputs a trigger fills in. Every step of a run - Pipeline or Freestyle - reads
-                    a parameter's value as an environment variable under its own name; a trigger
-                    without user input (a webhook) resolves the defaults. Values are visible on the
-                    run page: a sensitive value belongs in the organization's Secrets, not here.
+                    @L10n["The inputs a trigger fills in. Every step of a run - Pipeline or Freestyle - reads a parameter's value as an environment variable under its own name; a trigger without user input (a webhook) resolves the defaults. Values are visible on the run page: a sensitive value belongs in the organization's Secrets, not here."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -69,7 +66,7 @@
 
     private string? Notice => NoticeCode switch
     {
-        "parameters-saved" => "The parameters were saved; the trigger form now shows them.",
+        "parameters-saved" => L10n["The parameters were saved; the trigger form now shows them."],
         _ => null,
     };
 

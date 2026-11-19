@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Zenkins.Server.Secrets;
 
 namespace Zenkins.Server.Git;
@@ -57,29 +58,27 @@ public static class GitCredentialErrorCodes
     };
 
     /// <summary>The message rendered next to the field.</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message the page renders for a code, in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        NameRequired => "Enter a credential name.",
+        NameRequired => L10n["Enter a credential name."],
         NameTooLong =>
-            $"The credential name must be at most {SecretValidation.MaxNameLength} characters.",
+            L10n["The credential name must be at most {0} characters.", SecretValidation.MaxNameLength],
         NameInvalid =>
-            "Use letters, digits and underscores only, starting with a letter or an underscore.",
-        NameDuplicate => "A Git credential with this name already exists in this organization.",
-        KindInvalid => "Choose 'HTTPS token' or 'SSH key'.",
-        ValueRequired => "Enter the credential value.",
+            L10n["Use letters, digits and underscores only, starting with a letter or an underscore."],
+        NameDuplicate => L10n["A Git credential with this name already exists in this organization."],
+        KindInvalid => L10n["Choose 'HTTPS token' or 'SSH key'."],
+        ValueRequired => L10n["Enter the credential value."],
         ValueTooLong =>
-            $"The credential value must be at most {SecretValidation.MaxValueLength} characters.",
+            L10n["The credential value must be at most {0} characters.", SecretValidation.MaxValueLength],
         ValueShape =>
-            "An HTTPS token must be a single line; an SSH key must be a PRIVATE KEY block "
-            + "starting with '-----BEGIN'.",
-        UserNameTooLong => "The user name must be at most 200 characters.",
-        UserNameInvalid => "The user name must not contain control characters or line breaks.",
+            L10n["An HTTPS token must be a single line; an SSH key must be a PRIVATE KEY block starting with '-----BEGIN'."],
+        UserNameTooLong => L10n["The user name must be at most 200 characters."],
+        UserNameInvalid => L10n["The user name must not contain control characters or line breaks."],
         CredentialNotFound =>
-            "That Git credential does not exist in this organization. Reload the page and choose one of "
-            + "the credentials listed there.",
+            L10n["That Git credential does not exist in this organization. Reload the page and choose one of the credentials listed there."],
         CredentialInUse =>
-            "This Git credential is still assigned to at least one project. Detach it there first, or "
-            + "confirm the delete to remove it together with those assignments.",
+            L10n["This Git credential is still assigned to at least one project. Detach it there first, or confirm the delete to remove it together with those assignments."],
         _ => null,
     };
 }

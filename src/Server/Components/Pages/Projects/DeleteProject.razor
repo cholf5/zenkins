@@ -4,11 +4,11 @@
 @inject ProjectService ProjectsService
 @inject ProjectLinkService LinkService
 
-<PageTitle>Delete project · Zenkins</PageTitle>
+<PageTitle>@L10n["Delete project"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Delete project</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Delete project"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
@@ -25,14 +25,13 @@
            POST is a 403 with no state change. *@
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Owner access required</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Owner access required"]</BbCardTitle>
                 <BbCardDescription>
-                    Deleting a project is part of project management, which PRD §3.1.2 reserves to
-                    organization Owners. Members can view, create and edit projects.
+                    @L10n["Deleting a project is part of project management, which PRD §3.1.2 reserves to organization Owners. Members can view, create and edit projects."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
-                <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">Back to project</BbButton>
+                <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">@L10n["Back to project"]</BbButton>
             </BbCardContent>
         </BbCard>
     }
@@ -40,21 +39,20 @@
     {
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Delete “@_project.Name”?</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Delete “{0}”?", _project.Name]</BbCardTitle>
                 <BbCardDescription>
-                    This permanently removes the project from this organization, together with its
-                    runs, its webhooks and its upstream/downstream links. It cannot be undone.
+                    @L10n["This permanently removes the project from this organization, together with its runs, its webhooks and its upstream/downstream links. It cannot be undone."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <div class="bb:space-y-4">
                     <dl class="bb:grid bb:grid-cols-1 bb:gap-2 bb:text-sm">
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Repository"]</dt>
                             <dd class="bb:break-all">@_project.RepositoryUrl</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Pipeline path"]</dt>
                             <dd>@_project.PipelinePath</dd>
                         </div>
                     </dl>
@@ -64,12 +62,11 @@
                        when a build->test->deploy chain quietly stops halfway. Both directions are listed, because
                        deleting a middle project breaks the chain above it and below it. *@
                     <div id="delete-chain-affected">
-                        <p class="bb:text-sm bb:font-medium">Chain links removed with it</p>
+                        <p class="bb:text-sm bb:font-medium">@L10n["Chain links removed with it"]</p>
                         @if (_upstreamLinks.Count + _downstreamLinks.Count == 0)
                         {
                             <p id="delete-chain-affected-none" class="bb:mt-1 bb:text-sm bb:text-muted-foreground">
-                                None. This project neither queues another one nor is queued by one, so deleting it
-                                removes no trigger in either direction.
+                                @L10n["None. This project neither queues another one nor is queued by one, so deleting it removes no trigger in either direction."]
                             </p>
                         }
                         else
@@ -77,23 +74,22 @@
                             <ul class="bb:mt-1 bb:list-disc bb:space-y-1 bb:ps-5 bb:text-sm">
                                 @foreach (var link in _upstreamLinks)
                                 {
-                                    <li data-chain-affected-upstream="@link.UpstreamProjectId">Runs of this project stop being triggered by <span class="bb:font-medium">@link.UpstreamProjectName</span>.</li>
+                                    <li data-chain-affected-upstream="@link.UpstreamProjectId">@L10n["Runs of this project stop being triggered by {0}.", link.UpstreamProjectName]</li>
                                 }
                                 @foreach (var link in _downstreamLinks)
                                 {
-                                    <li data-chain-affected-downstream="@link.DownstreamProjectId">Runs of <span class="bb:font-medium">@link.DownstreamProjectName</span> stop being triggered by this project.</li>
+                                    <li data-chain-affected-downstream="@link.DownstreamProjectId">@L10n["Runs of {0} stop being triggered by this project.", link.DownstreamProjectName]</li>
                                 }
                             </ul>
                             <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                The links are removed by the same delete; a trigger already queued for a link that
-                                is gone settles as <code>skipped-missing</code> instead of failing.
+                                @L10n["The links are removed by the same delete; a trigger already queued for a link that is gone settles as"] <code>skipped-missing</code> @L10n["instead of failing."]
                             </p>
                         }
                     </div>
 
                     <form method="post" action="@($"/projects/{_project.Id}/delete")" data-zenkins-antiforgery class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete project</BbButton>
-                        <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">Cancel</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">@L10n["Delete project"]</BbButton>
+                        <BbButton Href="@($"/projects/{_project.Id}")" Variant="ButtonVariant.Outline">@L10n["Cancel"]</BbButton>
                     </form>
                 </div>
             </BbCardContent>

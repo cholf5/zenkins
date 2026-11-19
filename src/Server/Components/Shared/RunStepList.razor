@@ -13,7 +13,7 @@
             <BbBadge Variant="@RunDisplay.StepBadgeFor(step.Status)">@step.Status</BbBadge>
             @if (step.ExitCode is { } exitCode)
             {
-                <span class="bb:text-xs bb:text-muted-foreground">exit @exitCode</span>
+                <span class="bb:text-xs bb:text-muted-foreground">@L10n["exit {0}", exitCode]</span>
             }
             @if (step.Duration is { } duration)
             {
@@ -24,11 +24,11 @@
                step identity stays 1:1). *@
             @if (step.Attempts > 1)
             {
-                <span id="@($"run-step-attempts-{step.Name}")" class="bb:text-xs bb:text-muted-foreground">attempts @step.Attempts</span>
+                <span id="@($"run-step-attempts-{step.Name}")" class="bb:text-xs bb:text-muted-foreground">@L10n["attempts {0}", step.Attempts]</span>
             }
             @if (step.FailureReason is { } reason)
             {
-                <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.StepReasonText(reason)</span>
+                <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.StepReasonText(reason, L10n)</span>
             }
             @* D-004: selecting a step jumps to the log filtered to that step. The fragment brings the panel
                into view; the handler pushes the step row's id down into the panel's filter (StepId, never
@@ -40,7 +40,7 @@
                 <a id="@($"run-step-log-{step.Name}")" href="#run-log"
                    data-enhance-nav="none"
                    class="bb:text-xs bb:font-medium bb:text-primary bb:hover:underline"
-                   @onclick="@(() => StepSelected.InvokeAsync(stepRowId))">View log</a>
+                   @onclick="@(() => StepSelected.InvokeAsync(stepRowId))">@L10n["View log"]</a>
             }
         </div>
         @if (step.Argv is { Length: > 0 } argv)

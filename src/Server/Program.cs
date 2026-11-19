@@ -18,6 +18,7 @@ using Zenkins.Server.Dashboard;
 using Zenkins.Server.Environments;
 using Zenkins.Server.Folders;
 using Zenkins.Server.Git;
+using Zenkins.Server.Localization;
 using Zenkins.Server.LogStreaming;
 using Zenkins.Server.Notifications;
 using Zenkins.Server.Organizations;
@@ -60,6 +61,10 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddZenkinsData(builder.Configuration);
 builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
+
+// Two UI languages (v1: English and Simplified Chinese): the catalogue, the request/circuit
+// language, and the localizer every component reads its copy through.
+builder.Services.AddZenkinsLocalization();
 builder.Services.AddZenkinsProjects();
 
 // F-042: the organization's folder tree - the projects page's grouping and its breadcrumbs.
@@ -257,6 +262,9 @@ app.MapRazorComponents<App>()
 // Real POST endpoints for switching and Owner-only management (F-002). Form-bound, so the existing
 // UseAntiforgery validates every call.
 app.MapOrganizationEndpoints();
+
+// The language switcher's POST (/language): writes the preference cookie and reloads the document.
+app.MapLanguageEndpoints();
 
 // Project create/edit/delete (F-003). Same form-bound, antiforgery-validated shape; the service
 // enforces membership (create/edit) and Owner-only deletion.

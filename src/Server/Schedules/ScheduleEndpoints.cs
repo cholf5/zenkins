@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
+using Zenkins.Server.Localization;
 
 namespace Zenkins.Server.Schedules;
 
@@ -52,7 +53,8 @@ public static class ScheduleEndpoints
         [FromForm] ScheduleForm form,
         HttpContext httpContext,
         ScheduleService schedules,
-        TimeProvider clock)
+        TimeProvider clock,
+        Localizer L10n)
     {
         var userId = FindUserId(httpContext);
         if (userId is null)
@@ -66,7 +68,7 @@ public static class ScheduleEndpoints
         // "Preview" is the same form's second submit: it validates and echoes, and stores nothing.
         if (string.Equals(form?.Action, "preview", StringComparison.OrdinalIgnoreCase))
         {
-            var preview = SchedulePreview.Compute(input.Cron, input.TimeZone, clock.GetUtcNow());
+            var preview = SchedulePreview.Compute(input.Cron, input.TimeZone, clock.GetUtcNow(), L10n);
             var fields = new Dictionary<string, string?>(StringComparer.Ordinal)
             {
                 ["previewCron"] = input.Cron,

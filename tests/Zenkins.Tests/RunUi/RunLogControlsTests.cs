@@ -1,6 +1,7 @@
 using Xunit;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Server.Components.Shared;
+using Zenkins.Tests.Localization;
 
 namespace Zenkins.Tests.RunUi;
 
@@ -33,7 +34,7 @@ public sealed class RunLogControlsTests
         var viewModel = new RunLogViewModel();
         viewModel.Add(Enumerable.Range(1, 30).Select(seq => Line(seq, $"line-{seq}")));
 
-        var before = viewModel.Plan(Headers);
+        var before = viewModel.Plan(Headers, TestText.English);
         Assert.Equal(30, before.Entries.Count);
         Assert.False(before.IsPaused);
         Assert.Equal("Following live", before.Indicator);
@@ -43,7 +44,7 @@ public sealed class RunLogControlsTests
 
         // The store took everything (the stream never stopped); the viewport did not move.
         Assert.Equal(60, viewModel.Count);
-        var frozen = viewModel.Plan(Headers);
+        var frozen = viewModel.Plan(Headers, TestText.English);
         Assert.True(frozen.IsPaused);
         Assert.Equal("Paused - 30 new lines waiting", frozen.Indicator);
         Assert.Equal(30, frozen.Entries.Count);
@@ -64,7 +65,7 @@ public sealed class RunLogControlsTests
 
         viewModel.Resume();
 
-        var plan = viewModel.Plan(Headers);
+        var plan = viewModel.Plan(Headers, TestText.English);
         Assert.False(plan.IsPaused);
         Assert.Equal(0, plan.NewWhilePaused);
         Assert.Equal(60, plan.Entries.Count);
@@ -77,16 +78,16 @@ public sealed class RunLogControlsTests
     {
         var viewModel = new RunLogViewModel();
         viewModel.Pause();
-        var frozen = viewModel.Plan(Headers);
+        var frozen = viewModel.Plan(Headers, TestText.English);
         Assert.True(frozen.IsPaused);
         Assert.Empty(frozen.Entries);
         Assert.Equal("Paused", frozen.Indicator);
 
         viewModel.Add([Line(1, "late line")]);
-        Assert.Empty(viewModel.Plan(Headers).Entries);
+        Assert.Empty(viewModel.Plan(Headers, TestText.English).Entries);
 
         viewModel.Resume();
-        Assert.Single(viewModel.Plan(Headers).Entries);
+        Assert.Single(viewModel.Plan(Headers, TestText.English).Entries);
     }
 
     // ------------------------------------------------------------------
@@ -107,7 +108,7 @@ public sealed class RunLogControlsTests
         ]);
 
         viewModel.SetSearch("deploy");
-        var plan = viewModel.Plan(Headers);
+        var plan = viewModel.Plan(Headers, TestText.English);
 
         Assert.True(plan.SearchActive);
         Assert.Equal(4, plan.MatchCount);
@@ -126,7 +127,7 @@ public sealed class RunLogControlsTests
         ]);
 
         viewModel.SetSearch("a.c");
-        Assert.Equal(1, viewModel.Plan(Headers).MatchCount);
+        Assert.Equal(1, viewModel.Plan(Headers, TestText.English).MatchCount);
     }
 
     [Fact]
@@ -143,22 +144,22 @@ public sealed class RunLogControlsTests
 
         viewModel.SetSearch("hit");
         viewModel.MoveToNextMatch();
-        var first = viewModel.Plan(Headers);
+        var first = viewModel.Plan(Headers, TestText.English);
         Assert.Equal(1, first.CurrentMatchIndex);
         Assert.Equal(1, first.CurrentMatchSeq);
         Assert.Equal("Match 1 of 3 for \"hit\".", first.SearchSummary);
 
         viewModel.MoveToNextMatch();
         viewModel.MoveToNextMatch();
-        var last = viewModel.Plan(Headers);
+        var last = viewModel.Plan(Headers, TestText.English);
         Assert.Equal(3, last.CurrentMatchIndex);
         Assert.Equal(4, last.CurrentMatchSeq);
 
         // Wrapping: next past the last returns to the first, previous past the first to the last.
         viewModel.MoveToNextMatch();
-        Assert.Equal((1, 1L), (viewModel.Plan(Headers).CurrentMatchIndex, viewModel.Plan(Headers).CurrentMatchSeq));
+        Assert.Equal((1, 1L), (viewModel.Plan(Headers, TestText.English).CurrentMatchIndex, viewModel.Plan(Headers, TestText.English).CurrentMatchSeq));
         viewModel.MoveToPreviousMatch();
-        var wrapped = viewModel.Plan(Headers);
+        var wrapped = viewModel.Plan(Headers, TestText.English);
         Assert.Equal(3, wrapped.CurrentMatchIndex);
         Assert.Equal(4, wrapped.CurrentMatchSeq);
     }
@@ -172,10 +173,10 @@ public sealed class RunLogControlsTests
             .Select(seq => Line(seq, $"needle {seq}")));
 
         viewModel.SetSearch("needle");
-        Assert.Equal(2500, viewModel.Plan(Headers).MatchCount);
+        Assert.Equal(2500, viewModel.Plan(Headers, TestText.English).MatchCount);
 
         viewModel.MoveToNextMatch();
-        var first = viewModel.Plan(Headers);
+        var first = viewModel.Plan(Headers, TestText.English);
         Assert.Equal(1, first.CurrentMatchIndex);
         Assert.Equal(1, first.CurrentMatchSeq);
         Assert.Equal(RunLogViewModel.RenderCap, first.Entries.Count); // the window is the cap...
@@ -187,7 +188,7 @@ public sealed class RunLogControlsTests
             .Select(seq => Line(seq, seq == 10 ? "the only needle here" : $"filler {seq}")));
         sparse.SetSearch("needle");
         sparse.MoveToNextMatch();
-        var only = sparse.Plan(Headers);
+        var only = sparse.Plan(Headers, TestText.English);
         Assert.Single(only.Entries);
         Assert.Equal(10, only.Entries[0].Line.Seq);
         Assert.False(only.IsCapped);
@@ -196,7 +197,7 @@ public sealed class RunLogControlsTests
         // Jumping back to the tail drops the navigation cursor (and stays on the matches, since the
         // search is still active).
         sparse.JumpToTail();
-        var tail = sparse.Plan(Headers);
+        var tail = sparse.Plan(Headers, TestText.English);
         Assert.Equal(0, tail.CurrentMatchIndex);
         Assert.Null(tail.CurrentMatchSeq);
         Assert.Single(tail.Entries);
@@ -209,7 +210,7 @@ public sealed class RunLogControlsTests
         viewModel.Add([Line(1, "only ordinary lines")]);
 
         viewModel.SetSearch("nope");
-        var plan = viewModel.Plan(Headers);
+        var plan = viewModel.Plan(Headers, TestText.English);
 
         Assert.Equal(0, plan.MatchCount);
         Assert.Equal(0, plan.CurrentMatchIndex);
@@ -220,7 +221,7 @@ public sealed class RunLogControlsTests
         // Navigation with zero matches is a no-op, never a crash or a wrap to a bogus position.
         viewModel.MoveToNextMatch();
         viewModel.MoveToPreviousMatch();
-        Assert.Equal(0, viewModel.Plan(Headers).CurrentMatchIndex);
+        Assert.Equal(0, viewModel.Plan(Headers, TestText.English).CurrentMatchIndex);
     }
 
     [Fact]
@@ -229,10 +230,10 @@ public sealed class RunLogControlsTests
         var viewModel = new RunLogViewModel();
         viewModel.Add([Line(1, "one"), Line(2, "two")]);
         viewModel.SetSearch("one");
-        Assert.Single(viewModel.Plan(Headers).Entries);
+        Assert.Single(viewModel.Plan(Headers, TestText.English).Entries);
 
         viewModel.SetSearch("");
-        var plan = viewModel.Plan(Headers);
+        var plan = viewModel.Plan(Headers, TestText.English);
         Assert.False(plan.SearchActive);
         Assert.Null(plan.SearchSummary);
         Assert.Equal(2, plan.Entries.Count);
@@ -257,7 +258,7 @@ public sealed class RunLogControlsTests
         ]);
 
         viewModel.SetStepFilter(stepB);
-        var plan = viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Echo")));
+        var plan = viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Echo")), TestText.English);
 
         Assert.Equal(stepB, plan.StepFilter);
         Assert.Single(plan.Entries);
@@ -275,14 +276,14 @@ public sealed class RunLogControlsTests
         var viewModel = new RunLogViewModel();
         viewModel.Add([Line(1, "a-one", stepA), Line(2, "a-two", stepA)]);
 
-        var plan = viewModel.Plan(HeadersFor((stepA, "1. Loud"), (stepB, "2. Silent")));
+        var plan = viewModel.Plan(HeadersFor((stepA, "1. Loud"), (stepB, "2. Silent")), TestText.English);
 
         Assert.Equal(2, plan.StepCounts[stepA]);
         Assert.Equal(0, plan.StepCounts[stepB]);
 
         // The silent step is selectable, and the panel says it produced no output.
         viewModel.SetStepFilter(stepB);
-        var silent = viewModel.Plan(HeadersFor((stepA, "1. Loud"), (stepB, "2. Silent")));
+        var silent = viewModel.Plan(HeadersFor((stepA, "1. Loud"), (stepB, "2. Silent")), TestText.English);
         Assert.Empty(silent.Entries);
         Assert.Equal("No output was captured for 2. Silent.", silent.EmptyMessage);
     }
@@ -302,16 +303,16 @@ public sealed class RunLogControlsTests
 
         viewModel.SetStepFilter(stepA);
         viewModel.SetSearch("marker");
-        var plan = viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Test")));
+        var plan = viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Test")), TestText.English);
 
         Assert.Equal(2, plan.MatchCount); // not 3: step B's marker is filtered out
         viewModel.MoveToNextMatch();
         viewModel.MoveToNextMatch();
-        Assert.Equal(3, viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Test"))).CurrentMatchSeq);
+        Assert.Equal(3, viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Test")), TestText.English).CurrentMatchSeq);
 
         // A search that matches nothing inside the step says where it looked.
         viewModel.SetSearch("from test");
-        var empty = viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Test")));
+        var empty = viewModel.Plan(HeadersFor((stepA, "1. Build"), (stepB, "2. Test")), TestText.English);
         Assert.Equal(0, empty.MatchCount);
         Assert.Equal("No lines in 1. Build match \"from test\".", empty.EmptyMessage);
     }
@@ -326,7 +327,7 @@ public sealed class RunLogControlsTests
         var viewModel = new RunLogViewModel();
         viewModel.Add(Enumerable.Range(1, 5000).Select(seq => Line(seq, $"line-{seq}")));
 
-        var plan = viewModel.Plan(Headers);
+        var plan = viewModel.Plan(Headers, TestText.English);
 
         Assert.Equal(5000, plan.TotalLines);
         Assert.True(plan.IsCapped);
@@ -345,7 +346,7 @@ public sealed class RunLogControlsTests
         var viewModel = new RunLogViewModel();
         viewModel.Add(Enumerable.Range(1, 42).Select(seq => Line(seq, $"line-{seq}")));
 
-        var plan = viewModel.Plan(Headers);
+        var plan = viewModel.Plan(Headers, TestText.English);
 
         Assert.Equal(42, plan.Entries.Count);
         Assert.False(plan.IsCapped);
@@ -359,7 +360,7 @@ public sealed class RunLogControlsTests
         var viewModel = new RunLogViewModel();
         viewModel.Add(Enumerable.Range(1, 5000).Select(seq => Line(seq, $"line-{seq}", step)));
 
-        var plan = viewModel.Plan(new Dictionary<Guid, string> { [step] = "1. Long" });
+        var plan = viewModel.Plan(new Dictionary<Guid, string> { [step] = "1. Long" }, TestText.English);
 
         // The window begins inside step 1's segment; the header is still there, so the truncated
         // view never shows anonymous lines.

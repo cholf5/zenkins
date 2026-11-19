@@ -17,7 +17,7 @@
    frozen spec of the newest run (F-014) with its step names in order. Editing pipeline content
    belongs to the repository. A Freestyle project (F-020) is the other half: its definition lives on
    the server, so this same route renders the steps editor instead. *@
-<PageTitle>@(_project is { } project && project.Kind == ProjectKinds.Freestyle ? "Steps" : "Pipelines") · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+<PageTitle>@(_project is { } project && project.Kind == ProjectKinds.Freestyle ? L10n["Steps"] : L10n["Pipelines"]) · @(_project?.Name ?? L10n["Project"]) · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
     @if (_project is null)
@@ -30,7 +30,7 @@
     {
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                <BbCardTitle As="h1" tabindex="-1">Steps · @_project.Name</BbCardTitle>
+                <BbCardTitle As="h1" tabindex="-1">@L10n["Steps"] · @_project.Name</BbCardTitle>
                 <BbBadge Variant="BadgeVariant.Outline">Freestyle</BbBadge>
             </div>
         </div>
@@ -47,12 +47,9 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Steps</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Steps"]</BbCardTitle>
                 <BbCardDescription>
-                    The steps this project runs, in order. Every step is a script the claiming worker
-                    executes in the run's workspace - no repository, no clone. Saving freezes this
-                    list onto the project; a run carries the snapshot it was triggered with, so
-                    editing here never moves a queued or running run.
+                    @L10n["The steps this project runs, in order. Every step is a script the claiming worker executes in the run's workspace - no repository, no clone. Saving freezes this list onto the project; a run carries the snapshot it was triggered with, so editing here never moves a queued or running run."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -71,8 +68,8 @@
     {
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                <BbCardTitle As="h1" tabindex="-1">Pipelines · @_project.Name</BbCardTitle>
-                <BbBadge Variant="BadgeVariant.Outline">Inline</BbBadge>
+                <BbCardTitle As="h1" tabindex="-1">@L10n["Pipelines"] · @_project.Name</BbCardTitle>
+                <BbBadge Variant="BadgeVariant.Outline">@L10n["Inline"]</BbBadge>
             </div>
         </div>
 
@@ -96,11 +93,10 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Pipeline script</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Pipeline script"]</BbCardTitle>
                 <BbCardDescription>
-                    This project's definition lives here, not in a repository. Every run snapshots the
-                    script at trigger time and its worker runs the definition phase against
-                    <code>pipeline.lua</code>, so a later edit never moves a queued or running run.
+                    @L10n["This project's definition lives here, not in a repository. Every run snapshots the script at trigger time and its worker runs the definition phase against"]
+                    <code>pipeline.lua</code>@L10n[", so a later edit never moves a queued or running run."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -108,7 +104,7 @@
                       action="@($"/projects/{_project.Id}/inline/script")"
                       data-zenkins-antiforgery
                       class="bb:space-y-3">
-                    <label for="inline-script" class="bb:text-sm bb:font-medium">Script</label>
+                    <label for="inline-script" class="bb:text-sm bb:font-medium">@L10n["Script"]</label>
                     <textarea id="inline-script"
                               name="Script"
                               rows="18"
@@ -122,7 +118,7 @@
                     {
                         <div id="inline-snippets" class="bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-sm">
                             <label for="inline-snippet-select" class="bb:mb-1 bb:block bb:text-xs bb:font-medium">
-                                Insert a snippet
+                                @L10n["Insert a snippet"]
                             </label>
                             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                                 <select id="inline-snippet-select"
@@ -138,7 +134,7 @@
                                         data-snippet-target="#inline-script"
                                         data-snippet-list="luaFragment"
                                         class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-1 bb:text-xs">
-                                    Insert at caret
+                                    @L10n["Insert at caret"]
                                 </button>
                                 <span data-snippet-status class="bb:text-xs bb:text-muted-foreground"></span>
                             </div>
@@ -147,7 +143,7 @@
                     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
                         <button type="submit"
                                 class="bb:inline-flex bb:h-9 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
-                            Save script
+                            @L10n["Save script"]
                         </button>
                         @* F-022 (AC-6): Validate runs the definition phase on a worker and shows the
                            step list. It does not save and does not create a run - the button posts the
@@ -157,7 +153,7 @@
                         <button type="submit"
                                 formaction="@($"/projects/{_project.Id}/inline/validate")"
                                 class="bb:inline-flex bb:h-9 bb:items-center bb:justify-center bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-4 bb:text-sm bb:font-medium">
-                            Validate
+                            @L10n["Validate"]
                         </button>
                     </div>
                 </form>
@@ -168,24 +164,22 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Validation result</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Validation result"]</BbCardTitle>
                     <BbCardDescription>
-                        What the definition phase produced for the text that was validated. No step ran and
-                        no run was created. Saving the script alone never claims it is valid.
+                        @L10n["What the definition phase produced for the text that was validated. No step ran and no run was created. Saving the script alone never claims it is valid."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     @if (validation.NoWorker)
                     {
                         <p id="inline-validation-no-worker" class="bb:text-sm bb:text-muted-foreground">
-                            No worker answered the validation before the wait ended. Start a worker and try
-                            again; the script was not saved and nothing was queued.
+                            @L10n["No worker answered the validation before the wait ended. Start a worker and try again; the script was not saved and nothing was queued."]
                         </p>
                     }
                     else if (validation.Valid)
                     {
                         <p id="inline-validation-valid" class="bb:text-sm">
-                            Valid — the definition declares <span class="bb:font-medium">@validation.StepNames.Count</span> step(s):
+                            @L10n["Valid — the definition declares"] <span class="bb:font-medium">@validation.StepNames.Count</span> @L10n["step(s):"]
                         </p>
                         <ol id="inline-validation-steps" class="bb:mt-2 bb:space-y-2 bb:text-sm">
                             @for (var stepIndex = 0; stepIndex < validation.StepNames.Count; stepIndex++)
@@ -200,7 +194,7 @@
                     else
                     {
                         <p id="inline-validation-invalid" class="bb:text-sm bb:text-destructive">
-                            Invalid — @validation.FailureReason
+                            @L10n["Invalid —"] @validation.FailureReason
                         </p>
                         <pre id="inline-validation-diagnostic" class="bb:mt-2 bb:overflow-x-auto bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-xs">@validation.Diagnostic</pre>
                     }
@@ -216,7 +210,7 @@
 
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                <BbCardTitle As="h1" tabindex="-1">Pipelines · @_project.Name</BbCardTitle>
+                <BbCardTitle As="h1" tabindex="-1">@L10n["Pipelines"] · @_project.Name</BbCardTitle>
                 <BbBadge Variant="BadgeVariant.Outline">@_project.DefaultBranch</BbBadge>
             </div>
         </div>
@@ -226,20 +220,19 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Pipeline file</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Pipeline file"]</BbCardTitle>
                 <BbCardDescription>
-                    Every run executes this file from the repository. The file's content is the
-                    repository's to own; the worker validates it before the first step starts.
+                    @L10n["Every run executes this file from the repository. The file's content is the repository's to own; the worker validates it before the first step starts."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Pipeline path"]</dt>
                         <dd id="pipelines-path" class="bb:break-all">@_project.PipelinePath</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Default branch"]</dt>
                         <dd>@_project.DefaultBranch</dd>
                     </div>
                 </dl>
@@ -252,11 +245,11 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Snippet library</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Snippet library"]</BbCardTitle>
                     <BbCardDescription>
-                        Copy a fragment into <code>@_project.PipelinePath</code> in your repository. The
-                        product never rewrites your repository; the file stays the source of truth, and a
-                        snippet edit never changes a committed pipeline.
+                        @L10n["Copy a fragment into"]
+                        <code>@_project.PipelinePath</code>
+                        @L10n["in your repository. The product never rewrites your repository; the file stays the source of truth, and a snippet edit never changes a committed pipeline."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
@@ -271,7 +264,7 @@
                                             data-snippet-id="@snippet.Id"
                                             data-snippet-list="luaFragment"
                                             class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs">
-                                        Copy
+                                        @L10n["Copy"]
                                     </button>
                                     <span data-snippet-status class="bb:text-xs bb:text-muted-foreground"></span>
                                 </div>
@@ -289,8 +282,8 @@
 
         @if (_newestRun is not { } run)
         {
-            <BbEmpty Title="No runs yet"
-                     Description="The frozen spec appears here when the first run has reported its pipeline definition.">
+            <BbEmpty Title="@L10n["No runs yet"]"
+                     Description="@L10n["The frozen spec appears here when the first run has reported its pipeline definition."]">
                 <Icon>
                     <LucideIcon Name="file-code" Class="bb:h-12 bb:w-12" />
                 </Icon>
@@ -300,26 +293,25 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Frozen spec of the newest run</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Frozen spec of the newest run"]</BbCardTitle>
                     <BbCardDescription>
-                        The validated pipeline definition the newest run froze before its first step
-                        started. A later commit never changes what a run shows.
+                        @L10n["The validated pipeline definition the newest run froze before its first step started. A later commit never changes what a run shows."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Run</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Run"]</dt>
                             <dd>
-                                <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
+                                <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", run.Number]</a>
                             </dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branch</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Branch"]</dt>
                             <dd id="pipelines-branch" class="bb:break-all">@run.GitBranch</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Commit</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Commit"]</dt>
                             <dd id="pipelines-commit" class="bb:break-all">@(run.GitCommit ?? "-")</dd>
                         </div>
                     </dl>
@@ -329,12 +321,12 @@
                         @* The spec's validated shape: schema version, pipeline name and the step
                            names in declaration order (the order the executor runs them in). *@
                         <p class="bb:mt-4 bb:text-sm">
-                            <span class="bb:font-medium">Pipeline:</span>
+                            <span class="bb:font-medium">@L10n["Pipeline:"]</span>
                             <span id="pipelines-name">@pipeline.Name</span>
                             @* The explicit expression matters: "v@..." after a letter is an
                                email-style literal in Razor, never code. *@
                             <span class="bb:text-muted-foreground">
-                                (schema v@(pipeline.Version), @pipeline.Steps.Length step(s))
+                                @L10n["(schema v{0}, {1} step(s))", pipeline.Version, pipeline.Steps.Length]
                             </span>
                         </p>
                         <ol id="pipelines-steps" class="bb:mt-2 bb:space-y-2 bb:text-sm">
@@ -352,7 +344,7 @@
                     else
                     {
                         <p id="pipelines-spec-pending" class="bb:mt-4 bb:text-sm bb:text-muted-foreground">
-                            No pipeline definition was reported for this run.
+                            @L10n["No pipeline definition was reported for this run."]
                         </p>
                     }
                 </BbCardContent>
@@ -384,12 +376,12 @@
 
     private string? Notice => NoticeCode switch
     {
-        "steps-saved" => "The steps were saved; the next run carries this snapshot.",
-        "script-saved" => "The script was saved; the next run carries this snapshot. Saving does not prove it valid - use Validate.",
+        "steps-saved" => L10n["The steps were saved; the next run carries this snapshot."],
+        "script-saved" => L10n["The script was saved; the next run carries this snapshot. Saving does not prove it valid - use Validate."],
         _ => null,
     };
 
-    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
+    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode, L10n);
 
     private ProjectView? _project;
     private RunView? _newestRun;

@@ -3,6 +3,7 @@ using Xunit;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Server.Components.Shared;
+using Zenkins.Tests.Localization;
 
 namespace Zenkins.Tests.RunUi;
 
@@ -65,7 +66,7 @@ public sealed class RunLogStepAgreementTests
 
         // ----- The search count equals the matching persisted lines. -----
         viewModel.SetSearch(marker);
-        var searched = viewModel.Plan(headers);
+        var searched = viewModel.Plan(headers, TestText.English);
         var rows = await host.Streaming.ReadLogRowsAsync(run.RunId);
         var databaseMatches = rows.Count(row => row.Message.Contains(marker, StringComparison.OrdinalIgnoreCase));
         Assert.Equal(3, databaseMatches);
@@ -74,7 +75,7 @@ public sealed class RunLogStepAgreementTests
         // ----- The step filter is keyed on StepId: only step 2's lines, fewer than the search. -----
         viewModel.SetSearch(string.Empty);
         viewModel.SetStepFilter(deploy);
-        var filtered = viewModel.Plan(headers);
+        var filtered = viewModel.Plan(headers, TestText.English);
         Assert.Equal(2, filtered.Entries.Count);
         Assert.All(filtered.Entries, entry => Assert.Equal(deploy, entry.Line.StepId));
         Assert.True(
@@ -85,14 +86,14 @@ public sealed class RunLogStepAgreementTests
         Assert.DoesNotContain(filtered.Entries, entry => entry.Line.Seq is 2 or 3);
 
         // ----- The counts agree with the step list's own record: the database rows per step. -----
-        var plan = viewModel.Plan(headers);
+        var plan = viewModel.Plan(headers, TestText.English);
         Assert.Equal(rows.Count(row => row.StepId == build), plan.StepCounts[build]);
         Assert.Equal(rows.Count(row => row.StepId == deploy), plan.StepCounts[deploy]);
         Assert.Equal(0, plan.StepCounts[verify]);
 
         // ----- A step with no output says it produced none. -----
         viewModel.SetStepFilter(verify);
-        var silent = viewModel.Plan(headers);
+        var silent = viewModel.Plan(headers, TestText.English);
         Assert.Empty(silent.Entries);
         Assert.Equal("No output was captured for 3. Verify.", silent.EmptyMessage);
     }

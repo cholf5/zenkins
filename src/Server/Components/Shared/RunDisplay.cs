@@ -1,5 +1,6 @@
 using BlazorBlueprint.Components;
 using Zenkins.Server.Data.Entities;
+using Zenkins.Server.Localization;
 using Zenkins.Shared.Pipelines;
 
 namespace Zenkins.Server.Components.Shared;
@@ -51,19 +52,36 @@ public static class RunDisplay
     /// apart (a step killed by a user cancel, a step that a canceled run never reached, and a step killed by
     /// the run's deadline) - and an unknown code still renders as itself rather than as nothing.
     /// </summary>
-    public static string StepReasonText(string reason) => reason switch
+    public static string StepReasonText(string reason, Localizer L10n) => reason switch
     {
-        PipelineStepFailureReasons.WhenNotMatched => "its when condition did not match",
-        PipelineStepFailureReasons.PreviousStepFailed => "an earlier step failed",
-        PipelineStepFailureReasons.RunCanceled => "the run was canceled before this step",
-        PipelineStepFailureReasons.Canceled => "the run was canceled by a user",
-        PipelineStepFailureReasons.TimedOut => "the run's deadline passed",
-        PipelineStepFailureReasons.StepTimeout => "its own timeout passed",
-        PipelineStepFailureReasons.NotStarted => "the process could not be started",
-        PipelineStepFailureReasons.SecretUnavailable => "a secret could not be resolved",
-        PipelineStepFailureReasons.ArtifactPathRejected => "an artifact path was refused",
-        PipelineStepFailureReasons.ArtifactFailed => "an artifact could not be published",
+        PipelineStepFailureReasons.WhenNotMatched => L10n["its when condition did not match"],
+        PipelineStepFailureReasons.PreviousStepFailed => L10n["an earlier step failed"],
+        PipelineStepFailureReasons.RunCanceled => L10n["the run was canceled before this step"],
+        PipelineStepFailureReasons.Canceled => L10n["the run was canceled by a user"],
+        PipelineStepFailureReasons.TimedOut => L10n["the run's deadline passed"],
+        PipelineStepFailureReasons.StepTimeout => L10n["its own timeout passed"],
+        PipelineStepFailureReasons.NotStarted => L10n["the process could not be started"],
+        PipelineStepFailureReasons.SecretUnavailable => L10n["a secret could not be resolved"],
+        PipelineStepFailureReasons.ArtifactPathRejected => L10n["an artifact path was refused"],
+        PipelineStepFailureReasons.ArtifactFailed => L10n["an artifact could not be published"],
         _ => reason,
+    };
+
+    /// <summary>
+    /// How a run entered the queue, in words (the stored value is a closed code). English keeps the
+    /// lower-case form the pages have always shown; the translation is a word of its own.
+    /// </summary>
+    public static string TriggerTypeText(string triggerType, Localizer L10n) => triggerType switch
+    {
+        BuildRunTriggerType.Manual => L10n["manual"],
+        BuildRunTriggerType.Webhook => L10n["webhook"],
+        BuildRunTriggerType.Api => L10n["api"],
+        BuildRunTriggerType.Rebuild => L10n["rebuild"],
+        BuildRunTriggerType.Replay => L10n["replay"],
+        BuildRunTriggerType.Upstream => L10n["upstream"],
+        BuildRunTriggerType.Schedule => L10n["schedule"],
+        BuildRunTriggerType.Poll => L10n["poll"],
+        _ => triggerType.ToLowerInvariant(),
     };
 
     /// <summary>
@@ -83,7 +101,8 @@ public static class RunDisplay
     public static string DurationOrElapsed(
         DateTimeOffset? startedAt,
         DateTimeOffset? endedAt,
-        DateTimeOffset nowUtc)
+        DateTimeOffset nowUtc,
+        Localizer L10n)
     {
         if (startedAt is not { } start)
         {
@@ -92,7 +111,7 @@ public static class RunDisplay
 
         return endedAt is { } end
             ? FormatDuration(end - start)
-            : $"{FormatDuration(nowUtc - start)} (running)";
+            : L10n["{0} (running)", FormatDuration(nowUtc - start)];
     }
 
     /// <summary>
@@ -114,7 +133,7 @@ public static class RunDisplay
     /// blank claim. Adding a sentence here is a presentation change; it can never hide a reason.
     /// </para>
     /// </summary>
-    public static string FailureReasonText(string? reason, bool? gitCredentialAssigned)
+    public static string FailureReasonText(string? reason, bool? gitCredentialAssigned, Localizer L10n)
     {
         if (string.IsNullOrEmpty(reason))
         {
@@ -126,60 +145,48 @@ public static class RunDisplay
             // Card F-041: a file parameter that could not be materialised - nothing ran, and the fix is to look at
             // the run's inputs rather than at a step.
             PipelineFailureReasons.ParameterFileUnavailable =>
-                "A file parameter could not be prepared on the worker, so no step was started. The run log names "
-                + "the parameter; check that the upload is still there and run again.",
+                L10n["A file parameter could not be prepared on the worker, so no step was started. The run log names the parameter; check that the upload is still there and run again."],
             PipelineFailureReasons.GitAuthRejected when gitCredentialAssigned == false =>
-                "The remote asked for credentials, and no Git credential is assigned to this project. "
-                + "Attach one on the project's settings tab - a credential stored on the worker host is "
-                + "not used.",
+                L10n["The remote asked for credentials, and no Git credential is assigned to this project. Attach one on the project's settings tab - a credential stored on the worker host is not used."],
             PipelineFailureReasons.GitCredentialNotAssigned =>
-                "The repository needs a credential and none is assigned to this project, so the worker did "
-                + "not authenticate (it never borrows a credential from the worker host). Attach one on the "
-                + "project's settings tab and run again.",
+                L10n["The repository needs a credential and none is assigned to this project, so the worker did not authenticate (it never borrows a credential from the worker host). Attach one on the project's settings tab and run again."],
             PipelineFailureReasons.GitAuthRejected =>
-                "The remote rejected the project's Git credential. If it expired or was revoked, rotate "
-                + "it on the project's settings tab.",
+                L10n["The remote rejected the project's Git credential. If it expired or was revoked, rotate it on the project's settings tab."],
             PipelineFailureReasons.GitCredential =>
-                "The project's Git credential could not be used (its kind does not match the repository "
-                + "URL, or the value is unusable). Check it on the project's settings tab.",
+                L10n["The project's Git credential could not be used (its kind does not match the repository URL, or the value is unusable). Check it on the project's settings tab."],
             PipelineFailureReasons.GitUnavailable =>
-                "The worker could not run git. Install git on the worker host and try again.",
+                L10n["The worker could not run git. Install git on the worker host and try again."],
             PipelineFailureReasons.GitInvalidUrl =>
-                "The repository URL is not one git can clone (it is malformed, or it embeds credentials).",
+                L10n["The repository URL is not one git can clone (it is malformed, or it embeds credentials)."],
             PipelineFailureReasons.GitBranchNotFound =>
-                "The branch this run builds does not exist on the remote.",
+                L10n["The branch this run builds does not exist on the remote."],
             PipelineFailureReasons.GitUnreachable =>
-                "The worker could not reach the repository (DNS, connection or TLS). If the host uses a "
-                + "private certificate authority, install it on the worker host.",
+                L10n["The worker could not reach the repository (DNS, connection or TLS). If the host uses a private certificate authority, install it on the worker host."],
             PipelineFailureReasons.GitTimeout =>
-                "A git command exceeded its budget and was stopped.",
+                L10n["A git command exceeded its budget and was stopped."],
             PipelineFailureReasons.GitNonEmptyTarget =>
-                "The run's work directory was not empty, so the clone refused to overwrite it.",
+                L10n["The run's work directory was not empty, so the clone refused to overwrite it."],
             PipelineFailureReasons.GitPathEscape =>
-                "A path would have left the run's work directory, so the operation was refused.",
+                L10n["A path would have left the run's work directory, so the operation was refused."],
             PipelineFailureReasons.GitFailed =>
-                "So git reported a failure; the run log carries the detail.",
+                L10n["So git reported a failure; the run log carries the detail."],
             PipelineFailureReasons.PipelineMissing =>
-                "The pipeline file this project names does not exist in the checked-out commit.",
+                L10n["The pipeline file this project names does not exist in the checked-out commit."],
             PipelineFailureReasons.PipelineSyntax =>
-                "The pipeline script did not compile; the log carries the line and column.",
+                L10n["The pipeline script did not compile; the log carries the line and column."],
             PipelineFailureReasons.PipelineInvalid =>
-                "The pipeline script declared a pipeline the server refused; the log names the field.",
+                L10n["The pipeline script declared a pipeline the server refused; the log names the field."],
             PipelineFailureReasons.PipelineTimeout =>
-                "The pipeline's definition phase ran past the run's deadline and was abandoned.",
+                L10n["The pipeline's definition phase ran past the run's deadline and was abandoned."],
             PipelineFailureReasons.StepFailed =>
-                "A step exited non-zero, so the run failed.",
+                L10n["A step exited non-zero, so the run failed."],
             PipelineFailureReasons.StepTimeout =>
-                "A step exceeded the timeout it declares for itself and was killed there - the run's own "
-                + "deadline (and the steps after it) still had time left. Open the step's log: it says which "
-                + "limit fired.",
+                L10n["A step exceeded the timeout it declares for itself and was killed there - the run's own deadline (and the steps after it) still had time left. Open the step's log: it says which limit fired."],
             PipelineFailureReasons.StepRetryExhausted =>
-                "A step failed and then failed again on every attempt it declared; the run stopped there. "
-                + "Each attempt's output is its own delimited section in the step's log.",
+                L10n["A step failed and then failed again on every attempt it declared; the run stopped there. Each attempt's output is its own delimited section in the step's log."],
             // F-031: the project explicitly asked a failed post step to fail the run.
             PipelineFailureReasons.PostFailed =>
-                "A post step failed, and this project is set to fail the run on a post step failure. The "
-                + "failing step is in the Post steps section, with its own log.",
+                L10n["A post step failed, and this project is set to fail the run on a post step failure. The failing step is in the Post steps section, with its own log."],
             _ => string.Empty,
         };
     }

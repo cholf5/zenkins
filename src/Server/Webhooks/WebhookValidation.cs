@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
 
@@ -38,18 +39,18 @@ public static class WebhookErrorCodes
     };
 
     /// <summary>The message rendered next to the field (and in the form-level alert).</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message the page renders for a code, in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        NameRequired => "Enter a webhook name.",
-        NameTooLong => $"The webhook name must be at most {WebhookValidation.MaxNameLength} characters.",
-        NameInvalid => "The webhook name contains characters that are not allowed.",
-        NameDuplicate => "A webhook with this name already exists in this project.",
+        NameRequired => L10n["Enter a webhook name."],
+        NameTooLong => L10n["The webhook name must be at most {0} characters.", WebhookValidation.MaxNameLength],
+        NameInvalid => L10n["The webhook name contains characters that are not allowed."],
+        NameDuplicate => L10n["A webhook with this name already exists in this project."],
         BranchFilterInvalid =>
-            "Enter comma-separated branch names; a trailing '*' is the only wildcard (for example "
-            + "main, release/*). Leave it blank to follow the project's default branch.",
+            L10n["Enter comma-separated branch names; a trailing '*' is the only wildcard (for example main, release/*). Leave it blank to follow the project's default branch."],
         ProjectNotPipeline =>
-            "A webhook triggers on git pushes; this project is a Freestyle project and has no repository.",
-        TagsInvalid => "Required tags are comma-separated text, at most 64 characters per tag.",
+            L10n["A webhook triggers on git pushes; this project is a Freestyle project and has no repository."],
+        TagsInvalid => L10n["Required tags are comma-separated text, at most 64 characters per tag."],
         _ => null,
     };
 }

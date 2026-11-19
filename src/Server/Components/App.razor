@@ -2,11 +2,14 @@
 @inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
 
 <!DOCTYPE html>
-<html lang="en" class="@(ThemePreference.IsDark(HttpContextAccessor.HttpContext) ? "dark" : null)">
+<html lang="@DocumentLanguage" class="@(ThemePreference.IsDark(HttpContextAccessor.HttpContext) ? "dark" : null)">
 
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    @* The language the document was rendered in. The interactive circuit reads nothing from the DOM,
+       but this stays for diagnostics and for a client that wants the shell's language without the cookie. *@
+    <meta name="zenkins-language" content="@DocumentLanguage" />
     <base href="/" />
 
     @* F-002: the request token for the plain-HTML POST forms in the shell and organization pages.
@@ -60,6 +63,13 @@
 @code {
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
+
+    /// <summary>
+    /// The document's language, resolved exactly as the scoped <c>LanguageContext</c> will resolve it
+    /// for this request, so <c>&lt;html lang&gt;</c> cannot disagree with the rendered copy.
+    /// </summary>
+    private string DocumentLanguage =>
+        HttpContextAccessor.HttpContext is { } http ? AppLanguage.Resolve(http.Request) : AppLanguage.English;
 
     /// <summary>
     /// Interactive server for normal app pages, static SSR (null) for pages that declare

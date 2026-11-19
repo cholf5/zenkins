@@ -2,11 +2,11 @@
 @attribute [Authorize]
 @inject UserSession UserSession
 
-<PageTitle>Organization settings · Zenkins</PageTitle>
+<PageTitle>@L10n["Organization settings"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Organization settings</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Organization settings"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
@@ -22,14 +22,13 @@
         @* A Member gets no management control here; the POST endpoint enforces the same rule. *@
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Owner access required</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Owner access required"]</BbCardTitle>
                 <BbCardDescription>
-                    Organization settings, member management, Workers, Secrets and Projects are Owner-only
-                    (PRD §3.1.2). Your role in this organization is Member.
+                    @L10n["Organization settings, member management, Workers, Secrets and Projects are Owner-only (PRD §3.1.2). Your role in this organization is Member."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
-                <BbButton Href="/organizations/members" Variant="ButtonVariant.Outline">View members</BbButton>
+                <BbButton Href="/organizations/members" Variant="ButtonVariant.Outline">@L10n["View members"]</BbButton>
             </BbCardContent>
         </BbCard>
     }
@@ -51,16 +50,15 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Rename organization</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Rename organization"]</BbCardTitle>
                 <BbCardDescription>
-                    The name appears in the shell switcher for every member. The change is validated
-                    again on the server; a Member's POST is rejected with 403.
+                    @L10n["The name appears in the shell switcher for every member. The change is validated again on the server; a Member's POST is rejected with 403."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <form method="post" action="/organizations/settings" data-zenkins-antiforgery class="bb:space-y-4">
                     <div class="bb:space-y-2">
-                        <label for="organization-name" class="bb:text-sm bb:font-medium">Organization name</label>
+                        <label for="organization-name" class="bb:text-sm bb:font-medium">@L10n["Organization name"]</label>
                         <input id="organization-name"
                                name="Name"
                                value="@_session!.Organization!.Name"
@@ -69,20 +67,20 @@
                                class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                                autocomplete="off" />
                     </div>
-                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save name</BbButton>
+                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Save name"]</BbButton>
                 </form>
             </BbCardContent>
         </BbCard>
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Members</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Members"]</BbCardTitle>
                 <BbCardDescription>
-                    Invite existing accounts, change roles and remove members from the members page.
+                    @L10n["Invite existing accounts, change roles and remove members from the members page."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
-                <BbButton Href="/organizations/members" Variant="ButtonVariant.Outline">Manage members</BbButton>
+                <BbButton Href="/organizations/members" Variant="ButtonVariant.Outline">@L10n["Manage members"]</BbButton>
             </BbCardContent>
         </BbCard>
     }
@@ -99,18 +97,18 @@
 
     private string? Notice => NoticeCode switch
     {
-        "renamed" => "The organization name was updated.",
+        "renamed" => L10n["The organization name was updated."],
         _ => null,
     };
 
     private string? Error => ErrorCode switch
     {
-        "last-owner" => "The last Owner cannot be demoted or removed. Make another member an Owner first.",
-        "invalid-name" => "Enter an organization name of at most 200 characters.",
-        "forbidden" => "Only an organization Owner can change these settings.",
-        "organization-not-found" => "This organization no longer exists.",
+        "last-owner" => L10n["The last Owner cannot be demoted or removed. Make another member an Owner first."],
+        "invalid-name" => L10n["Enter an organization name of at most 200 characters."],
+        "forbidden" => L10n["Only an organization Owner can change these settings."],
+        "organization-not-found" => L10n["This organization no longer exists."],
         null => null,
-        _ => "The change was not applied.",
+        _ => L10n["The change was not applied."],
     };
 
     protected override async Task OnInitializedAsync()

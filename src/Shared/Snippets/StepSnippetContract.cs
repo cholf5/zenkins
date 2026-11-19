@@ -29,13 +29,9 @@ public static class StepSnippetKinds
     /// <summary>Whether <paramref name="kind"/> is one the product knows.</summary>
     public static bool IsKnown(string? kind) => kind is not null && All.Contains(kind, StringComparer.Ordinal);
 
-    /// <summary>The kind as a person reads it (a label, never a stored value).</summary>
-    public static string LabelFor(string kind) => kind switch
-    {
-        ScriptStep => "Script step (Freestyle)",
-        LuaFragment => "Lua fragment (pipeline)",
-        _ => kind,
-    };
+    // No label helper here on purpose: a kind's label is UI copy, and this shared contract has no
+    // localizer. The pages map the kind to a translated label (Snippets.razor) and the stored value
+    // stays the code above.
 
     /// <summary>
     /// The bound a snippet body shares with the text it feeds (card F-035): a script step is bounded like a

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Zenkins.Server.Localization;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Projects;
 
@@ -140,56 +141,54 @@ public static class ProjectErrorCodes
     };
 
     /// <summary>The message rendered next to the field (and in the form-level alert).</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message rendered next to the field (and in the form-level alert), in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        NameRequired => "Enter a project name.",
-        NameTooLong => $"The project name must be at most {ProjectValidation.MaxNameLength} characters.",
-        NameInvalid => "The project name contains characters that are not allowed.",
+        NameRequired => L10n["Enter a project name."],
+        NameTooLong => L10n["The project name must be at most {0} characters.", ProjectValidation.MaxNameLength],
+        NameInvalid => L10n["The project name contains characters that are not allowed."],
         NameDuplicate =>
-            "A project with this name already exists in this folder (names are compared ignoring case). "
-            + "Rename it, or choose another folder.",
-        FolderInvalid => "That is not a folder id.",
-        FolderNotFound => "That folder does not exist in this organization.",
-        KindInvalid => "The project kind is not one of the known kinds.",
-        PipelineSourceInvalid => "The pipeline definition source is not one of the known sources.",
-        BranchDiscoveryInvalid => "The branch discovery mode is not one of the known modes.",
+            L10n["A project with this name already exists in this folder (names are compared ignoring case). Rename it, or choose another folder."],
+        FolderInvalid => L10n["That is not a folder id."],
+        FolderNotFound => L10n["That folder does not exist in this organization."],
+        KindInvalid => L10n["The project kind is not one of the known kinds."],
+        PipelineSourceInvalid => L10n["The pipeline definition source is not one of the known sources."],
+        BranchDiscoveryInvalid => L10n["The branch discovery mode is not one of the known modes."],
         BranchDiscoveryUnavailable =>
-            "Only a repository Pipeline can discover branches: a Freestyle or inline Pipeline has no repository to read.",
-        InlineScriptRequired => "Enter the pipeline script - an inline Pipeline has no repository file to read.",
+            L10n["Only a repository Pipeline can discover branches: a Freestyle or inline Pipeline has no repository to read."],
+        InlineScriptRequired => L10n["Enter the pipeline script - an inline Pipeline has no repository file to read."],
         InlineScriptTooLong =>
-            $"The pipeline script must be at most {PipelineScriptLimits.MaxScriptBytes / 1024} KiB.",
-        RepositoryUrlRequired => "Enter the Git repository URL.",
-        RepositoryUrlTooLong => $"The repository URL must be at most {ProjectValidation.MaxRepositoryUrlLength} characters.",
+            L10n["The pipeline script must be at most {0} KiB.", PipelineScriptLimits.MaxScriptBytes / 1024],
+        RepositoryUrlRequired => L10n["Enter the Git repository URL."],
+        RepositoryUrlTooLong => L10n["The repository URL must be at most {0} characters.", ProjectValidation.MaxRepositoryUrlLength],
         RepositoryUrlInvalid =>
-            "Only HTTPS or SSH git URLs are supported, for example https://host/owner/repo.git "
-            + "or git@host:owner/repo.git. file://, ext:: and other transports are rejected.",
-        DefaultBranchRequired => "Enter the default branch.",
-        DefaultBranchInvalid => "That is not a valid branch name.",
-        PipelinePathTooLong => $"The pipeline path must be at most {ProjectValidation.MaxPipelinePathLength} characters.",
+            L10n["Only HTTPS or SSH git URLs are supported, for example https://host/owner/repo.git or git@host:owner/repo.git. file://, ext:: and other transports are rejected."],
+        DefaultBranchRequired => L10n["Enter the default branch."],
+        DefaultBranchInvalid => L10n["That is not a valid branch name."],
+        PipelinePathTooLong => L10n["The pipeline path must be at most {0} characters.", ProjectValidation.MaxPipelinePathLength],
         PipelinePathInvalid =>
-            "Enter a relative path inside the repository (for example pipeline.lua). "
-            + "Absolute paths, backslashes and '..' are rejected.",
+            L10n["Enter a relative path inside the repository (for example pipeline.lua). Absolute paths, backslashes and '..' are rejected."],
         StepsInvalid =>
-            "The step list was refused - check every step's name and script, then try again.",
+            L10n["The step list was refused - check every step's name and script, then try again."],
         StepsMissing =>
-            "This Freestyle project has no steps yet: save the steps before triggering a run.",
+            L10n["This Freestyle project has no steps yet: save the steps before triggering a run."],
         ParametersInvalid =>
-            "The parameter list was refused - check every parameter's name, type and choices.",
+            L10n["The parameter list was refused - check every parameter's name, type and choices."],
         DisabledReasonRequired =>
-            "Say why the project is being disabled - the person whose trigger is refused reads it.",
+            L10n["Say why the project is being disabled - the person whose trigger is refused reads it."],
         DisabledReasonTooLong =>
-            $"The reason must be at most {ProjectValidation.MaxDisabledReasonLength} characters.",
-        DisabledReasonInvalid => "The reason cannot contain control characters.",
+            L10n["The reason must be at most {0} characters.", ProjectValidation.MaxDisabledReasonLength],
+        DisabledReasonInvalid => L10n["The reason cannot contain control characters."],
         MaxConcurrentRunsInvalid =>
-            $"The concurrency limit is a whole number between {ProjectValidation.MinMaxConcurrentRuns} and {ProjectValidation.MaxMaxConcurrentRuns}; leave it blank for unlimited.",
+            L10n["The concurrency limit is a whole number between {0} and {1}; leave it blank for unlimited.", ProjectValidation.MinMaxConcurrentRuns, ProjectValidation.MaxMaxConcurrentRuns],
         QuietPeriodInvalid =>
-            $"The quiet period is a whole number of seconds between 0 and {ProjectValidation.MaxQuietPeriodSeconds}.",
+            L10n["The quiet period is a whole number of seconds between 0 and {0}.", ProjectValidation.MaxQuietPeriodSeconds],
         MaxQueuedRunsInvalid =>
-            $"The queue cap is a whole number between {ProjectValidation.MinMaxQueuedRuns} and {ProjectValidation.MaxMaxQueuedRuns}; leave it blank for unlimited.",
+            L10n["The queue cap is a whole number between {0} and {1}; leave it blank for unlimited.", ProjectValidation.MinMaxQueuedRuns, ProjectValidation.MaxMaxQueuedRuns],
         PollIntervalInvalid =>
-            $"The poll interval is a whole number of minutes between {ProjectValidation.MinPollIntervalMinutes} and {ProjectValidation.MaxPollIntervalMinutes}.",
+            L10n["The poll interval is a whole number of minutes between {0} and {1}.", ProjectValidation.MinPollIntervalMinutes, ProjectValidation.MaxPollIntervalMinutes],
         PollingNotPipeline =>
-            "Only a project with a repository can be polled: this one is Freestyle or inline, so it has no remote to watch.",
+            L10n["Only a project with a repository can be polled: this one is Freestyle or inline, so it has no remote to watch."],
         _ => null,
     };
 }

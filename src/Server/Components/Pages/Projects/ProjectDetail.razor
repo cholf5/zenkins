@@ -17,7 +17,7 @@
    held (repository facts, the start-run form, the member-delete note) and adds what the card asks
    for: the newest run with its status and link, and the webhook/credential counts. The webhook
    management markup moved to the Settings tab; its endpoints and behaviour are F-017's, unchanged. *@
-<PageTitle>@(_project?.Name ?? "Project") · Zenkins</PageTitle>
+<PageTitle>@(_project?.Name ?? L10n["Project"]) · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-3xl bb:space-y-6">
     @if (_project is null)
@@ -47,21 +47,21 @@
                        one branch badge it always had. *@
                     @if (BranchDiscoveryModes.IsMultibranch(_project.BranchDiscovery))
                     {
-                        <BbBadge Variant="BadgeVariant.Secondary">Multibranch</BbBadge>
+                        <BbBadge Variant="BadgeVariant.Secondary">@L10n["Multibranch"]</BbBadge>
                     }
                 }
                 @* F-028: the state is stated next to the name, on every tab's shared header, so a
                    "nothing builds" question answers itself without opening the settings tab. *@
                 @if (_project.Disabled)
                 {
-                    <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                    <BbBadge Variant="BadgeVariant.Destructive">@L10n["Disabled"]</BbBadge>
                 }
             </div>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
-                <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit</BbButton>
+                <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">@L10n["Edit"]</BbButton>
                 @if (_canDelete)
                 {
-                    <BbButton Href="@($"/projects/{_project.Id}/delete/confirm")" Variant="ButtonVariant.Destructive">Delete</BbButton>
+                    <BbButton Href="@($"/projects/{_project.Id}/delete/confirm")" Variant="ButtonVariant.Destructive">@L10n["Delete"]</BbButton>
                 }
             </div>
         </div>
@@ -82,20 +82,18 @@
         {
             <div id="project-disabled-notice" role="alert"
                  class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm">
-                <p class="bb:font-medium bb:text-destructive">This project is disabled.</p>
+                <p class="bb:font-medium bb:text-destructive">@L10n["This project is disabled."]</p>
                 <p class="bb:mt-1" id="project-disabled-reason">
-                    @(_project.DisabledReason ?? "No reason was recorded.")
+                    @(_project.DisabledReason ?? L10n["No reason was recorded."])
                 </p>
                 <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                    Nothing is queued for it - the form, webhooks and every other trigger are refused -
-                    and runs that were still waiting were canceled. Its history and artifacts stay
-                    readable. Enable it on the settings tab to build again.
+                    @L10n["Nothing is queued for it - the form, webhooks and every other trigger are refused - and runs that were still waiting were canceled. Its history and artifacts stay readable. Enable it on the settings tab to build again."]
                     @if (_project.DisabledAt is { } disabledAt)
                     {
-                        <span>Disabled @disabledAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                        <span>@L10n["Disabled {0} UTC", disabledAt.ToString("yyyy-MM-dd HH:mm")]</span>
                         @if (_project.DisabledByEmail is { } disabledBy)
                         {
-                            <span> by @disabledBy.</span>
+                            <span> @L10n["by {0}.", disabledBy]</span>
                         }
                         else
                         {
@@ -112,24 +110,23 @@
                project's definition and is edited (and validated) on the Pipelines tab. *@
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Inline Pipeline project</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Inline Pipeline project"]</BbCardTitle>
                     <BbCardDescription>
-                        No repository is cloned: the pipeline script is stored on the server (the
-                        Pipelines tab) and every run carries the snapshot it was triggered with.
+                        @L10n["No repository is cloned: the pipeline script is stored on the server (the Pipelines tab) and every run carries the snapshot it was triggered with."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Script</dt>
-                            <dd>@(_project.InlineScript is { Length: > 0 } ? "Saved on the server" : "Not saved yet")</dd>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Script"]</dt>
+                            <dd>@(_project.InlineScript is { Length: > 0 } ? L10n["Saved on the server"] : L10n["Not saved yet"])</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
-                            <dd>Not available without a repository</dd>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Webhooks"]</dt>
+                            <dd>@L10n["Not available without a repository"]</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Created"]</dt>
                             <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                         </div>
                     </dl>
@@ -143,28 +140,27 @@
                the project runs and where its steps are edited instead. *@
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Freestyle project</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Freestyle project"]</BbCardTitle>
                     <BbCardDescription>
-                        No repository is cloned: the steps are configured on the server (the Steps
-                        tab) and every run carries the snapshot it was triggered with.
+                        @L10n["No repository is cloned: the steps are configured on the server (the Steps tab) and every run carries the snapshot it was triggered with."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Steps</dt>
-                            <dd>@(_savedStepCount is { } count ? count.ToString(CultureInfo.InvariantCulture) + " saved" : "Not saved yet")</dd>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Steps"]</dt>
+                            <dd>@(_savedStepCount is { } count ? L10n["{0} saved", count.ToString(CultureInfo.InvariantCulture)] : L10n["Not saved yet"])</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
-                            <dd>Not available for this kind</dd>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Webhooks"]</dt>
+                            <dd>@L10n["Not available for this kind"]</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Created"]</dt>
                             <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Updated</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Updated"]</dt>
                             <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                         </div>
                     </dl>
@@ -175,46 +171,45 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Repository</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Repository"]</BbCardTitle>
                     <BbCardDescription>
-                        Git repository metadata and what this project runs. Credentials are managed on the
-                        settings tab by organization Owners.
+                        @L10n["Git repository metadata and what this project runs. Credentials are managed on the settings tab by organization Owners."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                         <div class="bb:sm:col-span-3">
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Repository URL</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Repository URL"]</dt>
                             <dd class="bb:break-all">@_project.RepositoryUrl</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Default branch</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Default branch"]</dt>
                             <dd>@_project.DefaultBranch</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Pipeline path"]</dt>
                             <dd>@_project.PipelinePath</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Branch discovery</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Branch discovery"]</dt>
                             <dd>
                                 @if (BranchDiscoveryModes.IsMultibranch(_project.BranchDiscovery))
                                 {
                                     <a href="@($"/projects/{_project.Id}/branches")"
-                                       class="bb:font-medium bb:underline bb:underline-offset-4">Every branch</a>
+                                       class="bb:font-medium bb:underline bb:underline-offset-4">@L10n["Every branch"]</a>
                                 }
                                 else
                                 {
-                                    <span>Single branch</span>
+                                    <span>@L10n["Single branch"]</span>
                                 }
                             </dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credential</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Credential"]</dt>
                             <dd>
                                 @if (_project.GitCredentialId is null)
                                 {
-                                    <span class="bb:text-muted-foreground">Not configured</span>
+                                    <span class="bb:text-muted-foreground">@L10n["Not configured"]</span>
                                 }
                                 else if (_assignedCredentialName is { } assignedName)
                                 {
@@ -222,30 +217,30 @@
                                 }
                                 else
                                 {
-                                    <span>Configured</span>
+                                    <span>@L10n["Configured"]</span>
                                 }
                             </dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Webhooks</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Webhooks"]</dt>
                             <dd>@_webhooks.Count</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Credentials (organization)</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Credentials (organization)"]</dt>
                             @* D-003: the credential metadata is Owner-visible only (the asymmetry stance the
                                settings tab keeps), so a Member sees that the store exists, not its size. *@
                             <dd>@(CredentialCountText)</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Created</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Created"]</dt>
                             <dd>@_project.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Updated</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Updated"]</dt>
                             <dd>@_project.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                         </div>
                         <div class="bb:sm:col-span-3" id="project-last-probe">
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Last remote probe</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Last remote probe"]</dt>
                             <dd>
                                 @* I-005: a probe is not a run, so it has no history page of its own - the
                                    project states its most recent outcome here. "Never probed" and a recorded
@@ -253,7 +248,7 @@
                                    "no new commits". *@
                                 @if (_project.LastProbeOutcome is null)
                                 {
-                                    <span class="bb:text-muted-foreground">Never probed.</span>
+                                    <span class="bb:text-muted-foreground">@L10n["Never probed."]</span>
                                 }
                                 else
                                 {
@@ -276,16 +271,16 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Latest run</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Latest run"]</BbCardTitle>
                 <BbCardDescription>
-                    The most recent execution of this project's pipeline. The Runs tab lists every run.
+                    @L10n["The most recent execution of this project's pipeline. The Runs tab lists every run."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (_newestRun is not { } run)
                 {
                     <p class="bb:text-sm bb:text-muted-foreground" id="overview-no-runs">
-                        No runs yet. Start one below; it waits in the queue until an eligible worker claims it.
+                        @L10n["No runs yet. Start one below; it waits in the queue until an eligible worker claims it."]
                     </p>
                 }
                 else
@@ -293,7 +288,7 @@
                     <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:text-sm">
                         <div class="bb:min-w-0">
                             <p class="bb:font-medium">
-                                <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
+                                <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", run.Number]</a>
                                 <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
                                     @run.GitBranch · @run.PipelinePath
                                 </span>
@@ -310,7 +305,7 @@
                            and the runs list render for the same run. *@
                         <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
                             <RunStatusBadge Status="@run.Status" />
-                            <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, _now)</span>
+                            <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, _now, L10n)</span>
                             <span>@run.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
                         </div>
                     </div>
@@ -326,20 +321,19 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Chain</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Chain"]</BbCardTitle>
                     <BbCardDescription>
-                        This project runs as part of a chain. The links are declared, and can be changed, on
-                        the settings tab.
+                        @L10n["This project runs as part of a chain. The links are declared, and can be changed, on the settings tab."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <dl id="project-chain-summary" class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-2">
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered by (upstream)</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Triggered by (upstream)"]</dt>
                             <dd class="bb:break-all">
                                 @if (_upstreamLinks.Count == 0)
                                 {
-                                    <span class="bb:text-muted-foreground">Nothing: no project's run queues this one.</span>
+                                    <span class="bb:text-muted-foreground">@L10n["Nothing: no project's run queues this one."]</span>
                                 }
                                 else
                                 {
@@ -355,11 +349,11 @@
                             </dd>
                         </div>
                         <div>
-                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggers (downstream)</dt>
+                            <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Triggers (downstream)"]</dt>
                             <dd class="bb:break-all">
                                 @if (_downstreamLinks.Count == 0)
                                 {
-                                    <span class="bb:text-muted-foreground">Nothing: this project's runs trigger nothing.</span>
+                                    <span class="bb:text-muted-foreground">@L10n["Nothing: this project's runs trigger nothing."]</span>
                                 }
                                 else
                                 {
@@ -376,7 +370,7 @@
                         </div>
                     </dl>
                     <div class="bb:mt-4">
-                        <BbButton Href="@($"/projects/{_project.Id}/settings")" Variant="ButtonVariant.Outline">Manage chain links…</BbButton>
+                        <BbButton Href="@($"/projects/{_project.Id}/settings")" Variant="ButtonVariant.Outline">@L10n["Manage chain links…"]</BbButton>
                     </div>
                 </BbCardContent>
             </BbCard>
@@ -385,28 +379,23 @@
         @if (!_canDelete)
         {
             <p class="bb:text-sm bb:text-muted-foreground">
-                Deleting a project is reserved to organization Owners (PRD §3.1.2). Members can create
-                and edit projects.
+                @L10n["Deleting a project is reserved to organization Owners (PRD §3.1.2). Members can create and edit projects."]
             </p>
         }
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Start run</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Start run"]</BbCardTitle>
                 @if (!ProjectSources.HasRepository(_project.Kind, _project.PipelineSource))
                 {
                     <BbCardDescription>
-                        A run executes this project's saved definition (the snapshot taken when the run
-                        is queued; for an inline Pipeline that snapshot is its script). Optional required
-                        tags restrict which worker may claim the run: one worker must declare all of them.
+                        @L10n["A run executes this project's saved definition (the snapshot taken when the run is queued; for an inline Pipeline that snapshot is its script). Optional required tags restrict which worker may claim the run: one worker must declare all of them."]
                     </BbCardDescription>
                 }
                 else
                 {
                     <BbCardDescription>
-                        A run executes this project's pipeline file on the branch you choose. Leave the
-                        branch blank to build the default branch. Optional required tags restrict which
-                        worker may claim the run: one worker must declare all of them.
+                        @L10n["A run executes this project's pipeline file on the branch you choose. Leave the branch blank to build the default branch. Optional required tags restrict which worker may claim the run: one worker must declare all of them."]
                     </BbCardDescription>
                 }
             </BbCardHeader>
@@ -417,8 +406,7 @@
                        caller's attention. The server still refuses a forged POST; this is the page
                        half of it. *@
                     <p id="run-form-disabled" class="bb:text-sm">
-                        This project is disabled, so no run can be started. Enable it on the settings
-                        tab; the reason and the moment it was disabled are on the overview.
+                        @L10n["This project is disabled, so no run can be started. Enable it on the settings tab; the reason and the moment it was disabled are on the overview."]
                     </p>
                 }
                 else
@@ -435,7 +423,7 @@
                         @if (ProjectSources.HasRepository(_project.Kind, _project.PipelineSource))
                         {
                             <div>
-                                <label for="run-branch" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Branch (optional)</label>
+                                <label for="run-branch" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Branch (optional)"]</label>
                                 <input id="run-branch"
                                        name="Branch"
                                        class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm"
@@ -449,7 +437,7 @@
                         else if (RunErrorCode == RunErrorCodes.StepsMissing)
                         {
                             <p id="run-form-error" role="alert" class="bb:text-sm bb:text-destructive">
-                                This project has no saved steps yet - save them on the Steps tab first.
+                                @L10n["This project has no saved steps yet - save them on the Steps tab first."]
                             </p>
                         }
                         @* F-021: the project's parameter definitions render the trigger's inputs.
@@ -518,10 +506,7 @@
                                            spellcheck="false"
                                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm" />
                                     <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                        Typed per run: the run page and every list show ***, a step that echoes it
-                                        logs ***, and no API returns it. Not a stored Secret - it is an input to
-                                        this one run, so triggering does not need Owner rights. Leaving it empty
-                                        passes an empty value.
+                                        @L10n["Typed per run: the run page and every list show ***, a step that echoes it logs ***, and no API returns it. Not a stored Secret - it is an input to this one run, so triggering does not need Owner rights. Leaving it empty passes an empty value."]
                                     </p>
                                 }
                                 else if (parameter.Type == ProjectParameterTypes.Run)
@@ -540,15 +525,14 @@
                                         }
                                     </select>
                                     <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                        The step reads the run's number, plus
-                                        @($"{parameter.Name}_RUN_ID") and @($"{parameter.Name}_COMMIT").
+                                        @L10n["The step reads the run's number, plus {0} and {1}.", $"{parameter.Name}_RUN_ID", $"{parameter.Name}_COMMIT"]
                                         @if (_parameterRuns.Count == 0)
                                         {
-                                            <span>This project has no run to select yet, so a run parameter refuses the trigger.</span>
+                                            <span>@L10n["This project has no run to select yet, so a run parameter refuses the trigger."]</span>
                                         }
                                         else
                                         {
-                                            <span>The newest successful run is preselected.</span>
+                                            <span>@L10n["The newest successful run is preselected."]</span>
                                         }
                                     </p>
                                 }
@@ -561,10 +545,9 @@
                                            type="file"
                                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
                                     <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                        At most @(ProjectParameterLimits.MaxFileBytes / 1024) KiB. The step reads a
-                                        <b>path</b> inside the run's own directory; the bytes are never shown on
-                                        this page and cannot be downloaded from it. Uploading nothing passes an
-                                        empty value.
+                                        @L10n["At most {0} KiB. The step reads a", ProjectParameterLimits.MaxFileBytes / 1024]
+                                        <b>@L10n["path"]</b>
+                                        @L10n["inside the run's own directory; the bytes are never shown on this page and cannot be downloaded from it. Uploading nothing passes an empty value."]
                                     </p>
                                 }
                                 else if (parameter.Type == ProjectParameterTypes.GitRef)
@@ -577,9 +560,9 @@
                                            placeholder="v1.2.3"
                                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:font-mono bb:text-sm" />
                                     <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                        No whitespace, no leading dash. This is what the <b>step</b> reads: when the
-                                        trigger pins a commit (a webhook push, a rebuild) that commit is what gets
-                                        checked out, whatever this ref says.
+                                        @L10n["No whitespace, no leading dash. This is what the"]
+                                        <b>@L10n["step"]</b>
+                                        @L10n["reads: when the trigger pins a commit (a webhook push, a rebuild) that commit is what gets checked out, whatever this ref says."]
                                     </p>
                                 }
                                 else
@@ -593,7 +576,7 @@
                             </div>
                         }
                         <div>
-                            <label for="run-required-tags" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Required tags (optional)</label>
+                            <label for="run-required-tags" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Required tags (optional)"]</label>
                             <input id="run-required-tags"
                                    name="RequiredTags"
                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
@@ -603,11 +586,7 @@
                                union-accept + honest starvation is the documented semantics, so the
                                operator reads it where the asymmetry would surprise. *@
                             <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                Comma-separated. Every tag must be declared by at least one worker
-                                (that is what this form checks), but claiming needs one worker that
-                                declares them all: a set split across workers (e.g. linux,cuda on a
-                                linux-only worker and a cuda-only worker) is accepted and stays
-                                queued until a worker with the full set registers.
+                                @L10n["Comma-separated. Every tag must be declared by at least one worker (that is what this form checks), but claiming needs one worker that declares them all: a set split across workers (e.g. linux,cuda on a linux-only worker and a cuda-only worker) is accepted and stays queued until a worker with the full set registers."]
                             </p>
                             @if (TagsError is { } tagsError)
                             {
@@ -615,20 +594,20 @@
                             }
                         </div>
                         <div>
-                            <label for="run-timeout-minutes" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">Timeout in minutes (optional)</label>
+                            <label for="run-timeout-minutes" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">@L10n["Timeout in minutes (optional)"]</label>
                             <input id="run-timeout-minutes"
                                    name="TimeoutMinutes"
                                    type="number"
                                    min="1"
                                    max="10080"
                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm"
-                                   placeholder="default (60)" />
+                                   placeholder="@L10n["default (60)"]" />
                             @if (TimeoutError is { } timeoutError)
                             {
                                 <p id="run-timeout-minutes-error" role="alert" class="bb:mt-1 bb:text-sm bb:text-destructive">@timeoutError</p>
                             }
                         </div>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Start run</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Start run"]</BbButton>
                     </div>
                 </form>
                 }
@@ -680,33 +659,33 @@
 
     private string? Notice => NoticeCode switch
     {
-        "created" => "The project was created.",
-        "updated" => "The project was updated.",
+        "created" => L10n["The project was created."],
+        "updated" => L10n["The project was updated."],
         _ => null,
     };
 
     private string CredentialCountText => _canManageCredentials
         ? _credentialCount.ToString(CultureInfo.InvariantCulture)
-        : "Owner-managed";
+        : L10n["Owner-managed"];
 
     private bool _canManageCredentials;
 
     private string? BranchError => RunErrorCode switch
     {
-        RunErrorCodes.BranchInvalid => "That is not a valid branch name; leave it blank to build the default branch.",
+        RunErrorCodes.BranchInvalid => L10n["That is not a valid branch name; leave it blank to build the default branch."],
         _ => null,
     };
 
     private string? TagsError => RunErrorCode switch
     {
-        RunErrorCodes.TagUnknown => "No registered worker in this organization has one of these tags.",
-        RunErrorCodes.TagInvalid => "Required tags are comma-separated text, at most 64 characters per tag.",
+        RunErrorCodes.TagUnknown => L10n["No registered worker in this organization has one of these tags."],
+        RunErrorCodes.TagInvalid => L10n["Required tags are comma-separated text, at most 64 characters per tag."],
         _ => null,
     };
 
     private string? TimeoutError => RunErrorCode switch
     {
-        RunErrorCodes.TimeoutInvalid => "The timeout is a whole number of minutes between 1 and 10080; leave it blank for the server default.",
+        RunErrorCodes.TimeoutInvalid => L10n["The timeout is a whole number of minutes between 1 and 10080; leave it blank for the server default."],
         _ => null,
     };
 
@@ -717,21 +696,21 @@
     /// </summary>
     private string? RunRequestError => RunErrorCode switch
     {
-        RunErrorCodes.FieldInvalid => "That request could not be read, so no run was started. Try again.",
-        RunErrorCodes.ParameterUnknown => "One of the supplied parameter names is not defined on this project.",
-        RunErrorCodes.ParameterInvalid => "One of the supplied parameter values does not fit its type.",
+        RunErrorCodes.FieldInvalid => L10n["That request could not be read, so no run was started. Try again."],
+        RunErrorCodes.ParameterUnknown => L10n["One of the supplied parameter names is not defined on this project."],
+        RunErrorCodes.ParameterInvalid => L10n["One of the supplied parameter values does not fit its type."],
         RunErrorCodes.ParameterNoRun =>
-            "A run parameter asked for the project's previous run, and this project has no successful run yet.",
+            L10n["A run parameter asked for the project's previous run, and this project has no successful run yet."],
         RunErrorCodes.ParameterFileTooLarge =>
-            $"An uploaded file parameter is over the {ProjectParameterLimits.MaxFileBytes / 1024} KiB bound, so no run was queued.",
+            L10n["An uploaded file parameter is over the {0} KiB bound, so no run was queued.", ProjectParameterLimits.MaxFileBytes / 1024],
 
         // Cards F-028 + F-029: the project itself refused the trigger. The code is all the redirect can
         // carry; the numbers (if any) are re-read here, so the message quotes what is true now.
         ProjectTriggerRefusals.ProjectDisabled =>
-            ProjectTriggerGuard.DisabledMessage(_project?.DisabledReason),
+            ProjectTriggerGuard.DisabledMessage(_project?.DisabledReason, L10n),
         ProjectTriggerRefusals.QueueFull => _project?.MaxQueuedRuns is { } cap
-            ? ProjectTriggerGuard.QueueFullMessage(_queuedRunCount, cap)
-            : "The project's queue is full, so no run was queued.",
+            ? ProjectTriggerGuard.QueueFullMessage(_queuedRunCount, cap, L10n)
+            : L10n["The project's queue is full, so no run was queued."],
         _ => null,
     };
 

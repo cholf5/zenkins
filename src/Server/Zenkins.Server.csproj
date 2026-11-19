@@ -11,6 +11,20 @@
     <InternalsVisibleTo Include="Zenkins.Tests" />
   </ItemGroup>
 
+  <!-- The UI's translations ship inside the assembly: a missing catalogue must fail the build, not
+       turn a deployment silently monolingual. WithCulture=false keeps the locale suffix in the file
+       name from being read as a satellite culture (which would strip it and compile a resources.dll
+       instead of embedding the catalogue), and LogicalName pins the name the loader asks for. -->
+  <ItemGroup>
+    <Content Remove="Localization/*.json" />
+    <EmbeddedResource Include="Localization/Translations.zh-Hans.json"
+                      WithCulture="false"
+                      LogicalName="Zenkins.Server.Localization.Translations.zh-Hans.json" />
+    <EmbeddedResource Include="Localization/Translations.framework.zh-Hans.json"
+                      WithCulture="false"
+                      LogicalName="Zenkins.Server.Localization.Translations.framework.zh-Hans.json" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="BlazorBlueprint.Components" />
     <PackageReference Include="BlazorBlueprint.Icons.Lucide" />

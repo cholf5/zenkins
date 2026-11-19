@@ -1,5 +1,8 @@
 @using Microsoft.AspNetCore.Components.Routing
 @using Zenkins.Server.Components.Pages
+@implements IDisposable
+@inject PersistentComponentState ApplicationState
+@inject LanguageContext Language
 
 <Router AppAssembly="typeof(Program).Assembly">
     <Found Context="routeData">
@@ -17,17 +20,17 @@
             </ChildContent>
             <ErrorContent Context="exception">
                 <LayoutView Layout="typeof(MainLayout)">
-                    <PageTitle>Something went wrong · Zenkins</PageTitle>
+                    <PageTitle>@L10n["Something went wrong"] · Zenkins</PageTitle>
                     <div class="bb:mx-auto bb:w-full bb:max-w-2xl">
                         <BbCard>
                             <BbCardHeader>
-                                <BbCardTitle As="h1" tabindex="-1">Something went wrong</BbCardTitle>
+                                <BbCardTitle As="h1" tabindex="-1">@L10n["Something went wrong"]</BbCardTitle>
                                 <BbCardDescription>
-                                    The page failed to render.
+                                    @L10n["The page failed to render."]
                                 </BbCardDescription>
                             </BbCardHeader>
                             <BbCardContent>
-                                <BbButton OnClick="Recover" Variant="ButtonVariant.Default">Try again</BbButton>
+                                <BbButton OnClick="Recover" Variant="ButtonVariant.Default">@L10n["Try again"]</BbButton>
                             </BbCardContent>
                         </BbCard>
                     </div>
@@ -43,7 +46,39 @@
 </Router>
 
 @code {
+    private const string LanguageStateKey = "zenkins.language";
+
     private ErrorBoundary? _errorBoundary;
+    private PersistingComponentStateSubscription _persistingLanguage;
+
+    /// <summary>
+    /// Establishes the language for this render tree.
+    /// <para>
+    /// The prerender pass has an <see cref="HttpContext"/> and resolves from the cookie there; it
+    /// registers the resolved code to be persisted so the interactive circuit - which has no request
+    /// and therefore no cookie - renders the same language. The circuit takes that value here, before
+    /// the router renders any page, which is why no page can render one frame of the wrong language.
+    /// </para>
+    /// </summary>
+    protected override void OnInitialized()
+    {
+        if (ApplicationState.TryTakeFromJson<string>(LanguageStateKey, out var persisted))
+        {
+            Language.Set(persisted);
+            return;
+        }
+
+        _persistingLanguage = ApplicationState.RegisterOnPersisting(PersistLanguageAsync);
+    }
+
+    private Task PersistLanguageAsync()
+    {
+        ApplicationState.PersistAsJson(LanguageStateKey, Language.Current);
+        return Task.CompletedTask;
+    }
 
     private void Recover() => _errorBoundary?.Recover();
+
+    /// <summary>Ends the persistence subscription with the prerender pass that registered it.</summary>
+    public void Dispose() => _persistingLanguage.Dispose();
 }

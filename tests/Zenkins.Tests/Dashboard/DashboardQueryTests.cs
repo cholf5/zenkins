@@ -1,7 +1,9 @@
 using BlazorBlueprint.Components;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 using Zenkins.Server.Components.Shared;
 using Zenkins.Server.Dashboard;
+using Zenkins.Server.Localization;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Runs;
 using Zenkins.Tests.Auth;
@@ -416,16 +418,31 @@ public sealed class DashboardDisplayFormatTests
         Assert.Equal("90m 05s", RunDisplay.FormatDuration(TimeSpan.FromMinutes(90) + TimeSpan.FromSeconds(5)));
 
         // A run that never started shows "-", never a zero or a fabricated duration.
-        Assert.Equal("-", RunDisplay.DurationOrElapsed(null, null, start));
-        Assert.Equal("-", RunDisplay.DurationOrElapsed(null, start, start));
+        Assert.Equal("-", RunDisplay.DurationOrElapsed(null, null, start, English()));
+        Assert.Equal("-", RunDisplay.DurationOrElapsed(null, start, start, English()));
 
         // A running run shows live elapsed time against the caller's clock instant, marked as running.
-        Assert.Equal("42.0s (running)", RunDisplay.DurationOrElapsed(start, null, start.AddSeconds(42)));
-        Assert.Equal("2m 05s (running)", RunDisplay.DurationOrElapsed(start, null, start.AddMinutes(2).AddSeconds(5)));
+        Assert.Equal("42.0s (running)", RunDisplay.DurationOrElapsed(start, null, start.AddSeconds(42), English()));
+        Assert.Equal("2m 05s (running)", RunDisplay.DurationOrElapsed(start, null, start.AddMinutes(2).AddSeconds(5), English()));
+
+        // The marker is UI copy, so a Chinese reader sees a Chinese parenthesis form.
+        Assert.Equal("42.0s（运行中）", RunDisplay.DurationOrElapsed(start, null, start.AddSeconds(42), Chinese()));
 
         // A finished run shows its stored duration; the clock instant is irrelevant.
         Assert.Equal(
-            RunDisplay.DurationOrElapsed(start, start.AddMinutes(1).AddSeconds(5), start),
-            RunDisplay.DurationOrElapsed(start, start.AddMinutes(1).AddSeconds(5), start.AddYears(1)));
+            RunDisplay.DurationOrElapsed(start, start.AddMinutes(1).AddSeconds(5), start, English()),
+            RunDisplay.DurationOrElapsed(start, start.AddMinutes(1).AddSeconds(5), start.AddYears(1), English()));
+    }
+
+    /// <summary>A localizer pinned to English (no request, no cookie).</summary>
+    private static Localizer English() =>
+        new(new LanguageContext(new HttpContextAccessor()), new TranslationCatalog());
+
+    /// <summary>A localizer pinned to Simplified Chinese, for the copy that only exists in one language.</summary>
+    private static Localizer Chinese()
+    {
+        var language = new LanguageContext(new HttpContextAccessor());
+        language.Set(AppLanguage.ChineseSimplified);
+        return new(language, new TranslationCatalog());
     }
 }

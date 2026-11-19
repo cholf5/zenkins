@@ -3,15 +3,15 @@
 @inject UserSession UserSession
 @inject OrganizationManagementService Management
 
-<PageTitle>Members · Zenkins</PageTitle>
+<PageTitle>@L10n["Members"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Members</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Members"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
-            <BbBadge Variant="BadgeVariant.Outline">Your role: @organization.Role</BbBadge>
+            <BbBadge Variant="BadgeVariant.Outline">@L10n["Your role: {0}", DisplayText.Role(organization.Role, L10n)]</BbBadge>
         }
     </div>
 
@@ -39,16 +39,15 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Invite a member</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Invite a member"]</BbCardTitle>
                     <BbCardDescription>
-                        Invitations in v0.1 attach an existing account by email; no email is sent. The
-                        new member joins this organization with the Member role.
+                        @L10n["Invitations in v0.1 attach an existing account by email; no email is sent. The new member joins this organization with the Member role."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <form method="post" action="/organizations/members/invite" data-zenkins-antiforgery class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row bb:sm:items-end">
                         <div class="bb:flex-1 bb:space-y-2">
-                            <label for="invite-email" class="bb:text-sm bb:font-medium">Email address</label>
+                            <label for="invite-email" class="bb:text-sm bb:font-medium">@L10n["Email address"]</label>
                             <input id="invite-email"
                                    name="Email"
                                    type="email"
@@ -57,7 +56,7 @@
                                    autocomplete="off"
                                    placeholder="teammate@example.com" />
                         </div>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Invite</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Invite"]</BbButton>
                     </form>
                 </BbCardContent>
             </BbCard>
@@ -65,17 +64,16 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Members of this organization</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Members of this organization"]</BbCardTitle>
                 <BbCardDescription>
-                    Name, email, role and joined date. Owners manage roles and removal; Members see the
-                    list only.
+                    @L10n["Name, email, role and joined date. Owners manage roles and removal; Members see the list only."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (_members.Count == 0)
                 {
-                    <BbEmpty Title="No members"
-                             Description="This organization has no members yet.">
+                    <BbEmpty Title="@L10n["No members"]"
+                             Description="@L10n["This organization has no members yet."]">
                         <Icon>
                             <LucideIcon Name="users" Class="bb:h-12 bb:w-12" />
                         </Icon>
@@ -87,13 +85,13 @@
                         <table class="bb:w-full bb:text-sm">
                             <thead>
                                 <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Name</th>
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Email</th>
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Role</th>
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Joined</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Name"]</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Email"]</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Role"]</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Joined"]</th>
                                     @if (_canManage)
                                     {
-                                        <th class="bb:py-2 bb:font-medium">Manage</th>
+                                        <th class="bb:py-2 bb:font-medium">@L10n["Manage"]</th>
                                     }
                                 </tr>
                             </thead>
@@ -105,11 +103,11 @@
                                         <td class="bb:py-3 bb:pr-4">@member.Email</td>
                                         <td class="bb:py-3 bb:pr-4">
                                             <BbBadge Variant="@(member.Role == OrganizationRole.Owner ? BadgeVariant.Default : BadgeVariant.Secondary)">
-                                                @member.Role
+                                                @DisplayText.Role(member.Role, L10n)
                                             </BbBadge>
                                             @if (_ownerCount == 1 && member.Role == OrganizationRole.Owner)
                                             {
-                                                <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">last owner</span>
+                                                <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@L10n["last owner"]</span>
                                             }
                                         </td>
                                         <td class="bb:py-3 bb:pr-4">@member.JoinedAt.ToString("yyyy-MM-dd")</td>
@@ -122,7 +120,7 @@
                                                         <input type="hidden" name="Role" value="@(member.Role == OrganizationRole.Owner ? nameof(OrganizationRole.Member) : nameof(OrganizationRole.Owner))" />
                                                         <button type="submit"
                                                                 class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs bb:hover:bg-accent">
-                                                            @(member.Role == OrganizationRole.Owner ? "Make Member" : "Make Owner")
+                                                            @(member.Role == OrganizationRole.Owner ? L10n["Make Member"] : L10n["Make Owner"])
                                                         </button>
                                                     </form>
 
@@ -130,7 +128,7 @@
                                                         <input type="hidden" name="MembershipId" value="@member.MembershipId" />
                                                         <button type="submit"
                                                                 class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive bb:hover:bg-destructive/10">
-                                                            Remove
+                                                            @L10n["Remove"]
                                                         </button>
                                                     </form>
                                                 </div>
@@ -148,8 +146,8 @@
         @if (_canManage)
         {
             <p class="bb:text-sm bb:text-muted-foreground">
-                <a href="/organizations/settings" class="bb:font-medium bb:underline bb:underline-offset-4">Organization settings</a>
-                · The last Owner cannot be demoted or removed; promote another member to Owner first.
+                <a href="/organizations/settings" class="bb:font-medium bb:underline bb:underline-offset-4">@L10n["Organization settings"]</a>
+                · @L10n["The last Owner cannot be demoted or removed; promote another member to Owner first."]
             </p>
         }
     }
@@ -169,23 +167,23 @@
 
     private string? Notice => NoticeCode switch
     {
-        "invited" => "The account was added to this organization.",
-        "role-changed" => "The member's role was updated.",
-        "member-removed" => "The member was removed from this organization.",
+        "invited" => L10n["The account was added to this organization."],
+        "role-changed" => L10n["The member's role was updated."],
+        "member-removed" => L10n["The member was removed from this organization."],
         _ => null,
     };
 
     private string? Error => ErrorCode switch
     {
-        "last-owner" => "The last Owner cannot be demoted or removed. Make another member an Owner first.",
-        "unknown-email" => "No account exists with that email address. Invitations in v0.1 attach existing accounts only.",
-        "already-member" => "That account is already a member of this organization.",
-        "invalid-email" => "Enter the email address of an existing account.",
-        "invalid-role" => "Choose either Owner or Member.",
-        "member-not-found" => "That member no longer exists in this organization.",
-        "forbidden" => "Only an organization Owner can manage members.",
+        "last-owner" => L10n["The last Owner cannot be demoted or removed. Make another member an Owner first."],
+        "unknown-email" => L10n["No account exists with that email address. Invitations in v0.1 attach existing accounts only."],
+        "already-member" => L10n["That account is already a member of this organization."],
+        "invalid-email" => L10n["Enter the email address of an existing account."],
+        "invalid-role" => L10n["Choose either Owner or Member."],
+        "member-not-found" => L10n["That member no longer exists in this organization."],
+        "forbidden" => L10n["Only an organization Owner can manage members."],
         null => null,
-        _ => "The change was not applied.",
+        _ => L10n["The change was not applied."],
     };
 
     protected override async Task OnInitializedAsync()

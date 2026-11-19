@@ -10,7 +10,7 @@
    the pipeline verdict a worker actually observed. A branch seen and never built is a first-class row
    (state "no pipeline"), not a missing run - and an upstream-deleted branch stays listed, marked
    orphaned, with its history intact. *@
-<PageTitle>Branches · @(_project?.Name ?? "Project") · Zenkins</PageTitle>
+<PageTitle>@L10n["Branches"] · @(_project?.Name ?? L10n["Project"]) · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     @if (_project is null)
@@ -23,18 +23,18 @@
     {
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                <BbCardTitle As="h1" tabindex="-1">Branches · @_project.Name</BbCardTitle>
+                <BbCardTitle As="h1" tabindex="-1">@L10n["Branches"] · @_project.Name</BbCardTitle>
                 @if (BranchDiscoveryModes.IsMultibranch(_project.BranchDiscovery))
                 {
-                    <BbBadge Variant="BadgeVariant.Secondary">Multibranch</BbBadge>
+                    <BbBadge Variant="BadgeVariant.Secondary">@L10n["Multibranch"]</BbBadge>
                 }
                 else
                 {
-                    <BbBadge Variant="BadgeVariant.Outline">Single branch</BbBadge>
+                    <BbBadge Variant="BadgeVariant.Outline">@L10n["Single branch"]</BbBadge>
                 }
                 @if (_project.Disabled)
                 {
-                    <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                    <BbBadge Variant="BadgeVariant.Destructive">@L10n["Disabled"]</BbBadge>
                 }
             </div>
         </div>
@@ -46,15 +46,14 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Branch discovery is off</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Branch discovery is off"]</BbCardTitle>
                     <BbCardDescription>
-                        This project builds one branch (its default branch) - today's behaviour. Switch
-                        it to <strong>Every branch</strong> on the edit page to turn each branch of the
-                        repository into its own branch job.
+                        @L10n["This project builds one branch (its default branch) - today's behaviour. Switch it to"]
+                        <strong>@L10n["Every branch"]</strong> @L10n["on the edit page to turn each branch of the repository into its own branch job."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
-                    <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">Edit project</BbButton>
+                    <BbButton Href="@($"/projects/{_project.Id}/edit")" Variant="ButtonVariant.Outline">@L10n["Edit project"]</BbButton>
                 </BbCardContent>
             </BbCard>
         }
@@ -62,18 +61,16 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Branch jobs</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Branch jobs"]</BbCardTitle>
                     <BbCardDescription>
-                        One job per branch, with its own runs and its own last status: a push to one
-                        branch only ever touches that branch's history. Settings, credentials and
-                        parameters stay defined once on the project.
+                        @L10n["One job per branch, with its own runs and its own last status: a push to one branch only ever touches that branch's history. Settings, credentials and parameters stay defined once on the project."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     @if (_branches.Count == 0)
                     {
-                        <BbEmpty Title="No branches seen yet"
-                                 Description="A push to a branch the webhook selects registers it here, and a branch with the pipeline file builds under its own name.">
+                        <BbEmpty Title="@L10n["No branches seen yet"]"
+                                 Description="@L10n["A push to a branch the webhook selects registers it here, and a branch with the pipeline file builds under its own name."]">
                             <Icon>
                                 <LucideIcon Name="git-branch" Class="bb:h-12 bb:w-12" />
                             </Icon>
@@ -91,15 +88,15 @@
                                                class="bb:font-medium bb:underline bb:underline-offset-4 bb:break-all">@branch.Branch</a>
                                             @if (branch.IsNoPipeline)
                                             {
-                                                <BbBadge Variant="BadgeVariant.Secondary">No pipeline</BbBadge>
+                                                <BbBadge Variant="BadgeVariant.Secondary">@L10n["No pipeline"]</BbBadge>
                                             }
                                             else if (branch.PipelineState == BranchPipelineStates.HasPipeline)
                                             {
-                                                <BbBadge Variant="BadgeVariant.Outline">Pipeline</BbBadge>
+                                                <BbBadge Variant="BadgeVariant.Outline">@L10n["Pipeline"]</BbBadge>
                                             }
                                             else
                                             {
-                                                <BbBadge Variant="BadgeVariant.Outline">Not observed</BbBadge>
+                                                <BbBadge Variant="BadgeVariant.Outline">@L10n["Not observed"]</BbBadge>
                                             }
                                             @if (branch.PendingCommit is { } pendingCommit)
                                             {
@@ -112,19 +109,19 @@
                                                    "never tried" look like "tried and failed". *@
                                                 <BbBadge Variant="BadgeVariant.Outline"
                                                          title="@PendingTitle(branch, pendingCommit)">
-                                                    Awaiting tree read@(branch.ObservationAttempts > 0 ? $" (retry {branch.ObservationAttempts})" : string.Empty)
+                                                    @L10n["Awaiting tree read"]@(branch.ObservationAttempts > 0 ? " " + L10n["(retry {0})", branch.ObservationAttempts] : string.Empty)
                                                 </BbBadge>
                                             }
                                             @if (branch.IsOrphaned)
                                             {
                                                 <BbBadge Variant="BadgeVariant.Destructive"
-                                                         title="@OrphanTitle(branch)">Orphaned</BbBadge>
+                                                         title="@OrphanTitle(branch)">@L10n["Orphaned"]</BbBadge>
                                             }
                                         </p>
                                         <p class="bb:text-xs bb:text-muted-foreground">
                                             @if (branch.LastRun is { } lastRun)
                                             {
-                                                <span>Last run #@lastRun.Number</span>
+                                                <span>@L10n["Last run #{0}", lastRun.Number]</span>
                                                 @if (lastRun.GitCommit is { } commit)
                                                 {
                                                     <span> · <code title="@commit">@ShortCommit(commit)</code></span>
@@ -133,11 +130,15 @@
                                             }
                                             else if (branch.PendingCommit is not null)
                                             {
-                                                <span>No runs yet - a tree read is owed before this branch can be built@(branch.PendingSince is { } since ? $"; last requested {since.ToString("yyyy-MM-dd HH:mm")} UTC" : string.Empty).</span>
+                                                <span>@L10n["No runs yet - a tree read is owed before this branch can be built"]@(branch.PendingSince is { } since ? L10n["; last requested {0} UTC", since.ToString("yyyy-MM-dd HH:mm")] : string.Empty).</span>
+                                            }
+                                            else if (branch.IsNoPipeline)
+                                            {
+                                                <span>@L10n["No runs yet"] - @L10n["this branch has no pipeline file, so it is not built."]</span>
                                             }
                                             else
                                             {
-                                                <span>No runs yet@(branch.IsNoPipeline ? " - this branch has no pipeline file, so it is not built." : ".")</span>
+                                                <span>@(L10n["No runs yet"]).</span>
                                             }
                                             @if (branch.LastCommit is { } lastCommit && branch.LastRun?.GitCommit != lastCommit)
                                             {
@@ -151,7 +152,7 @@
                                             <RunStatusBadge Status="@run.Status" />
                                         }
                                         <BbButton Href="@RunsHref(branch.Branch)" Variant="ButtonVariant.Outline">
-                                            Runs on this branch
+                                            @L10n["Runs on this branch"]
                                         </BbButton>
                                     </div>
                                 </li>
@@ -165,36 +166,29 @@
                (I-005 writes LastProbeOutcome/LastProbeAt). The interval scan needs a probe-capable
                Worker; without one the page says push-only instead of claiming a scan that never ran. *@
             <div id="branch-discovery-status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
-                <p class="bb:font-medium">Remote discovery</p>
+                <p class="bb:font-medium">@L10n["Remote discovery"]</p>
                 @if (_project.LastProbeAt is null)
                 {
                     <p id="branch-discovery-never" class="bb:mt-1">
-                        No remote scan has run yet. Interval discovery needs a probe-capable Worker (I-005);
-                        until one answers, a push registers this project's branches, and a definition-only
-                        observation (no run, no build slot) reads a branch's tree to decide whether it can
-                        build.
+                        @L10n["No remote scan has run yet. Interval discovery needs a probe-capable Worker (I-005); until one answers, a push registers this project's branches, and a definition-only observation (no run, no build slot) reads a branch's tree to decide whether it can build."]
                     </p>
                 }
                 else if (_project.LastProbeOutcome == Zenkins.Shared.Probes.GitProbeOutcomes.Refs)
                 {
                     <p id="branch-discovery-active" class="bb:mt-1">
-                        Last remote scan: <strong>heads read</strong> at
-                        @_project.LastProbeAt.Value.ToString("yyyy-MM-dd HH:mm") UTC.
-                        <span>Interval discovery is running: branches are registered from the repository's heads, including ones created without a push.</span>
+                        @L10n["Last remote scan:"] <strong>@L10n["heads read"]</strong> @L10n["at {0} UTC.", _project.LastProbeAt.Value.ToString("yyyy-MM-dd HH:mm")]
+                        <span>@L10n["Interval discovery is running: branches are registered from the repository's heads, including ones created without a push."]</span>
                     </p>
                 }
                 else
                 {
                     <p id="branch-discovery-degraded" class="bb:mt-1">
-                        Last remote scan: <strong>@_project.LastProbeOutcome</strong> at
-                        @_project.LastProbeAt.Value.ToString("yyyy-MM-dd HH:mm") UTC -
-                        <span>no heads were read, so only pushes register branches until a probe-capable Worker answers. A failed probe never marks a branch deleted.</span>
+                        @L10n["Last remote scan:"] <strong>@_project.LastProbeOutcome</strong> @L10n["at {0} UTC -", _project.LastProbeAt.Value.ToString("yyyy-MM-dd HH:mm")]
+                        <span>@L10n["no heads were read, so only pushes register branches until a probe-capable Worker answers. A failed probe never marks a branch deleted."]</span>
                     </p>
                 }
                 <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                    A branch without the pipeline file is listed as <strong>no pipeline</strong> and is
-                    never queued. A branch deleted upstream keeps its history and is marked orphaned -
-                    nothing is deleted implicitly.
+                    @L10n["A branch without the pipeline file is listed as"] <strong>@L10n["no pipeline"]</strong> @L10n["and is never queued. A branch deleted upstream keeps its history and is marked orphaned - nothing is deleted implicitly."]
                 </p>
             </div>
         }
@@ -231,13 +225,12 @@
         _branches = await BranchesService.GetBranchesAsync(ProjectId);
     }
 
-    private static string PendingTitle(BranchView branch, string pendingCommit)
+    private string PendingTitle(BranchView branch, string pendingCommit)
     {
         var since = branch.PendingSince is { } at
-            ? $" It was last requested at {at.ToString("yyyy-MM-dd HH:mm")} UTC ({branch.ObservationAttempts} retry attempt(s))."
+            ? " " + L10n["It was last requested at {0} UTC ({1} retry attempt(s)).", at.ToString("yyyy-MM-dd HH:mm"), branch.ObservationAttempts]
             : string.Empty;
-        return $"Nobody has read this branch at {pendingCommit} yet, so nothing was built.{since} "
-            + "A Worker observation decides: has-pipeline queues the run at that commit, no-pipeline records it.";
+        return L10n["Nobody has read this branch at {0} yet, so nothing was built.{1} A Worker observation decides: has-pipeline queues the run at that commit, no-pipeline records it.", pendingCommit, since];
     }
 
     private string RunsHref(string branch) =>
@@ -246,11 +239,11 @@
     private static string ShortCommit(string commit) =>
         commit.Length > 10 ? commit[..10] : commit;
 
-    private static string OrphanTitle(BranchView branch) => branch.OrphanedEvidence switch
+    private string OrphanTitle(BranchView branch) => branch.OrphanedEvidence switch
     {
-        BranchOrphanEvidence.PushDelete => "A signed push deleted this branch upstream. Its history is kept.",
-        BranchOrphanEvidence.RefsAbsent => "A successful remote check no longer lists this branch. Its history is kept.",
-        _ => "This branch is no longer present upstream. Its history is kept.",
+        BranchOrphanEvidence.PushDelete => L10n["A signed push deleted this branch upstream. Its history is kept."],
+        BranchOrphanEvidence.RefsAbsent => L10n["A successful remote check no longer lists this branch. Its history is kept."],
+        _ => L10n["This branch is no longer present upstream. Its history is kept."],
     };
 
     private void SetNotFound()

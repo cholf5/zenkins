@@ -917,6 +917,7 @@ src/Server/                  ASP.NET Core host, Blazor Server UI, Identity, EF C
   Data/                      DbContext, entities, tenancy, migrations
   Organizations/             membership management + POST endpoints
   Projects/                  project service, validation and CRUD endpoints (POST forms)
+  Localization/              the two UI languages: language resolution, catalogue, L10n, /language
   Secrets/                   encrypted secrets: protector, Owner-only service/endpoints, key-ring constants
   Properties/                launchSettings.json — local port and Development environment
   wwwroot/                   project CSS and the two small JS files (theme, antiforgery bridge)
@@ -941,6 +942,31 @@ Where new work belongs:
   (central package management, versionless `PackageReference`s); build-wide settings go into
   `Directory.Build.props`. `src/Shared` must not reference ASP.NET Core — `Directory.Build.targets`
   fails the build if it tries.
+
+### UI copy and its two languages
+
+The UI ships in English and Simplified Chinese (card F-043, PRD §3.17). All of its copy goes
+through the localizer that every component receives as `L10n`:
+
+```razor
+<label>@L10n["Email"]</label>
+<p>@L10n["The folder name must be at most {0} characters.", FolderValidation.MaxNameLength]</p>
+```
+
+- **The English string is the key.** Write the English text you want to see, then add the
+  translation to `src/Server/Localization/Translations.zh-Hans.json` (a flat `english → 中文`
+  object). A key with no entry renders the English text — readable, but the catalogue test fails,
+  so a missing translation cannot ship unnoticed.
+- `python3`-style ad-hoc checks are not part of the repository; the guard is
+  `dotnet test --filter "Category=Localization"`. It proves every key used in `src/Server` is
+  translated, no entry is unused, and each translation has exactly the `{0}` placeholders of its
+  key.
+- **Server-produced messages shown in the UI** (validation tables, schedule outcomes, log-panel
+  state, the trigger guard) take a `Localizer` and are translated where they are produced. API
+  responses, build log lines, exception text and server log messages stay English; they are not
+  UI copy.
+- A new language is a new `Translations.<tag>.json` embedded resource plus an `AppLanguage.Choices`
+  entry; the resolver, the switcher and the catalogue tests iterate that list.
 
 ### The migration contract
 

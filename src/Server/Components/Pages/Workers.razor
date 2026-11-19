@@ -4,11 +4,11 @@
 @inject WorkerService WorkerService
 @inject RunService RunsService
 
-<PageTitle>Workers · Zenkins</PageTitle>
+<PageTitle>@L10n["Workers"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Workers</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Workers"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
@@ -37,18 +37,16 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Registered workers</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Registered workers"]</BbCardTitle>
                 <BbCardDescription>
-                    Workers of the active organization. Every worker authenticates with its own token;
-                    heartbeats keep it Online (PRD §3.4.3). Each row links to the worker's detail page
-                    with its current and recent runs (card D-005).
+                    @L10n["Workers of the active organization. Every worker authenticates with its own token; heartbeats keep it Online (PRD §3.4.3). Each row links to the worker's detail page with its current and recent runs (card D-005)."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (_workers.Count == 0)
                 {
-                    <BbEmpty Title="No workers connected"
-                             Description="Mint a registration token, then start a worker with it (ZENKINS_SERVER_URL + ZENKINS_REGISTRATION_TOKEN).">
+                    <BbEmpty Title="@L10n["No workers connected"]"
+                             Description="@L10n["Mint a registration token, then start a worker with it (ZENKINS_SERVER_URL + ZENKINS_REGISTRATION_TOKEN)."]">
                         <Icon>
                             <LucideIcon Name="server" Class="bb:h-12 bb:w-12" />
                         </Icon>
@@ -68,7 +66,7 @@
                                            class="bb:underline bb:underline-offset-4">@worker.Name</a>
                                         @if (worker.IsDisabled)
                                         {
-                                            <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                                            <BbBadge Variant="BadgeVariant.Destructive">@L10n["Disabled"]</BbBadge>
                                         }
                                     </p>
                                     <p class="bb:truncate bb:text-xs bb:text-muted-foreground">
@@ -76,14 +74,14 @@
                                     </p>
                                     @if (!string.IsNullOrEmpty(worker.Tags))
                                     {
-                                        <p class="bb:text-xs bb:text-muted-foreground">Tags: @worker.Tags</p>
+                                        <p class="bb:text-xs bb:text-muted-foreground">@L10n["Tags: {0}", worker.Tags]</p>
                                     }
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
                                     @* D-005: the count next to the roster comes from the same current-runs
                                        query the detail page lists - never from a denormalised column. *@
                                     <span>
-                                        @(_runCounts.GetValueOrDefault(worker.Id)) running
+                                        @L10n["{0} running", _runCounts.GetValueOrDefault(worker.Id)]
                                     </span>
                                     <BbBadge Variant="BadgeVariant.Outline">@worker.Status</BbBadge>
                                     <span>
@@ -101,20 +99,19 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Registration tokens</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Registration tokens"]</BbCardTitle>
                     <BbCardDescription>
-                        Single-use tokens for registering a worker. The plaintext is shown once at
-                        creation and never stored; revoking a pending token immediately invalidates it.
+                        @L10n["Single-use tokens for registering a worker. The plaintext is shown once at creation and never stored; revoking a pending token immediately invalidates it."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <form method="post" action="/workers/registration-tokens" data-zenkins-antiforgery>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create registration token</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Create registration token"]</BbButton>
                     </form>
 
                     @if (_tokens.Count == 0)
                     {
-                        <p class="bb:mt-4 bb:text-sm bb:text-muted-foreground">No registration tokens yet.</p>
+                        <p class="bb:mt-4 bb:text-sm bb:text-muted-foreground">@L10n["No registration tokens yet."]</p>
                     }
                     else
                     {
@@ -123,17 +120,17 @@
                             {
                                 <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                     <div class="bb:min-w-0">
-                                        <p class="bb:text-sm">Created @token.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</p>
+                                        <p class="bb:text-sm">@L10n["Created {0} UTC", token.CreatedAt.ToString("yyyy-MM-dd HH:mm")]</p>
                                         <p class="bb:text-xs bb:text-muted-foreground">
-                                            @(token.UsedAt is { } used ? $"Used {used:yyyy-MM-dd HH:mm} UTC"
-                                                : token.RevokedAt is { } revoked ? $"Revoked {revoked:yyyy-MM-dd HH:mm} UTC"
-                                                : "Pending (unused)")
+                                            @(token.UsedAt is { } used ? L10n["Used {0} UTC", used.ToString("yyyy-MM-dd HH:mm")]
+                                                : token.RevokedAt is { } revoked ? L10n["Revoked {0} UTC", revoked.ToString("yyyy-MM-dd HH:mm")]
+                                                : L10n["Pending (unused)"])
                                         </p>
                                     </div>
                                     @if (token.UsedAt is null && token.RevokedAt is null)
                                     {
                                         <form method="post" action="/workers/registration-tokens/@token.Id/revoke" data-zenkins-antiforgery>
-                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Revoke</BbButton>
+                                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Revoke"]</BbButton>
                                         </form>
                                     }
                                 </li>
@@ -163,15 +160,15 @@
 
     private string? Notice => NoticeCode switch
     {
-        "token-revoked" => "The registration token was revoked.",
-        "worker-deleted" => "The worker was deleted.",
+        "token-revoked" => L10n["The registration token was revoked."],
+        "worker-deleted" => L10n["The worker was deleted."],
         _ => null,
     };
 
     private string? Error => ErrorCode switch
     {
-        WorkerErrorCodes.TokenAlreadyConsumed => "That token was already used to register a worker.",
-        WorkerErrorCodes.TokenAlreadyRevoked => "That token is already revoked.",
+        WorkerErrorCodes.TokenAlreadyConsumed => L10n["That token was already used to register a worker."],
+        WorkerErrorCodes.TokenAlreadyRevoked => L10n["That token is already revoked."],
         _ => null,
     };
 

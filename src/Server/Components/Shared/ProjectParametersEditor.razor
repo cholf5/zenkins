@@ -9,7 +9,7 @@
     @if (ErrorCode is not null)
     {
         <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
-            <p>@(ProjectErrorCodes.MessageFor(ErrorCode) ?? "The parameter list was refused.")</p>
+            <p>@(ProjectErrorCodes.MessageFor(ErrorCode, L10n) ?? L10n["The parameter list was refused."])</p>
         </div>
     }
 
@@ -20,15 +20,15 @@
             <li data-parameter-row class="bb:rounded-md bb:border bb:border-input bb:p-4">
                 <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
                     <span class="bb:text-sm bb:font-medium">
-                        Parameter <span data-parameter-row-index>@(parameterIndex + 1)</span>
+                        @L10n["Parameter {0}", parameterIndex + 1]
                     </span>
                     <button type="button" data-parameter-action="remove"
                             class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                            aria-label="Remove parameter @(parameterIndex + 1)">Remove</button>
+                            aria-label="@L10n["Remove parameter {0}", parameterIndex + 1]">@L10n["Remove"]</button>
                 </div>
                 <div class="bb:grid bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
                     <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-name-@(parameterIndex)">Name (env variable)</label>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-name-@(parameterIndex)">@L10n["Name (env variable)"]</label>
                         <input data-parameter-field="name"
                                id="param-name-@(parameterIndex)"
                                value="@parameter.Name"
@@ -39,7 +39,7 @@
                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:font-mono" />
                     </div>
                     <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-type-@(parameterIndex)">Type</label>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-type-@(parameterIndex)">@L10n["Type"]</label>
                         <select data-parameter-field="type"
                                 id="param-type-@(parameterIndex)"
                                 class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
@@ -51,7 +51,7 @@
                     </div>
                     <div>
                         <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-default-@(parameterIndex)">
-                            Default (blank = the type's neutral default)
+                            @L10n["Default (blank = the type's neutral default)"]
                         </label>
                         <input data-parameter-field="default"
                                id="param-default-@(parameterIndex)"
@@ -62,7 +62,7 @@
                     </div>
                     <div>
                         <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-choices-@(parameterIndex)">
-                            Choices (comma-separated; choice parameters only)
+                            @L10n["Choices (comma-separated; choice parameters only)"]
                         </label>
                         <input data-parameter-field="choices"
                                id="param-choices-@(parameterIndex)"
@@ -74,7 +74,7 @@
                     </div>
                     <div class="bb:sm:col-span-2">
                         <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-description-@(parameterIndex)">
-                            Description (shown on the trigger form)
+                            @L10n["Description (shown on the trigger form)"]
                         </label>
                         <input data-parameter-field="description"
                                id="param-description-@(parameterIndex)"
@@ -92,15 +92,15 @@
         <li data-parameter-row class="bb:rounded-md bb:border bb:border-input bb:p-4">
             <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
                 <span class="bb:text-sm bb:font-medium">
-                    Parameter <span data-parameter-row-index></span>
+                    @L10n["Parameter {0}", ""]<span data-parameter-row-index></span>
                 </span>
                 <button type="button" data-parameter-action="remove"
                         class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                        aria-label="Remove parameter">Remove</button>
+                        aria-label="@L10n["Remove parameter"]">@L10n["Remove"]</button>
             </div>
             <div class="bb:grid bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
                 <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="name">Name (env variable)</label>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="name">@L10n["Name (env variable)"]</label>
                     <input data-parameter-field="name"
                            maxlength="64"
                            autocomplete="off"
@@ -109,7 +109,7 @@
                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:font-mono" />
                 </div>
                 <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="type">Type</label>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="type">@L10n["Type"]</label>
                     <select data-parameter-field="type"
                             class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
                         @foreach (var type in ProjectParameterTypes.All)
@@ -120,7 +120,7 @@
                 </div>
                 <div>
                     <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="default">
-                        Default (blank = the type's neutral default)
+                        @L10n["Default (blank = the type's neutral default)"]
                     </label>
                     <input data-parameter-field="default"
                            autocomplete="off"
@@ -129,7 +129,7 @@
                 </div>
                 <div>
                     <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="choices">
-                        Choices (comma-separated; choice parameters only)
+                        @L10n["Choices (comma-separated; choice parameters only)"]
                     </label>
                     <input data-parameter-field="choices"
                            autocomplete="off"
@@ -139,7 +139,7 @@
                 </div>
                 <div class="bb:sm:col-span-2">
                     <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="description">
-                        Description (shown on the trigger form)
+                        @L10n["Description (shown on the trigger form)"]
                     </label>
                     <input data-parameter-field="description"
                            maxlength="200"
@@ -153,9 +153,9 @@
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
         <button type="button" data-parameter-action="add"
                 class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-2 bb:text-sm">
-            Add parameter
+            @L10n["Add parameter"]
         </button>
-        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save parameters</BbButton>
+        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Save parameters"]</BbButton>
     </div>
 </form>
 

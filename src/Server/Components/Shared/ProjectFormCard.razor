@@ -6,7 +6,7 @@
    not erase the user's input. js/project-kind.js toggles the repository fields per kind. *@
 <form method="post" action="@Action" data-zenkins-antiforgery class="bb:space-y-4">
     <div class="bb:space-y-2">
-        <label for="project-name" class="bb:text-sm bb:font-medium">Name</label>
+        <label for="project-name" class="bb:text-sm bb:font-medium">@L10n["Name"]</label>
         <input id="project-name"
                name="Name"
                value="@Name"
@@ -26,7 +26,7 @@
             @* F-042 TC-002: the refusal names the project that already holds the name. Nothing was
                renamed behind the user's back - the existing project and this one both keep their names. *@
             <p id="project-name-conflict" role="alert" class="bb:text-xs bb:text-destructive">
-                A project named <strong>@conflict</strong> already exists in that folder.
+                @L10n["A project named"] <strong>@conflict</strong> @L10n["already exists in that folder."]
             </p>
         }
     </div>
@@ -36,9 +36,9 @@
         @* F-042: moving a project is its own explicit action (the folder page's Move form), so the edit
            form shows the folder as a badge and posts nothing that could move it as a side effect. *@
         <div class="bb:space-y-2">
-            <span class="bb:text-sm bb:font-medium">Folder</span>
+            <span class="bb:text-sm bb:font-medium">@L10n["Folder"]</span>
             <div>
-                <BbBadge Variant="BadgeVariant.Outline">@(FolderName ?? "Root")</BbBadge>
+                <BbBadge Variant="BadgeVariant.Outline">@(FolderName ?? L10n["Root"])</BbBadge>
             </div>
         </div>
     }
@@ -46,12 +46,12 @@
     {
         @* F-042 AC-4: the create form's default parent - the only place a folder changes a project. *@
         <div class="bb:space-y-2">
-            <label for="project-folder" class="bb:text-sm bb:font-medium">Folder</label>
+            <label for="project-folder" class="bb:text-sm bb:font-medium">@L10n["Folder"]</label>
             <select id="project-folder"
                     name="FolderId"
                     aria-invalid="@(FolderError is null ? null : "true")"
                     class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
-                <option value="" selected="@(string.IsNullOrEmpty(FolderId))">Root (top level)</option>
+                <option value="" selected="@(string.IsNullOrEmpty(FolderId))">@L10n["Root (top level)"]</option>
                 @foreach (var option in FolderOptions)
                 {
                     <option value="@option.Id" selected="@(FolderId == option.Id.ToString())">@option.Path</option>
@@ -70,7 +70,7 @@
            renders no kind input - the service ignores a posted kind on edit anyway, so the two can
            never disagree. *@
         <div class="bb:space-y-2">
-            <span class="bb:text-sm bb:font-medium">Kind</span>
+            <span class="bb:text-sm bb:font-medium">@L10n["Kind"]</span>
             <div>
                 <BbBadge Variant="BadgeVariant.Outline">@KindLabel</BbBadge>
             </div>
@@ -79,8 +79,8 @@
     else
     {
         <div class="bb:space-y-2">
-            <span class="bb:text-sm bb:font-medium">Kind</span>
-            <div class="bb:grid bb:gap-2 bb:sm:grid-cols-2" id="project-kind" role="radiogroup" aria-label="Project kind">
+            <span class="bb:text-sm bb:font-medium">@L10n["Kind"]</span>
+            <div class="bb:grid bb:gap-2 bb:sm:grid-cols-2" id="project-kind" role="radiogroup" aria-label="@L10n["Project kind"]">
                 <label class="bb:flex bb:cursor-pointer bb:items-start bb:gap-3 bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-sm">
                     <input type="radio"
                            name="Kind"
@@ -89,9 +89,9 @@
                            data-project-kind-choice
                            class="bb:mt-0.5" />
                     <span>
-                        <span class="bb:font-medium">Pipeline</span>
+                        <span class="bb:font-medium">@L10n["Pipeline"]</span>
                         <span class="bb:block bb:text-xs bb:text-muted-foreground">
-                            A Git repository whose pipeline.lua declares the steps.
+                            @L10n["A Git repository whose pipeline.lua declares the steps."]
                         </span>
                     </span>
                 </label>
@@ -103,9 +103,9 @@
                            data-project-kind-choice
                            class="bb:mt-0.5" />
                     <span>
-                        <span class="bb:font-medium">Freestyle</span>
+                        <span class="bb:font-medium">@L10n["Freestyle"]</span>
                         <span class="bb:block bb:text-xs bb:text-muted-foreground">
-                            No repository. Steps are configured here and run as shell scripts.
+                            @L10n["No repository. Steps are configured here and run as shell scripts."]
                         </span>
                     </span>
                 </label>
@@ -123,8 +123,8 @@
            section for Freestyle and swaps the repository fields for the script editor per selection;
            the service is the authority (ProjectValidation.ValidatePipelineSource). *@
         <div data-project-source-fields class="bb:space-y-2">
-            <span class="bb:text-sm bb:font-medium">Definition</span>
-            <div class="bb:grid bb:gap-2 bb:sm:grid-cols-2" role="radiogroup" aria-label="Pipeline definition source">
+            <span class="bb:text-sm bb:font-medium">@L10n["Definition"]</span>
+            <div class="bb:grid bb:gap-2 bb:sm:grid-cols-2" role="radiogroup" aria-label="@L10n["Pipeline definition source"]">
                 <label class="bb:flex bb:cursor-pointer bb:items-start bb:gap-3 bb:rounded-md bb:border bb:border-input bb:p-3 bb:text-sm">
                     <input type="radio"
                            name="PipelineSource"
@@ -133,9 +133,9 @@
                            data-project-source-choice
                            class="bb:mt-0.5" />
                     <span>
-                        <span class="bb:font-medium">Pipeline script from SCM</span>
+                        <span class="bb:font-medium">@L10n["Pipeline script from SCM"]</span>
                         <span class="bb:block bb:text-xs bb:text-muted-foreground">
-                            The script is a file in a Git repository.
+                            @L10n["The script is a file in a Git repository."]
                         </span>
                     </span>
                 </label>
@@ -147,9 +147,9 @@
                            data-project-source-choice
                            class="bb:mt-0.5" />
                     <span>
-                        <span class="bb:font-medium">Pipeline script</span>
+                        <span class="bb:font-medium">@L10n["Pipeline script"]</span>
                         <span class="bb:block bb:text-xs bb:text-muted-foreground">
-                            The script lives on the server; no repository is needed.
+                            @L10n["The script lives on the server; no repository is needed."]
                         </span>
                     </span>
                 </label>
@@ -164,7 +164,7 @@
     @if (ShowInlineFields)
     {
         <div data-project-inline-fields class="bb:space-y-2">
-            <label for="project-inline-script" class="bb:text-sm bb:font-medium">Pipeline script</label>
+            <label for="project-inline-script" class="bb:text-sm bb:font-medium">@L10n["Pipeline script"]</label>
             <textarea id="project-inline-script"
                       name="InlineScript"
                       rows="14"
@@ -179,8 +179,7 @@
                 <p id="project-inline-script-error" role="alert" class="bb:text-xs bb:text-destructive">@scriptError</p>
             }
             <p class="bb:text-xs bb:text-muted-foreground">
-                A <code>pipeline { ... }</code> body, at most 64 KiB. Saving does not prove it valid -
-                the Pipelines tab's Validate action runs the definition phase on a worker.
+                @L10n["A"] <code>pipeline { ... }</code> @L10n["body, at most 64 KiB. Saving does not prove it valid - the Pipelines tab's Validate action runs the definition phase on a worker."]
             </p>
         </div>
     }
@@ -189,7 +188,7 @@
     {
         <div data-project-repository-fields class="bb:space-y-4">
             <div class="bb:space-y-2">
-                <label for="project-repository-url" class="bb:text-sm bb:font-medium">Repository URL</label>
+                <label for="project-repository-url" class="bb:text-sm bb:font-medium">@L10n["Repository URL"]</label>
             <input id="project-repository-url"
                    name="RepositoryUrl"
                    value="@RepositoryUrl"
@@ -197,7 +196,7 @@
                    maxlength="2048"
                    autocomplete="off"
                    spellcheck="false"
-                   placeholder="https://github.com/owner/repo.git or git@github.com:owner/repo.git"
+                   placeholder="@L10n["https://github.com/owner/repo.git or git@github.com:owner/repo.git"]"
                    aria-invalid="@(RepositoryUrlError is null ? null : "true")"
                    aria-describedby="@(RepositoryUrlError is null ? null : "project-repository-url-error")"
                    class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
@@ -206,13 +205,12 @@
                 <p id="project-repository-url-error" role="alert" class="bb:text-xs bb:text-destructive">@repositoryUrlError</p>
             }
             <p class="bb:text-xs bb:text-muted-foreground">
-                HTTPS and SSH only. <code>file://</code>, <code>ext::</code> and other transports that can
-                execute commands are rejected on the server.
+                @L10n["HTTPS and SSH only."] <code>file://</code>, <code>ext::</code> @L10n["and other transports that can execute commands are rejected on the server."]
             </p>
         </div>
 
         <div class="bb:space-y-2">
-            <label for="project-default-branch" class="bb:text-sm bb:font-medium">Default branch</label>
+            <label for="project-default-branch" class="bb:text-sm bb:font-medium">@L10n["Default branch"]</label>
             <input id="project-default-branch"
                    name="DefaultBranch"
                    value="@DefaultBranch"
@@ -231,7 +229,7 @@
         </div>
 
         <div class="bb:space-y-2">
-            <label for="project-pipeline-path" class="bb:text-sm bb:font-medium">Pipeline path</label>
+            <label for="project-pipeline-path" class="bb:text-sm bb:font-medium">@L10n["Pipeline path"]</label>
             <input id="project-pipeline-path"
                    name="PipelinePath"
                    value="@PipelinePath"
@@ -247,8 +245,7 @@
                 <p id="project-pipeline-path-error" role="alert" class="bb:text-xs bb:text-destructive">@pipelinePathError</p>
             }
             <p class="bb:text-xs bb:text-muted-foreground">
-                Repository-relative and defaults to <code>pipeline.lua</code>. Absolute paths and
-                <code>..</code> are rejected.
+                @L10n["Repository-relative and defaults to"] <code>pipeline.lua</code>. @L10n["Absolute paths and"] <code>..</code> @L10n["are rejected."]
             </p>
         </div>
 
@@ -256,17 +253,17 @@
            purpose: a Freestyle or inline project (where the JS hides this block) has no repository and
            therefore cannot discover anything - the server refuses that combination too. *@
         <div class="bb:space-y-2" data-project-branch-discovery>
-            <label for="project-branch-discovery" class="bb:text-sm bb:font-medium">Branch discovery</label>
+            <label for="project-branch-discovery" class="bb:text-sm bb:font-medium">@L10n["Branch discovery"]</label>
             <select id="project-branch-discovery"
                     name="BranchDiscovery"
                     aria-invalid="@(BranchDiscoveryError is null ? null : "true")"
                     aria-describedby="@(BranchDiscoveryError is null ? null : "project-branch-discovery-error")"
                     class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
                 <option value="@BranchDiscoveryModes.Single" selected="@(SelectedBranchDiscovery == BranchDiscoveryModes.Single)">
-                    Single branch - the project's default branch (today's behaviour)
+                    @L10n["Single branch - the project's default branch (today's behaviour)"]
                 </option>
                 <option value="@BranchDiscoveryModes.Branches" selected="@(SelectedBranchDiscovery == BranchDiscoveryModes.Branches)">
-                    Every branch - one branch job per branch that has the pipeline file
+                    @L10n["Every branch - one branch job per branch that has the pipeline file"]
                 </option>
             </select>
             @if (BranchDiscoveryError is { } branchDiscoveryError)
@@ -274,20 +271,18 @@
                 <p id="project-branch-discovery-error" role="alert" class="bb:text-xs bb:text-destructive">@branchDiscoveryError</p>
             }
             <p class="bb:text-xs bb:text-muted-foreground">
-                With discovery on, a push to any branch the webhook selects becomes that branch's own
-                job: its own runs, its own last status. Settings, credentials and parameters stay defined
-                once on the project. A branch without the pipeline file is listed as
-                <strong>no pipeline</strong> and is not built.
+                @L10n["With discovery on, a push to any branch the webhook selects becomes that branch's own job: its own runs, its own last status. Settings, credentials and parameters stay defined once on the project. A branch without the pipeline file is listed as"]
+                <strong>@L10n["no pipeline"]</strong> @L10n["and is not built."]
             </p>
         </div>
     </div>
     }
 
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@SubmitLabel</BbButton>
+        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@SubmitText</BbButton>
         @if (CancelHref is not null)
         {
-            <BbButton Href="@CancelHref" Variant="ButtonVariant.Outline">Cancel</BbButton>
+            <BbButton Href="@CancelHref" Variant="ButtonVariant.Outline">@L10n["Cancel"]</BbButton>
         }
     </div>
 </form>
@@ -297,8 +292,12 @@
     [Parameter]
     public string Action { get; set; } = string.Empty;
 
+    /// <summary>The submit button's text; a caller that passes none gets the shared "Save project".</summary>
     [Parameter]
-    public string SubmitLabel { get; set; } = "Save project";
+    public string? SubmitLabel { get; set; }
+
+    /// <summary>The submit button's label, resolved through the localizer when the caller passed none.</summary>
+    private string SubmitText => string.IsNullOrEmpty(SubmitLabel) ? L10n["Save project"] : SubmitLabel;
 
     [Parameter]
     public string? CancelHref { get; set; }
@@ -368,7 +367,7 @@
 
     private string SelectedKind => Kind == ProjectKinds.Freestyle ? ProjectKinds.Freestyle : ProjectKinds.Pipeline;
 
-    private string KindLabel => SelectedKind == ProjectKinds.Freestyle ? "Freestyle" : "Pipeline";
+    private string KindLabel => SelectedKind == ProjectKinds.Freestyle ? L10n["Freestyle"] : L10n["Pipeline"];
 
     /// <summary>Whether the repository fields render at all: unlocked (the create form - the JS then
     /// toggles them per selection) or locked onto the Pipeline kind. A kind-locked Freestyle edit
@@ -400,6 +399,6 @@
 
     private string? ErrorFor(string field) =>
         ProjectErrorCodes.FieldFor(ErrorCode) == field
-            ? ProjectErrorCodes.MessageFor(ErrorCode)
+            ? ProjectErrorCodes.MessageFor(ErrorCode, L10n)
             : null;
 }

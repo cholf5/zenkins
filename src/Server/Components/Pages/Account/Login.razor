@@ -7,13 +7,13 @@
 @inject SignInManager<User> SignInManager
 @inject NavigationManager Navigation
 
-<PageTitle>Sign in · Zenkins</PageTitle>
+<PageTitle>@L10n["Sign in"] · Zenkins</PageTitle>
 
 <div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
     <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
-        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">Sign in</h1>
+        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">@L10n["Sign in"]</h1>
         <p class="bb:text-sm bb:text-muted-foreground">
-            Use the account you registered, or the account an organization Owner invited.
+            @L10n["Use the account you registered, or the account an organization Owner invited."]
         </p>
     </div>
 
@@ -24,7 +24,7 @@
             @if (SignedOut)
             {
                 <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
-                    You have been signed out.
+                    @L10n["You have been signed out."]
                 </div>
             }
 
@@ -33,40 +33,40 @@
                 <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
                     @foreach (var error in _errors)
                     {
-                        <p>@error</p>
+                        <p>@L10n[error]</p>
                     }
                 </div>
             }
 
             <div class="bb:space-y-2">
-                <label for="login-email" class="bb:text-sm bb:font-medium">Email</label>
+                <label for="login-email" class="bb:text-sm bb:font-medium">@L10n["Email"]</label>
                 <InputText id="login-email"
                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                            @bind-Value="Input!.Email"
                            autocomplete="username"
                            autofocus />
-                <ValidationMessage For="() => Input!.Email" class="validation-message" />
+                <LocalizedValidationMessage For="() => Input!.Email" />
             </div>
 
             <div class="bb:space-y-2">
-                <label for="login-password" class="bb:text-sm bb:font-medium">Password</label>
+                <label for="login-password" class="bb:text-sm bb:font-medium">@L10n["Password"]</label>
                 <InputText id="login-password"
                            type="password"
                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                            @bind-Value="Input!.Password"
                            autocomplete="current-password" />
-                <ValidationMessage For="() => Input!.Password" class="validation-message" />
+                <LocalizedValidationMessage For="() => Input!.Password" />
             </div>
 
             <button type="submit"
                     class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
-                Sign in
+                @L10n["Sign in"]
             </button>
         </EditForm>
 
         <p class="bb:mt-4 bb:text-center bb:text-sm bb:text-muted-foreground">
-            No account yet?
-            <a href="/account/register" class="bb:font-medium bb:underline bb:underline-offset-4">Register</a>
+            @L10n["No account yet?"]
+            <a href="/account/register" class="bb:font-medium bb:underline bb:underline-offset-4">@L10n["Register"]</a>
         </p>
     </div>
 </div>
@@ -112,11 +112,11 @@
         {
             // Deliberately specific so a legitimate user is not told to keep retrying, and
             // deliberately silent about which part of the credential was wrong.
-            _errors.Add("This account is temporarily locked after repeated failed sign-ins. Try again in 15 minutes.");
+            _errors.Add(L10n["This account is temporarily locked after repeated failed sign-ins. Try again in 15 minutes."]);
             return;
         }
 
-        _errors.Add("Incorrect email or password.");
+        _errors.Add(L10n["Incorrect email or password."]);
     }
 
     /// <summary>The login form fields. Validation runs server-side on the POST (<c>OnValidSubmit</c>).</summary>

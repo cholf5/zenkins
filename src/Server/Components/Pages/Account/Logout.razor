@@ -6,19 +6,19 @@
 @inject SignInManager<User> SignInManager
 @inject NavigationManager Navigation
 
-<PageTitle>Sign out · Zenkins</PageTitle>
+<PageTitle>@L10n["Sign out"] · Zenkins</PageTitle>
 
 <div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
     <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
-        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">Sign out</h1>
+        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">@L10n["Sign out"]</h1>
         <p class="bb:text-sm bb:text-muted-foreground">
             @if (IsSignedIn)
             {
-                <span>Signing out clears the Zenkins authentication cookie on this browser.</span>
+                <span>@L10n["Signing out clears the Zenkins authentication cookie on this browser."]</span>
             }
             else
             {
-                <span>You are not signed in. Sign in to continue.</span>
+                <span>@L10n["You are not signed in. Sign in to continue."]</span>
             }
         </p>
     </div>
@@ -33,7 +33,7 @@
                 <input type="hidden" name="Input.Confirm" value="true" />
                 <button type="submit"
                         class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
-                    Sign out
+                    @L10n["Sign out"]
                 </button>
             </EditForm>
         }
@@ -41,7 +41,7 @@
         {
             <a href="/account/login"
                class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
-                Go to sign in
+                @L10n["Go to sign in"]
             </a>
         }
     </div>

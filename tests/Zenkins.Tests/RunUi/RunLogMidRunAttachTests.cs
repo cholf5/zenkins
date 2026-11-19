@@ -3,6 +3,7 @@ using Xunit;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Server.Components.Shared;
+using Zenkins.Tests.Localization;
 
 namespace Zenkins.Tests.RunUi;
 
@@ -80,7 +81,7 @@ public sealed class RunLogMidRunAttachTests
 
         var headers = new Dictionary<Guid, string> { [build] = "1. Build", [deploy] = "2. Deploy" };
         Assert.Equal(15, viewModel.Count);
-        var midRun = viewModel.Plan(headers);
+        var midRun = viewModel.Plan(headers, TestText.English);
         Assert.Equal(15, midRun.Entries[^1].Line.Seq);
 
         // The run continues and finishes while the same connection stays open - no reload, no
@@ -101,7 +102,7 @@ public sealed class RunLogMidRunAttachTests
 
         // The panel followed the run to its end: every line, tail at the newest.
         Assert.Equal(30, viewModel.Count);
-        var finished = viewModel.Plan(headers);
+        var finished = viewModel.Plan(headers, TestText.English);
         Assert.Equal(30, finished.Entries.Count);
         Assert.Equal(30, finished.Entries[^1].Line.Seq);
         Assert.Equal("late line 30", finished.Entries[^1].Line.Message);

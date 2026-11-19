@@ -1,3 +1,5 @@
+using Zenkins.Server.Localization;
+
 namespace Zenkins.Server.Folders;
 
 /// <summary>
@@ -53,21 +55,22 @@ public static class FolderErrorCodes
         _ => null,
     };
 
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message the page renders for a code, in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        NameRequired => "Enter a folder name.",
-        NameTooLong => $"The folder name must be at most {FolderValidation.MaxNameLength} characters.",
-        NameInvalid => "The folder name contains characters that are not allowed.",
-        NameDuplicate => "A folder with this name already exists here (names are compared ignoring case).",
+        NameRequired => L10n["Enter a folder name."],
+        NameTooLong => L10n["The folder name must be at most {0} characters.", FolderValidation.MaxNameLength],
+        NameInvalid => L10n["The folder name contains characters that are not allowed."],
+        NameDuplicate => L10n["A folder with this name already exists here (names are compared ignoring case)."],
         DescriptionTooLong =>
-            $"The description must be at most {FolderValidation.MaxDescriptionLength} characters.",
-        DescriptionInvalid => "The description contains characters that are not allowed.",
-        ParentNotFound => "That parent folder does not exist in this organization.",
-        ParentInvalid => "That is not a folder id.",
+            L10n["The description must be at most {0} characters.", FolderValidation.MaxDescriptionLength],
+        DescriptionInvalid => L10n["The description contains characters that are not allowed."],
+        ParentNotFound => L10n["That parent folder does not exist in this organization."],
+        ParentInvalid => L10n["That is not a folder id."],
         DepthExceeded =>
-            $"Folders can be nested at most {FolderValidation.MaxDepth} levels deep.",
-        Cycle => "A folder cannot be moved inside itself or one of its own subfolders.",
-        NotEmpty => "This folder still has projects or subfolders inside - move or delete them first.",
+            L10n["Folders can be nested at most {0} levels deep.", FolderValidation.MaxDepth],
+        Cycle => L10n["A folder cannot be moved inside itself or one of its own subfolders."],
+        NotEmpty => L10n["This folder still has projects or subfolders inside - move or delete them first."],
         _ => null,
     };
 }

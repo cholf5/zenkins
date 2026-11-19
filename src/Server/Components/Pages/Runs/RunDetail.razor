@@ -34,13 +34,13 @@
                    happened - the run itself is untouched. *@
                 @if (_run.ProjectDisabled == true)
                 {
-                    <BbBadge Variant="BadgeVariant.Destructive">Project disabled</BbBadge>
+                    <BbBadge Variant="BadgeVariant.Destructive">@L10n["Project disabled"]</BbBadge>
                 }
                 @* Card F-038: the state the retention sweep reads, said where the toggle is. *@
                 @if (_run.Pinned)
                 {
                     <span id="run-pinned-badge" data-run-pinned="true">
-                        <BbBadge Variant="BadgeVariant.Secondary">Pinned</BbBadge>
+                        <BbBadge Variant="BadgeVariant.Secondary">@L10n["Pinned"]</BbBadge>
                     </span>
                 }
             </div>
@@ -52,7 +52,7 @@
                       action="@($"/runs/{_run.Id}/{(_run.Pinned ? "unpin" : "pin")}")"
                       data-zenkins-antiforgery>
                     <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">
-                        @(_run.Pinned ? "Unpin build" : "Pin build")
+                        @(_run.Pinned ? L10n["Unpin build"] : L10n["Pin build"])
                     </BbButton>
                 </form>
 
@@ -63,7 +63,7 @@
                 @if (_run.Status is BuildRunStatus.Queued or BuildRunStatus.Running)
                 {
                     <form method="post" action="@($"/runs/{_run.Id}/cancel")" data-zenkins-antiforgery>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Cancel run</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">@L10n["Cancel run"]</BbButton>
                     </form>
                 }
 
@@ -74,13 +74,13 @@
                 @if (_run.CanRebuild)
                 {
                     <form method="post" action="@($"/runs/{_run.Id}/rebuild")" data-zenkins-antiforgery>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Rebuild</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Rebuild"]</BbButton>
                     </form>
                 }
                 @if (_run.CanReplay)
                 {
                     <form method="post" action="@($"/runs/{_run.Id}/replay")" data-zenkins-antiforgery>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Replay</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Replay"]</BbButton>
                     </form>
                 }
                 else if (_run.IsTerminal)
@@ -88,12 +88,12 @@
                     @* The AC's "the button's tooltip says why it is absent": replay only exists where the
                        run's snapshot IS its definition. *@
                     <button type="button" id="run-replay-unavailable" disabled
-                            title="Replay re-runs a run's own definition text. This run stores the pipeline spec its worker produced, not the source that produced it, so there is nothing to replay - use Rebuild, which re-runs the commit this run pinned."
+                            title="@L10n["Replay re-runs a run's own definition text. This run stores the pipeline spec its worker produced, not the source that produced it, so there is nothing to replay - use Rebuild, which re-runs the commit this run pinned."]"
                             class="bb:cursor-not-allowed bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-1.5 bb:text-sm bb:text-muted-foreground">
-                        Replay
+                        @L10n["Replay"]
                     </button>
                 }
-                <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">All runs</BbButton>
+                <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">@L10n["All runs"]</BbButton>
             </div>
         </div>
 
@@ -101,7 +101,7 @@
            (`#12`); the href is the permalink it belongs to. The guid route keeps working beside it (F-036's
            AC), so this is the canonical link, not the only one. *@
         <p id="run-permalink" class="bb:text-sm bb:text-muted-foreground">
-            Permalink
+            @L10n["Permalink"]
             <a href="@Permalink" class="bb:underline bb:underline-offset-4">@PermalinkText</a>
         </p>
 
@@ -109,9 +109,9 @@
            original's row is gone, which is honest rather than a dead link that looks like ours). *@
         @if (_run.RebuiltFromRunId is { } originId)
         {
-            var verb = _run.TriggerType == BuildRunTriggerType.Replay ? "replayed from" : "rebuilt from";
+            var verb = _run.TriggerType == BuildRunTriggerType.Replay ? L10n["replayed from"] : L10n["rebuilt from"];
             <p id="run-rebuilt-from" class="bb:text-sm bb:text-muted-foreground">
-                This run is @verb
+                @L10n["This run is"] @verb
                 @if (_run.RebuiltFromNumber is { } originNumber)
                 {
                     <a id="run-rebuilt-from-link" href="@($"/projects/{_run.ProjectId}/runs/{originNumber}")"
@@ -120,7 +120,7 @@
                 else
                 {
                     <span class="bb:font-mono">@originId.ToString("N")[..8]</span>
-                    <span>(the original run's row is gone, so its number cannot be resolved).</span>
+                    <span>@L10n["(the original run's row is gone, so its number cannot be resolved)."]</span>
                 }
             </p>
         }
@@ -138,7 +138,7 @@
         {
             <div id="run-rerun-error" role="alert"
                  class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm">
-                <p class="bb:font-medium bb:text-destructive">Nothing was queued.</p>
+                <p class="bb:font-medium bb:text-destructive">@L10n["Nothing was queued."]</p>
                 <p>@rerunError</p>
             </div>
         }
@@ -149,13 +149,11 @@
         @if (_run.CanRebuild && _run.Parameters is { Count: > 0 } rebuildParameters)
         {
             <details id="run-rebuild-parameters" class="bb:rounded-md bb:border bb:border-input bb:p-3">
-                <summary class="bb:cursor-pointer bb:text-sm bb:font-medium">Rebuild with parameters…</summary>
+                <summary class="bb:cursor-pointer bb:text-sm bb:font-medium">@L10n["Rebuild with parameters…"]</summary>
                 <form method="post" action="@($"/runs/{_run.Id}/rebuild")" data-zenkins-antiforgery
                       class="bb:mt-3 bb:space-y-3">
                     <p class="bb:text-xs bb:text-muted-foreground">
-                        The values this run was triggered with are prefilled; edit what a rebuild should
-                        differ in. Everything else - branch, commit, tags, timeout and the definition -
-                        still comes from run #@_run.Number.
+                        @L10n["The values this run was triggered with are prefilled; edit what a rebuild should differ in. Everything else - branch, commit, tags, timeout and the definition - still comes from"] @L10n["run #{0}.", _run.Number]
                     </p>
                     @foreach (var (name, value) in rebuildParameters.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                     {
@@ -172,7 +170,7 @@
                                        autocomplete="new-password"
                                        class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:p-2 bb:text-sm" />
                                 <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                    Leave empty to rebuild with the same password; type a new one to replace it.
+                                    @L10n["Leave empty to rebuild with the same password; type a new one to replace it."]
                                 </p>
                             }
                             else
@@ -184,7 +182,7 @@
                             }
                         </div>
                     }
-                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Rebuild with these parameters</BbButton>
+                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Rebuild with these parameters"]</BbButton>
                 </form>
             </details>
         }
@@ -197,14 +195,14 @@
             <div id="run-project-disabled" role="status"
                  class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
                 <p>
-                    This run's project is disabled, so nothing new is queued for it.
+                    @L10n["This run's project is disabled, so nothing new is queued for it."]
                     @if (_run.Status is BuildRunStatus.Queued or BuildRunStatus.Running)
                     {
-                        <span>This run keeps running to its own end - disabling a project does not stop work in flight.</span>
+                        <span>@L10n["This run keeps running to its own end - disabling a project does not stop work in flight."]</span>
                     }
                     else
                     {
-                        <span>This run's own history is unchanged.</span>
+                        <span>@L10n["This run's own history is unchanged."]</span>
                     }
                 </p>
             </div>
@@ -217,10 +215,10 @@
         {
             <div id="run-failure" role="alert"
                  class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm">
-                <p id="run-failure-title" class="bb:font-medium bb:text-destructive">This run failed.</p>
+                <p id="run-failure-title" class="bb:font-medium bb:text-destructive">@L10n["This run failed."]</p>
                 <dl class="bb:mt-2 bb:space-y-1">
                     <div class="bb:flex bb:gap-2">
-                        <dt class="bb:text-muted-foreground">Reason</dt>
+                        <dt class="bb:text-muted-foreground">@L10n["Reason"]</dt>
                         <dd id="run-failure-reason" class="bb:break-all">@(_run.FailureReason ?? "-")</dd>
                     </div>
                     @* F-018: the code above is the recorded value; this line is what it means. A rejected
@@ -229,16 +227,16 @@
                     @if (FailureExplanation is { Length: > 0 } explanation)
                     {
                         <div class="bb:flex bb:gap-2">
-                            <dt class="bb:text-muted-foreground">What happened</dt>
+                            <dt class="bb:text-muted-foreground">@L10n["What happened"]</dt>
                             <dd id="run-failure-explanation">@explanation</dd>
                         </div>
                     }
                     <div class="bb:flex bb:gap-2">
-                        <dt class="bb:text-muted-foreground">Exit code</dt>
+                        <dt class="bb:text-muted-foreground">@L10n["Exit code"]</dt>
                         <dd id="run-failure-exit-code">@(_run.ExitCode?.ToString() ?? "-")</dd>
                     </div>
                     <div class="bb:flex bb:gap-2">
-                        <dt class="bb:text-muted-foreground">Failing step</dt>
+                        <dt class="bb:text-muted-foreground">@L10n["Failing step"]</dt>
                         <dd id="run-failure-step" class="bb:break-all">@FailingStepText()</dd>
                     </div>
                     @* Card F-037's wording: a rebuild pins a commit, and if the remote no longer has it nothing
@@ -248,7 +246,7 @@
                     @if (RebuildCommitNotice is { } rebuildNotice)
                     {
                         <div class="bb:flex bb:gap-2">
-                            <dt class="bb:text-muted-foreground">Rebuild</dt>
+                            <dt class="bb:text-muted-foreground">@L10n["Rebuild"]</dt>
                             <dd id="run-rebuild-commit-notice">@rebuildNotice</dd>
                         </div>
                     }
@@ -258,53 +256,49 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Pipeline</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Pipeline"]</BbCardTitle>
                 <BbCardDescription>
-                    @*F-020*@ A Freestyle run has no branch, pipeline file or commit - the card says
-                    what it executed and where its steps came from. A Pipeline run's card is the
-                    branch and pipeline file this run executed, the exact commit the worker resolved,
-                    and the frozen step list it ran. The steps come from the spec frozen before the
-                    first one started, so a later commit never changes what this run shows.
+                    @*F-020*@ @L10n["A Freestyle run has no branch, pipeline file or commit - the card says what it executed and where its steps came from. A Pipeline run's card is the branch and pipeline file this run executed, the exact commit the worker resolved, and the frozen step list it ran. The steps come from the spec frozen before the first one started, so a later commit never changes what this run shows."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <dl class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Source</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Source"]</dt>
                         <dd id="run-branch" class="bb:break-all">
                             @(_run.Pipeline is not null && string.IsNullOrEmpty(_run.GitBranch)
-                                ? "Freestyle steps, frozen at trigger time"
+                                ? L10n["Freestyle steps, frozen at trigger time"]
                                 : _run.GitBranch)
                         </dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Pipeline path</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Pipeline path"]</dt>
                         <dd id="run-pipeline-path" class="bb:break-all">
                             @(_run.PipelinePath.Length == 0 ? "-" : _run.PipelinePath)
                         </dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Git commit</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Git commit"]</dt>
                         <dd id="run-git-commit" class="bb:break-all">@(_run.GitCommit ?? "-")</dd>
                     </div>
                     @* F-018: which credential the clone had, never the material. "No credential assigned"
                        is a fact the owner needs (a private repository cannot clone without one, and the
                        worker does not borrow the host's), and it explains the failure above. *@
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Git credential</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Git credential"]</dt>
                         <dd id="run-git-credential">
                             @switch (_run.GitCredentialAssigned)
                             {
                                 case true:
-                                    <span>The project's assigned credential; fetched by the worker for this run.</span>
+                                    <span>@L10n["The project's assigned credential; fetched by the worker for this run."]</span>
                                     break;
                                 case false:
                                     <span class="bb:text-muted-foreground">
-                                        No credential is assigned to this project, so this run cloned without one.
+                                        @L10n["No credential is assigned to this project, so this run cloned without one."]
                                     </span>
                                     break;
                                 default:
-                                    <span class="bb:text-muted-foreground">Unknown (the project could not be read).</span>
+                                    <span class="bb:text-muted-foreground">@L10n["Unknown (the project could not be read)."]</span>
                                     break;
                             }
                         </dd>
@@ -314,8 +308,8 @@
                 @if (_run.Pipeline is { } pipeline)
                 {
                     <p class="bb:mt-4 bb:text-sm">
-                        <span class="bb:font-medium">Pipeline:</span> <span id="run-pipeline-name">@pipeline.Name</span>
-                        <span class="bb:text-muted-foreground">(@pipeline.Steps.Length step(s))</span>
+                        <span class="bb:font-medium">@L10n["Pipeline:"]</span> <span id="run-pipeline-name">@pipeline.Name</span>
+                        <span class="bb:text-muted-foreground">@L10n["({0} step(s))", pipeline.Steps.Length]</span>
                     </p>
                     @* F-015: every declared step with the state the worker recorded for it, or Pending when
                        it has not been reached - so a page opened mid-run shows completed, current and
@@ -342,7 +336,7 @@
                                             {
                                                 <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.FormatDuration(stageDuration)</span>
                                             }
-                                            <span class="bb:text-xs bb:text-muted-foreground">@section.StepCount step(s)</span>
+                                            <span class="bb:text-xs bb:text-muted-foreground">@L10n["{0} step(s)", section.StepCount]</span>
                                         </summary>
                                         <ol id="@($"run-stage-steps-{section.Name}")" class="bb:mt-2 bb:space-y-3">
                                             <RunStepList Steps="@section.Steps"
@@ -369,12 +363,11 @@
                     {
                         <section id="run-post" class="bb:mt-4 bb:rounded-md bb:border bb:border-input bb:p-3">
                             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
-                                <h3 class="bb:text-sm bb:font-medium">Post steps</h3>
-                                <span id="run-post-count" class="bb:text-xs bb:text-muted-foreground">@_run.PostSteps.Count recorded</span>
+                                <h3 class="bb:text-sm bb:font-medium">@L10n["Post steps"]</h3>
+                                <span id="run-post-count" class="bb:text-xs bb:text-muted-foreground">@L10n["{0} recorded", _run.PostSteps.Count]</span>
                             </div>
                             <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                These run after the main steps: the matching outcome set (success or failure),
-                                then <code>always</code> last.
+                                @L10n["These run after the main steps: the matching outcome set (success or failure), then"] <code>always</code> @L10n["last."]
                             </p>
                             <ol id="run-post-steps" class="bb:mt-2 bb:space-y-3 bb:text-sm">
                                 <RunStepList Steps="@_run.PostSteps"
@@ -391,19 +384,19 @@
                 else
                 {
                     <p id="run-steps-pending" class="bb:mt-4 bb:text-sm bb:text-muted-foreground">
-                        No pipeline definition was reported for this run.
+                        @L10n["No pipeline definition was reported for this run."]
                     </p>
                 }
 
                 @if (_run.RequiredTags.Length > 0)
                 {
                     <p class="bb:mt-3 bb:text-sm bb:text-muted-foreground">
-                        Required tags: @string.Join(", ", _run.RequiredTags)
+                        @L10n["Required tags:"] @string.Join(", ", _run.RequiredTags)
                     </p>
                 }
                 else
                 {
-                    <p class="bb:mt-3 bb:text-sm bb:text-muted-foreground">No required tags.</p>
+                    <p class="bb:mt-3 bb:text-sm bb:text-muted-foreground">@L10n["No required tags."]</p>
                 }
 
                 @* Card F-033: the requirement in the form a person reads (`linux and arm64`), never the stored
@@ -412,14 +405,14 @@
                 @if (_run.RequiredRequirementText is { Length: > 0 } requirementText)
                 {
                     <p id="run-requirement" class="bb:mt-2 bb:text-sm">
-                        Needs a Worker with: @requirementText
+                        @L10n["Needs a Worker with:"] @requirementText
                     </p>
                 }
 
                 @if (_run.MissingWorkerLabels is { Count: > 0 } missing)
                 {
                     <p id="run-requirement-waiting" class="bb:mt-2 bb:text-sm bb:text-muted-foreground">
-                        Queued - no known Worker has: @string.Join(", ", missing)
+                        @L10n["Queued - no known Worker has:"] @string.Join(", ", missing)
                     </p>
                 }
             </BbCardContent>
@@ -432,9 +425,9 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Chain</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Chain"]</BbCardTitle>
                     <BbCardDescription>
-                        The upstream/downstream links this run took part in. A link that produced no run says why.
+                        @L10n["The upstream/downstream links this run took part in. A link that produced no run says why."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
@@ -442,9 +435,9 @@
                         @if (_run.TriggeredByRunId is { } triggeredBy)
                         {
                             <div>
-                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered by</dt>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Triggered by"]</dt>
                                 <dd class="bb:font-mono">
-                                    <a href="@($"/runs/{triggeredBy}")" class="bb:underline bb:underline-offset-4">@(_run.TriggeredByRunNumber is { } upstreamNumber ? $"#{upstreamNumber}" : "an upstream run")</a>
+                                    <a href="@($"/runs/{triggeredBy}")" class="bb:underline bb:underline-offset-4">@(_run.TriggeredByRunNumber is { } upstreamNumber ? $"#{upstreamNumber}" : L10n["an upstream run"])</a>
                                 </dd>
                             </div>
                         }
@@ -453,12 +446,12 @@
                             @* F-026: the chain facts the steps read, in their own list - not among the build
                                parameters, where they would look like something a person typed. *@
                             <div>
-                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Upstream facts</dt>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Upstream facts"]</dt>
                                 <dd>
                                     <ul id="run-upstream-facts" class="bb:space-y-1 bb:font-mono bb:text-xs">
                                         @foreach (var (factName, factValue) in upstreamFacts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                                         {
-                                            <li>@factName=@(factValue.Length == 0 ? "(empty)" : factValue)</li>
+                                            <li>@factName=@(factValue.Length == 0 ? L10n["(empty)"] : factValue)</li>
                                         }
                                     </ul>
                                 </dd>
@@ -467,7 +460,7 @@
                         @if (_run.DownstreamTriggers is { Count: > 0 } downstreams)
                         {
                             <div>
-                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered</dt>
+                                <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Triggered"]</dt>
                                 <dd>
                                     <ul class="bb:space-y-1">
                                         @foreach (var link in downstreams)
@@ -477,7 +470,7 @@
                                                 @if (link.DownstreamRunId is { } downstreamRunId)
                                                 {
                                                     <a href="@($"/runs/{downstreamRunId}")"
-                                                       class="bb:ml-1 bb:underline bb:underline-offset-4">@(link.DownstreamRunNumber is { } downstreamNumber ? $"#{downstreamNumber}" : "run")</a>
+                                                       class="bb:ml-1 bb:underline bb:underline-offset-4">@(link.DownstreamRunNumber is { } downstreamNumber ? $"#{downstreamNumber}" : L10n["run"])</a>
                                                 }
                                                 else
                                                 {
@@ -505,10 +498,9 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Build parameters</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Build parameters"]</BbCardTitle>
                     <BbCardDescription>
-                        The values this run was triggered with, frozen at trigger time. Every step read
-                        them as environment variables under these names.
+                        @L10n["The values this run was triggered with, frozen at trigger time. Every step read them as environment variables under these names."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
@@ -528,7 +520,7 @@
                                 {
                                     @* F-041: the stored value is already the mask, so this renders what the row
                                        holds - a second, display-only mask would be one more place to get wrong. *@
-                                    <dd id="@($"run-parameter-{name}")" class="bb:font-mono">@(value.Length == 0 ? "(empty)" : value)</dd>
+                                    <dd id="@($"run-parameter-{name}")" class="bb:font-mono">@(value.Length == 0 ? L10n["(empty)"] : value)</dd>
                                 }
                                 else if (typed is not null && typed.Type == ProjectParameterTypes.Run)
                                 {
@@ -553,15 +545,15 @@
                                        bytes live on the worker and the only route that serves them is
                                        worker-authenticated - a file parameter may be a secret. *@
                                     <dd id="@($"run-parameter-{name}")" class="bb:break-all bb:font-mono">
-                                        @(value.Length == 0 ? "(no file uploaded)" : value)
+                                        @(value.Length == 0 ? L10n["(no file uploaded)"] : value)
                                     </dd>
                                     <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                                        Written on the worker inside this run's own directory; not downloadable.
+                                        @L10n["Written on the worker inside this run's own directory; not downloadable."]
                                     </p>
                                 }
                                 else
                                 {
-                                    <dd id="@($"run-parameter-{name}")" class="bb:whitespace-pre-wrap bb:break-all bb:font-mono">@(value.Length == 0 ? "(empty)" : value)</dd>
+                                    <dd id="@($"run-parameter-{name}")" class="bb:whitespace-pre-wrap bb:break-all bb:font-mono">@(value.Length == 0 ? L10n["(empty)"] : value)</dd>
                                 }
                             </div>
                         }
@@ -577,11 +569,9 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Organization environment</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Organization environment"]</BbCardTitle>
                     <BbCardDescription>
-                        The organization variables this run was queued with, frozen at trigger time. Editing
-                        or deleting one afterwards does not change this run - every step of it read these
-                        values.
+                        @L10n["The organization variables this run was queued with, frozen at trigger time. Editing or deleting one afterwards does not change this run - every step of it read these values."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
@@ -600,55 +590,55 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Execution</BbCardTitle>
-                <BbCardDescription>PRD §3.5 run metadata.</BbCardDescription>
+                <BbCardTitle As="h2">@L10n["Execution"]</BbCardTitle>
+                <BbCardDescription>@L10n["PRD §3.5 run metadata."]</BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <dl id="run-details" class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Worker</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Worker"]</dt>
                         <dd id="run-worker">@(_run.WorkerName ?? "-")</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Triggered by</dt>
-                        <dd id="run-trigger">@(_run.TriggerUserEmail ?? "-") (@_run.TriggerType.ToLowerInvariant())</dd>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Triggered by"]</dt>
+                        <dd id="run-trigger">@(_run.TriggerUserEmail ?? "-") (@RunDisplay.TriggerTypeText(_run.TriggerType, L10n))</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Exit code</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Exit code"]</dt>
                         <dd id="run-exit-code">@(_run.ExitCode?.ToString() ?? "-")</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Started</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Started"]</dt>
                         <dd id="run-started">@(_run.StartedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-") UTC</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Ended</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Ended"]</dt>
                         <dd id="run-ended">@(_run.EndedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-") UTC</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Duration</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Duration"]</dt>
                         @* D-002: the shared display bit - a finished run's duration, live elapsed
                            while it is still running, "-" when it never started. *@
-                        <dd id="run-duration">@RunDisplay.DurationOrElapsed(_run.StartedAt, _run.EndedAt, DateTimeOffset.UtcNow)</dd>
+                        <dd id="run-duration">@RunDisplay.DurationOrElapsed(_run.StartedAt, _run.EndedAt, DateTimeOffset.UtcNow, L10n)</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Queued</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Queued"]</dt>
                         <dd>@_run.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Timeout</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Timeout"]</dt>
                         <dd id="run-timeout">@(FormatTimeout(_run.TimeoutSeconds))</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Deadline</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Deadline"]</dt>
                         <dd id="run-deadline">@(_run.DeadlineAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-") UTC</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Failure reason</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Failure reason"]</dt>
                         <dd>@(_run.FailureReason ?? "-")</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Run id</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Run id"]</dt>
                         <dd class="bb:break-all">@_run.Id</dd>
                     </div>
                 </dl>
@@ -659,17 +649,16 @@
            is not actually there. *@
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Artifacts</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Artifacts"]</BbCardTitle>
                 <BbCardDescription>
-                    The build products this run published (PRD §3.7). A single file downloads as itself; a
-                    directory downloads as a zip that restores the same tree.
+                    @L10n["The build products this run published (PRD §3.7). A single file downloads as itself; a directory downloads as a zip that restores the same tree."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (_artifacts.Count == 0)
                 {
                     <p id="run-artifacts-empty" class="bb:text-sm bb:text-muted-foreground">
-                        This run published no artifacts.
+                        @L10n["This run published no artifacts."]
                     </p>
                 }
                 else
@@ -683,13 +672,13 @@
                                 @if (artifact.FileCount > 0)
                                 {
                                     <span class="bb:text-xs bb:text-muted-foreground">
-                                        @artifact.FileCount file(s), @FormatBytes(artifact.TotalBytes)
+                                        @L10n["{0} file(s), {1}", artifact.FileCount, FormatBytes(artifact.TotalBytes)]
                                     </span>
                                 }
                                 @if (artifact.CanDownload)
                                 {
                                     <BbButton Href="@($"/runs/{_run.Id}/artifacts/{artifact.Id}/download")"
-                                              Variant="ButtonVariant.Outline">Download</BbButton>
+                                              Variant="ButtonVariant.Outline">@L10n["Download"]</BbButton>
                                 }
                                 else
                                 {
@@ -725,12 +714,12 @@
         ParameterDetail(name) is { } detail && ProjectParameterTypes.IsMasked(detail.Type);
 
     /// <summary>The type as a person reads it, in the run page's parameter list.</summary>
-    private static string ParameterTypeLabel(string type) => type switch
+    private string ParameterTypeLabel(string type) => type switch
     {
-        ProjectParameterTypes.Password => "password",
-        ProjectParameterTypes.Run => "run",
-        ProjectParameterTypes.GitRef => "git ref",
-        ProjectParameterTypes.File => "file",
+        ProjectParameterTypes.Password => L10n["password"],
+        ProjectParameterTypes.Run => L10n["run"],
+        ProjectParameterTypes.GitRef => L10n["git ref"],
+        ProjectParameterTypes.File => L10n["file"],
         _ => type,
     };
 
@@ -760,8 +749,8 @@
     /// human-facing shows #N"), and the short id only for a row no writer ever numbered.
     /// </summary>
     private string RunHeading => _run is null
-        ? "Run"
-        : _run.Number is { } number ? $"Run #{number}" : $"Run {_run.Id.ToString("N")[..8]}";
+        ? L10n["Run"]
+        : _run.Number is { } number ? L10n["Run #{0}", number] : L10n["Run {0}", _run.Id.ToString("N")[..8]];
 
     /// <summary>Card F-036: the run's canonical permalink, relative so the page works on any host.</summary>
     private string Permalink => _run is null
@@ -810,32 +799,27 @@
     private string? RerunError => (RebuildErrorCode ?? ReplayErrorCode) switch
     {
         RunErrorCodes.RebuildNotTerminal =>
-            "This run had not finished, so there was nothing to rebuild or replay.",
+            L10n["This run had not finished, so there was nothing to rebuild or replay."],
         RunErrorCodes.RebuildNoCommit =>
-            "This run recorded no commit, so a rebuild could not pin one and would build whatever the "
-            + "branch points at now. Start a fresh run instead.",
+            L10n["This run recorded no commit, so a rebuild could not pin one and would build whatever the branch points at now. Start a fresh run instead."],
         RunErrorCodes.RebuildKindChanged =>
-            "The project's kind no longer matches the run's, so this run cannot be re-executed as the "
-            + "project is now.",
+            L10n["The project's kind no longer matches the run's, so this run cannot be re-executed as the project is now."],
         RunErrorCodes.RebuildSpecUnavailable =>
-            "The definition this run executed is not readable any more, so there is nothing to re-execute.",
+            L10n["The definition this run executed is not readable any more, so there is nothing to re-execute."],
         RunErrorCodes.RebuildCredentialMissing =>
-            "The Git credential assigned to this project no longer exists. Assign one on the project's "
-            + "settings tab, then rebuild.",
+            L10n["The Git credential assigned to this project no longer exists. Assign one on the project's settings tab, then rebuild."],
         RunErrorCodes.ReplayUnavailable =>
-            "This run stores the pipeline spec its worker produced, not the source that produced it, so it "
-            + "cannot be replayed as a definition. Use Rebuild instead.",
+            L10n["This run stores the pipeline spec its worker produced, not the source that produced it, so it cannot be replayed as a definition. Use Rebuild instead."],
         RunErrorCodes.ParameterUnknown =>
-            "One of the run's parameter names is no longer defined on this project, so it cannot be "
-            + "re-executed with the same values.",
+            L10n["One of the run's parameter names is no longer defined on this project, so it cannot be re-executed with the same values."],
         RunErrorCodes.ParameterInvalid =>
-            "One of the run's parameter values does not fit its type any more (the definition changed).",
+            L10n["One of the run's parameter values does not fit its type any more (the definition changed)."],
         RunErrorCodes.FieldInvalid =>
-            "That request could not be read, so nothing was queued. Try again.",
+            L10n["That request could not be read, so nothing was queued. Try again."],
         ProjectTriggerRefusals.ProjectDisabled =>
-            "This project is disabled, so nothing new is queued for it.",
+            L10n["This project is disabled, so nothing new is queued for it."],
         ProjectTriggerRefusals.QueueFull =>
-            "The project's queue is full, so the rebuild waits its turn in the project's settings.",
+            L10n["The project's queue is full, so the rebuild waits its turn in the project's settings."],
         _ => null,
     };
 
@@ -867,9 +851,7 @@
             var origin = _run.RebuiltFromNumber is { } originNumber
                 ? $"#{originNumber}"
                 : _run.RebuiltFromRunId.Value.ToString("N")[..8];
-            return $"This run pinned commit {commit} - the commit run {origin} built - and the remote could "
-                + "not provide it. A rewritten history removes commits; the branch head is deliberately not "
-                + "built in its place. Rebuild the newer run instead, or restore the commit.";
+            return L10n["This run pinned commit {0} - the commit run {1} built - and the remote could not provide it. A rewritten history removes commits; the branch head is deliberately not built in its place. Rebuild the newer run instead, or restore the commit.", commit, origin];
         }
     }
 
@@ -877,13 +859,13 @@
     {
         // F-009's cancel outcomes (PRG): a cancel that landed, a cancel the worker is acting on,
         // and the friendly no-op for a run that had already finished.
-        "canceled" => "The run was canceled.",
-        "cancel-requested" => "The worker has been asked to cancel the run; the status updates when the worker reports.",
-        "already-finished" => "The run had already finished, so it was not changed.",
+        "canceled" => L10n["The run was canceled."],
+        "cancel-requested" => L10n["The worker has been asked to cancel the run; the status updates when the worker reports."],
+        "already-finished" => L10n["The run had already finished, so it was not changed."],
         // F-038's pin toggle: what changed, and the rule the change is about.
-        "pinned" => "This build is pinned: both retention rules skip it until it is unpinned.",
+        "pinned" => L10n["This build is pinned: both retention rules skip it until it is unpinned."],
         "unpinned" =>
-            "This build is no longer pinned. It is kept while the project's retention policy keeps it - nothing is deleted now.",
+            L10n["This build is no longer pinned. It is kept while the project's retention policy keeps it - nothing is deleted now."],
         _ => null,
     };
 
@@ -936,12 +918,12 @@
     /// </summary>
     private string FailureExplanation => _run is null
         ? string.Empty
-        : RunDisplay.FailureReasonText(_run.FailureReason, _run.GitCredentialAssigned);
+        : RunDisplay.FailureReasonText(_run.FailureReason, _run.GitCredentialAssigned, L10n);
 
     /// <summary>The per-run timeout display: the override in minutes, or the server default.</summary>
-    private static string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds
-        ? $"{seconds / 60} min (per-run override)"
-        : "default";
+    private string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds
+        ? L10n["{0} min (per-run override)", seconds / 60]
+        : L10n["default"];
 
     /// <summary>D-004: the step list's "View log" link pushes the step row's id into the panel's filter.</summary>
     private void FilterLogToStep(Guid stepId) => _logStepFilter = stepId;
@@ -968,12 +950,12 @@
         var failing = _run.StepList.FirstOrDefault(step => step.Status == PipelineStepStatus.Failed);
         if (failing is null)
         {
-            return "No recorded step failed (the run ended before a step could).";
+            return L10n["No recorded step failed (the run ended before a step could)."];
         }
 
         return failing.ExitCode is { } exitCode
-            ? $"{failing.Index}. {failing.Name} (exit {exitCode})"
-            : $"{failing.Index}. {failing.Name}";
+            ? L10n["{0}. {1} (exit {2})", failing.Index, failing.Name, exitCode]
+            : L10n["{0}. {1}", failing.Index, failing.Name];
     }
 
     /// <summary>A stored size as prose ("1.5 MB"); the row stores bytes, people read units.</summary>

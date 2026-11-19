@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Data;
 using Zenkins.Server.Data.Entities;
@@ -95,23 +96,22 @@ public static class NotificationErrorCodes
     public const string TestNoRun = "test-no-run";
 
     /// <summary>The sentence for a code, or null when the code is not one of ours.</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message the settings card renders for a code, in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        UrlRequired => "A receiver URL is required.",
-        UrlInvalid => "The receiver URL must be an absolute http or https URL.",
+        UrlRequired => L10n["A receiver URL is required."],
+        UrlInvalid => L10n["The receiver URL must be an absolute http or https URL."],
         InsecureUrl =>
-            "That URL is plain http. Tick \"allow plain http\" to send this project's branch, commit and signature "
-            + "in the clear, or use an https receiver.",
-        SecretRequired => "A shared secret is required: the receiver verifies the signature with it.",
+            L10n["That URL is plain http. Tick \"allow plain http\" to send this project's branch, commit and signature in the clear, or use an https receiver."],
+        SecretRequired => L10n["A shared secret is required: the receiver verifies the signature with it."],
         SecretLength =>
-            $"The shared secret must be between {NotificationLimits.MinSecretLength} and "
-            + $"{NotificationLimits.MaxSecretLength} characters.",
-        EventsRequired => "Subscribe to at least one event.",
-        EventsInvalid => $"Events must be some of {string.Join(", ", NotificationEvents.Subscribable)}.",
+            L10n["The shared secret must be between {0} and {1} characters.", NotificationLimits.MinSecretLength, NotificationLimits.MaxSecretLength],
+        EventsRequired => L10n["Subscribe to at least one event."],
+        EventsInvalid => L10n["Events must be some of {0}.", string.Join(", ", NotificationEvents.Subscribable)],
         EndpointLimit =>
-            $"A project may configure at most {NotificationLimits.MaxEndpointsPerProject} notification endpoints.",
+            L10n["A project may configure at most {0} notification endpoints.", NotificationLimits.MaxEndpointsPerProject],
         TestNoRun =>
-            "This project has no run yet, so there is nothing for a test delivery to describe. Start one first.",
+            L10n["This project has no run yet, so there is nothing for a test delivery to describe. Start one first."],
         _ => null,
     };
 }
@@ -144,6 +144,7 @@ public sealed class NotificationService(
     NotificationSecretProtector protector,
     NotificationSender sender,
     NotificationOptions options,
+    Localizer L10n,
     ILogger<NotificationService> logger)
 {
     private readonly NotificationSecretProtector _secretProtector = protector;
@@ -193,7 +194,7 @@ public sealed class NotificationService(
         ArgumentException.ThrowIfNullOrWhiteSpace(actingUserId);
         ArgumentNullException.ThrowIfNull(input);
 
-        var validation = Validate(input.Url, input.Secret, input.Events, input.AllowInsecureHttp);
+        var validation = Validate(input.Url, input.Secret, input.Events, input.AllowInsecureHttp, L10n);
         if (validation is { } refusal)
         {
             return refusal;
@@ -221,7 +222,7 @@ public sealed class NotificationService(
         {
             return NotificationMutationResult.Invalid(
                 NotificationErrorCodes.EndpointLimit,
-                NotificationErrorCodes.MessageFor(NotificationErrorCodes.EndpointLimit)!);
+                NotificationErrorCodes.MessageFor(NotificationErrorCodes.EndpointLimit, L10n)!);
         }
 
         var created = new NotificationEndpoint
@@ -334,14 +335,14 @@ public sealed class NotificationService(
         {
             return NotificationMutationResult.Invalid(
                 NotificationErrorCodes.SecretRequired,
-                NotificationErrorCodes.MessageFor(NotificationErrorCodes.SecretRequired)!);
+                NotificationErrorCodes.MessageFor(NotificationErrorCodes.SecretRequired, L10n)!);
         }
 
         if (secret.Trim().Length is < NotificationLimits.MinSecretLength or > NotificationLimits.MaxSecretLength)
         {
             return NotificationMutationResult.Invalid(
                 NotificationErrorCodes.SecretLength,
-                NotificationErrorCodes.MessageFor(NotificationErrorCodes.SecretLength)!);
+                NotificationErrorCodes.MessageFor(NotificationErrorCodes.SecretLength, L10n)!);
         }
 
         var rotated = secret.Trim();
@@ -408,7 +409,7 @@ public sealed class NotificationService(
         if (run is null)
         {
             return NotificationTestResult.Failed(
-                NotificationErrorCodes.MessageFor(NotificationErrorCodes.TestNoRun)!);
+                NotificationErrorCodes.MessageFor(NotificationErrorCodes.TestNoRun, L10n)!);
         }
 
         var payload = BuildPayload(
@@ -512,7 +513,8 @@ public sealed class NotificationService(
         string? url,
         string? secret,
         IReadOnlyList<string>? events,
-        bool allowInsecureHttp)
+        bool allowInsecureHttp,
+        Localizer L10n)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -556,8 +558,8 @@ public sealed class NotificationService(
             ? Refusal(NotificationErrorCodes.EventsInvalid)
             : null;
 
-        static NotificationMutationResult Refusal(string code) =>
-            NotificationMutationResult.Invalid(code, NotificationErrorCodes.MessageFor(code)!);
+        NotificationMutationResult Refusal(string code) =>
+            NotificationMutationResult.Invalid(code, NotificationErrorCodes.MessageFor(code, L10n)!);
     }
 
     /// <summary>Owner check, project first: a foreign project never reaches it (the caller resolved it).</summary>

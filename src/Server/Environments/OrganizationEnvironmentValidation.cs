@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Zenkins.Server.Secrets;
 using Zenkins.Shared.Pipelines;
 
@@ -52,27 +53,25 @@ public static class OrganizationEnvironmentErrorCodes
     };
 
     /// <summary>The message rendered next to the field (and in the form-level alert).</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message the page renders for a code, in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        NameRequired => "Enter a variable name.",
+        NameRequired => L10n["Enter a variable name."],
         NameTooLong =>
-            $"The variable name must be at most {OrganizationEnvironmentValidation.MaxNameLength} characters.",
+            L10n["The variable name must be at most {0} characters.", OrganizationEnvironmentValidation.MaxNameLength],
         NameInvalid =>
-            "Use letters, digits and underscores only, starting with a letter or an underscore. "
-            + "The name must be usable as an environment variable (for example REGISTRY_HOST).",
-        NameDuplicate => "A variable with this name already exists in this organization.",
+            L10n["Use letters, digits and underscores only, starting with a letter or an underscore. The name must be usable as an environment variable (for example REGISTRY_HOST)."],
+        NameDuplicate => L10n["A variable with this name already exists in this organization."],
 
         // AC3: the collision is named, not silently resolved in the metadata's favour.
         NameReserved =>
-            $"The prefix {string.Join(", ", ServerEnvironmentNames.ReservedPrefixes)} is reserved for "
-            + "Zenkins' own run metadata (ZENKINS_RUN_ID, ZENKINS_BUILD_NUMBER, …). Choose another name.",
+            L10n["The prefix {0} is reserved for Zenkins' own run metadata (ZENKINS_RUN_ID, ZENKINS_BUILD_NUMBER, …). Choose another name.", string.Join(", ", ServerEnvironmentNames.ReservedPrefixes)],
 
-        ValueRequired => "Enter the variable's value.",
+        ValueRequired => L10n["Enter the variable's value."],
         ValueTooLong =>
-            $"The value must be at most {OrganizationEnvironmentValidation.MaxValueLength} characters.",
+            L10n["The value must be at most {0} characters.", OrganizationEnvironmentValidation.MaxValueLength],
         LimitReached =>
-            $"An organization can hold at most {OrganizationEnvironmentValidation.MaxVariables} environment "
-            + "variables. Delete one you no longer need, then save this one.",
+            L10n["An organization can hold at most {0} environment variables. Delete one you no longer need, then save this one.", OrganizationEnvironmentValidation.MaxVariables],
         _ => null,
     };
 }

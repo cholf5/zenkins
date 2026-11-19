@@ -3,11 +3,11 @@
 @inject UserSession UserSession
 @inject FolderService Folders
 
-<PageTitle>New folder · Zenkins</PageTitle>
+<PageTitle>@L10n["New folder"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">New folder</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["New folder"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
@@ -29,16 +29,15 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Folder details</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Folder details"]</BbCardTitle>
                 <BbCardDescription>
-                    A folder groups projects. Names are unique among siblings, ignoring case, and
-                    folders nest at most @FolderValidation.MaxDepth levels deep.
+                    @L10n["A folder groups projects. Names are unique among siblings, ignoring case, and folders nest at most {0} levels deep.", FolderValidation.MaxDepth]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <form method="post" action="/folders/create" data-zenkins-antiforgery class="bb:space-y-4">
                     <div class="bb:space-y-2">
-                        <label for="folder-name" class="bb:text-sm bb:font-medium">Name</label>
+                        <label for="folder-name" class="bb:text-sm bb:font-medium">@L10n["Name"]</label>
                         <input id="folder-name"
                                name="Name"
                                value="@Name"
@@ -50,23 +49,23 @@
                     </div>
 
                     <div class="bb:space-y-2">
-                        <label for="folder-parent" class="bb:text-sm bb:font-medium">Parent folder</label>
+                        <label for="folder-parent" class="bb:text-sm bb:font-medium">@L10n["Parent folder"]</label>
                         <select id="folder-parent"
                                 name="ParentFolderId"
                                 class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
-                            <option value="" selected="@(string.IsNullOrEmpty(ParentFolderId))">Root (top level)</option>
+                            <option value="" selected="@(string.IsNullOrEmpty(ParentFolderId))">@L10n["Root (top level)"]</option>
                             @foreach (var option in _options)
                             {
                                 <option value="@option.Id" selected="@(ParentFolderId == option.Id.ToString())">@option.Path</option>
                             }
                         </select>
                         <p class="bb:text-xs bb:text-muted-foreground">
-                            The parent does not change later; a folder can be moved after it exists.
+                            @L10n["The parent does not change later; a folder can be moved after it exists."]
                         </p>
                     </div>
 
                     <div class="bb:space-y-2">
-                        <label for="folder-description" class="bb:text-sm bb:font-medium">Description (optional)</label>
+                        <label for="folder-description" class="bb:text-sm bb:font-medium">@L10n["Description (optional)"]</label>
                         <textarea id="folder-description"
                                   name="Description"
                                   rows="3"
@@ -77,8 +76,8 @@
                     </div>
 
                     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Create folder</BbButton>
-                        <BbButton Href="/projects" Variant="ButtonVariant.Outline">Cancel</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Create folder"]</BbButton>
+                        <BbButton Href="/projects" Variant="ButtonVariant.Outline">@L10n["Cancel"]</BbButton>
                     </div>
                 </form>
             </BbCardContent>
@@ -104,7 +103,7 @@
     [SupplyParameterFromQuery(Name = "parent")]
     private string? ParentFolderId { get; set; }
 
-    private string? Error => FolderErrorCodes.MessageFor(ErrorCode);
+    private string? Error => FolderErrorCodes.MessageFor(ErrorCode, L10n);
 
     protected override async Task OnInitializedAsync()
     {

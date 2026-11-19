@@ -3,7 +3,7 @@
 @* D-003: the one tab strip for a project's four routed tabs. The tabs are links, never client
    state: every tab is a real route, so a deep link, a reload and back/forward all work, and the
    same strip renders on every tab page (the active entry is derived from the route). *@
-<nav aria-label="Project sections" class="bb:border-b">
+<nav aria-label="@L10n["Project sections"]" class="bb:border-b">
     <ul class="bb:-mb-px bb:flex bb:flex-wrap bb:gap-4 bb:text-sm">
         @foreach (var tab in Tabs)
         {
@@ -48,29 +48,38 @@
     [Parameter]
     public string BranchDiscovery { get; set; } = BranchDiscoveryModes.Single;
 
-    private sealed record ProjectTab(string Name, string Label, string PathFormat);
+    // The label is not stored here: it is resolved through the localizer at render time, so the
+    // strip follows the UI's language the same way every other string does.
+    private sealed record ProjectTab(string Name, string PathFormat);
 
     private IReadOnlyList<ProjectTab> Tabs => BranchDiscoveryModes.IsMultibranch(BranchDiscovery)
         ?
         [
-            new("overview", "Overview", "/projects/{0}"),
-            new("pipelines", "Pipelines", "/projects/{0}/pipelines"),
-            new("parameters", "Parameters", "/projects/{0}/parameters"),
-            new("branches", "Branches", "/projects/{0}/branches"),
-            new("runs", "Runs", "/projects/{0}/runs"),
-            new("settings", "Settings", "/projects/{0}/settings"),
+            new("overview", "/projects/{0}"),
+            new("pipelines", "/projects/{0}/pipelines"),
+            new("parameters", "/projects/{0}/parameters"),
+            new("branches", "/projects/{0}/branches"),
+            new("runs", "/projects/{0}/runs"),
+            new("settings", "/projects/{0}/settings"),
         ]
         :
         [
-            new("overview", "Overview", "/projects/{0}"),
-            new("pipelines", "Pipelines", "/projects/{0}/pipelines"),
-            new("parameters", "Parameters", "/projects/{0}/parameters"),
-            new("runs", "Runs", "/projects/{0}/runs"),
-            new("settings", "Settings", "/projects/{0}/settings"),
+            new("overview", "/projects/{0}"),
+            new("pipelines", "/projects/{0}/pipelines"),
+            new("parameters", "/projects/{0}/parameters"),
+            new("runs", "/projects/{0}/runs"),
+            new("settings", "/projects/{0}/settings"),
         ];
 
-    private string LabelFor(ProjectTab tab) =>
-        tab.Name == "pipelines" && Kind == ProjectKinds.Freestyle ? "Steps" : tab.Label;
+    private string LabelFor(ProjectTab tab) => tab.Name switch
+    {
+        "overview" => L10n["Overview"],
+        "pipelines" => Kind == ProjectKinds.Freestyle ? L10n["Steps"] : L10n["Pipelines"],
+        "parameters" => L10n["Parameters"],
+        "branches" => L10n["Branches"],
+        "runs" => L10n["Runs"],
+        _ => L10n["Settings"],
+    };
 
     private string? AriaCurrent(string name) =>
         string.Equals(name, Active, StringComparison.Ordinal) ? "page" : null;

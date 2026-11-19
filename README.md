@@ -10,7 +10,8 @@ A lightweight, cross-platform, self-hosted CI server. Built with C# / .NET 10, B
 > token and keep heartbeats (F-004/F-005). Runs can be triggered from a project page, queued,
 > claimed by workers, executed in isolated per-run work directories (F-006/F-007) and watched live
 > with incrementally persisted logs (F-008); organization secrets are stored encrypted and managed by
-> Owners only, never readable back (F-012). Work is tracked in
+> Owners only, never readable back (F-012). The UI ships in English and Simplified Chinese (F-043). Work
+> is tracked in
 > [`docs/kanban/board.md`](docs/kanban/board.md).
 
 ## Why another CI server

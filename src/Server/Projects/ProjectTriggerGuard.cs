@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Zenkins.Shared.RunCancellation;
 
 namespace Zenkins.Server.Projects;
@@ -79,18 +80,22 @@ public static class ProjectTriggerGuard
     /// restores the trigger. A project disabled without a reason (a row written out of band, before
     /// this card's form existed) still explains itself instead of rendering an empty quote.
     /// </summary>
-    public static string DisabledMessage(string? reason)
+    /// <param name="reason">The operator's own reason, or null when the row carries none.</param>
+    /// <param name="L10n">The localizer the sentence is written in.</param>
+    public static string DisabledMessage(string? reason, Localizer L10n)
     {
+        ArgumentNullException.ThrowIfNull(L10n);
+
         if (string.IsNullOrWhiteSpace(reason))
         {
-            return "This project is disabled, so nothing is queued for it. Enable it to start runs again.";
+            return L10n["This project is disabled, so nothing is queued for it. Enable it to start runs again."];
         }
 
         // The reason is the operator's own sentence, so it is quoted as one: a trailing period is
         // dropped before the terminator below, otherwise the message reads "mid-migration. Nothing…"
         // for one author and "mid-migration.. Nothing…" for another.
         var quoted = reason.Trim().TrimEnd('.');
-        return $"This project is disabled: {quoted}. Nothing is queued for it until it is enabled.";
+        return L10n["This project is disabled: {0}. Nothing is queued for it until it is enabled.", quoted];
     }
 
     /// <summary>
@@ -98,6 +103,13 @@ public static class ProjectTriggerGuard
     /// queued runs, cap 20" - because a refusal without the numbers leaves the operator guessing
     /// whether the cap or the queue is the problem.
     /// </summary>
-    public static string QueueFullMessage(int queuedRuns, int cap) =>
-        $"Queue full: {queuedRuns} queued runs, cap {cap}. Wait for the queue to drain or raise the cap on the project's settings tab.";
+    /// <param name="queuedRuns">The project's queued runs, counted under the project row lock.</param>
+    /// <param name="cap">The project's <c>MaxQueuedRuns</c>.</param>
+    /// <param name="L10n">The localizer the sentence is written in.</param>
+    public static string QueueFullMessage(int queuedRuns, int cap, Localizer L10n)
+    {
+        ArgumentNullException.ThrowIfNull(L10n);
+
+        return L10n["Queue full: {0} queued runs, cap {1}. Wait for the queue to drain or raise the cap on the project's settings tab.", queuedRuns, cap];
+    }
 }

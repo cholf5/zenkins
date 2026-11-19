@@ -1,49 +1,49 @@
 @using Microsoft.AspNetCore.Components.Routing
 
 <BbSidebarGroup>
-    <BbSidebarGroupLabel>Workspace</BbSidebarGroupLabel>
+    <BbSidebarGroupLabel>@L10n["Workspace"]</BbSidebarGroupLabel>
     <BbSidebarGroupContent>
         <BbSidebarMenu>
             <BbSidebarMenuItem>
-                <BbSidebarMenuButton Href="/" Match="NavLinkMatch.All" Tooltip="Dashboard">
+                <BbSidebarMenuButton Href="/" Match="NavLinkMatch.All" Tooltip="@L10n["Dashboard"]">
                     <LucideIcon Name="layout-dashboard" Class="bb:h-4 bb:w-4" />
-                    <span>Dashboard</span>
+                    <span>@L10n["Dashboard"]</span>
                 </BbSidebarMenuButton>
             </BbSidebarMenuItem>
             <BbSidebarMenuItem>
-                <BbSidebarMenuButton Href="/projects" Tooltip="Projects">
+                <BbSidebarMenuButton Href="/projects" Tooltip="@L10n["Projects"]">
                     <LucideIcon Name="folder-git-2" Class="bb:h-4 bb:w-4" />
-                    <span>Projects</span>
+                    <span>@L10n["Projects"]</span>
                 </BbSidebarMenuButton>
             </BbSidebarMenuItem>
             <BbSidebarMenuItem>
-                <BbSidebarMenuButton Href="/workers" Tooltip="Workers">
+                <BbSidebarMenuButton Href="/workers" Tooltip="@L10n["Workers"]">
                     <LucideIcon Name="server" Class="bb:h-4 bb:w-4" />
-                    <span>Workers</span>
+                    <span>@L10n["Workers"]</span>
                 </BbSidebarMenuButton>
             </BbSidebarMenuItem>
             <BbSidebarMenuItem>
-                <BbSidebarMenuButton Href="/organizations/members" Tooltip="Members">
+                <BbSidebarMenuButton Href="/organizations/members" Tooltip="@L10n["Members"]">
                     <LucideIcon Name="users" Class="bb:h-4 bb:w-4" />
-                    <span>Members</span>
+                    <span>@L10n["Members"]</span>
                 </BbSidebarMenuButton>
             </BbSidebarMenuItem>
             <BbSidebarMenuItem>
-                <BbSidebarMenuButton Href="/secrets" Tooltip="Secrets">
+                <BbSidebarMenuButton Href="/secrets" Tooltip="@L10n["Secrets"]">
                     <LucideIcon Name="key-round" Class="bb:h-4 bb:w-4" />
-                    <span>Secrets</span>
+                    <span>@L10n["Secrets"]</span>
                 </BbSidebarMenuButton>
             </BbSidebarMenuItem>
             <BbSidebarMenuItem>
-                <BbSidebarMenuButton Href="/snippets" Tooltip="Snippets">
+                <BbSidebarMenuButton Href="/snippets" Tooltip="@L10n["Snippets"]">
                     <LucideIcon Name="scissors" Class="bb:h-4 bb:w-4" />
-                    <span>Snippets</span>
+                    <span>@L10n["Snippets"]</span>
                 </BbSidebarMenuButton>
             </BbSidebarMenuItem>
             <BbSidebarMenuItem>
-                <BbSidebarMenuButton Href="/api-tokens" Tooltip="API tokens">
+                <BbSidebarMenuButton Href="/api-tokens" Tooltip="@L10n["API tokens"]">
                     <LucideIcon Name="key-square" Class="bb:h-4 bb:w-4" />
-                    <span>API tokens</span>
+                    <span>@L10n["API tokens"]</span>
                 </BbSidebarMenuButton>
             </BbSidebarMenuItem>
         </BbSidebarMenu>

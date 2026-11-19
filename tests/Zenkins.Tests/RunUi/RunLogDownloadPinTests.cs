@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Xunit;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Server.Components.Shared;
+using Zenkins.Tests.Localization;
 
 namespace Zenkins.Tests.RunUi;
 
@@ -60,7 +61,7 @@ public sealed class RunLogDownloadPinTests
         viewModel.Pause();
         viewModel.SetStepFilter(deploy);
 
-        var plan = viewModel.Plan(headers);
+        var plan = viewModel.Plan(headers, TestText.English);
         Assert.True(plan.IsPaused);
         Assert.Equal(6, plan.TotalLines);
         Assert.Equal(2, plan.Entries.Count); // the view: Deploy's two lines only

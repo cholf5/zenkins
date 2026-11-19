@@ -3,12 +3,12 @@
 @inject UserSession UserSession
 @inject FolderService Folders
 
-<PageTitle>Projects · Zenkins</PageTitle>
+<PageTitle>@L10n["Projects"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
         <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-            <BbCardTitle As="h1" tabindex="-1">Projects</BbCardTitle>
+            <BbCardTitle As="h1" tabindex="-1">@L10n["Projects"]</BbCardTitle>
             @if (_session?.Organization is { } organization)
             {
                 <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
@@ -17,8 +17,8 @@
         @if (_session is { HasOrganization: true })
         {
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
-                <BbButton Href="/folders/new" Variant="ButtonVariant.Outline">New folder</BbButton>
-                <BbButton Href="/projects/new" Variant="ButtonVariant.Default">New project</BbButton>
+                <BbButton Href="/folders/new" Variant="ButtonVariant.Outline">@L10n["New folder"]</BbButton>
+                <BbButton Href="/projects/new" Variant="ButtonVariant.Default">@L10n["New project"]</BbButton>
             </div>
         }
     </div>
@@ -45,11 +45,9 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">This organization's projects</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["This organization's projects"]</BbCardTitle>
                 <BbCardDescription>
-                    Folders group projects; a project's name is unique inside its folder, and its URL
-                    stays <code>/projects/{id}</code> wherever it sits. Members may create and edit;
-                    deleting a project is reserved to Owners (PRD §3.1.2).
+                    @L10n["Folders group projects; a project's name is unique inside its folder, and its URL stays"] <code>/projects/{id}</code> @L10n["wherever it sits. Members may create and edit; deleting a project is reserved to Owners (PRD §3.1.2)."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -88,18 +86,18 @@
 
     private string? Notice => NoticeCode switch
     {
-        "created" => "The project was created.",
-        "updated" => "The project was updated.",
-        "deleted" => "The project was deleted.",
-        "folder-deleted" => "The folder was deleted.",
-        "project-moved" => "The project was moved. Open its folder to see it in place.",
+        "created" => L10n["The project was created."],
+        "updated" => L10n["The project was updated."],
+        "deleted" => L10n["The project was deleted."],
+        "folder-deleted" => L10n["The folder was deleted."],
+        "project-moved" => L10n["The project was moved. Open its folder to see it in place."],
         _ => null,
     };
 
     private string? Error =>
-        (FolderErrorCodes.MessageFor(ErrorCode) ?? ProjectErrorCodes.MessageFor(ErrorCode)) is { } message
+        (FolderErrorCodes.MessageFor(ErrorCode, L10n) ?? ProjectErrorCodes.MessageFor(ErrorCode, L10n)) is { } message
             ? ConflictName is { Length: > 0 } conflict
-                ? $"{message} The project already in that folder is '{conflict}' - nothing was renamed."
+                ? L10n["{0} The project already in that folder is '{1}' - nothing was renamed.", message, conflict]
                 : message
             : null;
 

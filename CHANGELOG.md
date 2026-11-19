@@ -8,6 +8,17 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **UI localization (F-043).** The browser UI ships in English and Simplified Chinese. A first visit
+  follows the browser's `Accept-Language` (`zh*` → 简体中文, `en*` → English, anything else English),
+  and the switcher in the shell and on the sign-in pages writes an HttpOnly `zenkins-lang` cookie that
+  wins from then on; a switch is a real form POST followed by a document reload, because every rendered
+  string has to change at once. Copy goes through one localizer keyed by the English source text, so an
+  untranslated key renders readable English rather than a symbol name; server-produced messages the UI
+  displays (field validation, schedule outcomes, log-panel state, the trigger guard's refusals) are
+  localized too, while API responses, log lines and exception text stay English. `<html lang>` follows
+  the choice, and `TranslationCatalogTests` scans the source for keys and fails on a missing
+  translation, an orphaned entry or a placeholder mismatch instead of letting a page silently fall back.
+
 - **The repository scripts are Python (no card; supersedes the bash trio).** `scripts/verify.sh`,
   `scripts/publish.sh` and `scripts/suite-duration.sh` became `scripts/verify.py`, `scripts/publish.py`
   and `scripts/suite_duration.py` over a small stdlib-only package (`scripts/zt/`), one module per

@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Zenkins.Server.Auth;
@@ -31,7 +32,8 @@ public sealed record ScheduleOutcomeView(
     string? Detail)
 {
     /// <summary>The sentence the page renders for this row.</summary>
-    public string Description => ScheduleOutcomes.Describe(Outcome, RunNumber, CollapsedDueTimes, Detail);
+    public string Describe(Localizer L10n) =>
+        ScheduleOutcomes.Describe(Outcome, RunNumber, CollapsedDueTimes, Detail, L10n);
 }
 
 /// <summary>One schedule as the settings page shows it: its configuration, its next due times, its last outcomes.</summary>
@@ -94,8 +96,8 @@ public sealed record ScheduleMutationResult(
     public static ScheduleMutationResult Forbidden(string message) =>
         new(ScheduleManagementStatus.Forbidden, Message: message);
 
-    public static ScheduleMutationResult Invalid(string code, string? message = null) =>
-        new(ScheduleManagementStatus.Invalid, ErrorCode: code, Message: message ?? ScheduleErrorCodes.MessageFor(code));
+    public static ScheduleMutationResult Invalid(string code, Localizer L10n) =>
+        new(ScheduleManagementStatus.Invalid, ErrorCode: code, Message: ScheduleErrorCodes.MessageFor(code, L10n));
 }
 
 /// <summary>The raw create-form values, before trimming and validation.</summary>
@@ -113,15 +115,15 @@ public sealed record SchedulePreview(
     string? ErrorCode,
     string? Message)
 {
-    public static SchedulePreview Invalid(string code) =>
-        new(false, [], null, code, ScheduleErrorCodes.MessageFor(code));
+    public static SchedulePreview Invalid(string code, Localizer L10n) =>
+        new(false, [], null, code, ScheduleErrorCodes.MessageFor(code, L10n));
 
     /// <summary>Validates one expression/zone pair and resolves its next due times.</summary>
-    public static SchedulePreview Compute(string? cronText, string? zoneId, DateTimeOffset now)
+    public static SchedulePreview Compute(string? cronText, string? zoneId, DateTimeOffset now, Localizer L10n)
     {
         if (!ScheduleCron.TryParse(cronText, out var cron, out var cronError) || cron is null)
         {
-            return Invalid(cronError ?? ScheduleErrorCodes.CronInvalid);
+            return Invalid(cronError ?? ScheduleErrorCodes.CronInvalid, L10n);
         }
 
         if (!ScheduleEvaluator.TryResolveZone(zoneId, out var zone))
@@ -129,13 +131,14 @@ public sealed record SchedulePreview(
             return Invalid(
                 string.IsNullOrWhiteSpace(zoneId)
                     ? ScheduleErrorCodes.TimeZoneRequired
-                    : ScheduleErrorCodes.TimeZoneUnknown);
+                    : ScheduleErrorCodes.TimeZoneUnknown,
+                L10n);
         }
 
         var dueTimes = ScheduleEvaluator.NextOccurrences(cron, zone, now, ScheduleOptions.PreviewCount);
         if (dueTimes.Count == 0)
         {
-            return Invalid(ScheduleErrorCodes.CronNeverFires);
+            return Invalid(ScheduleErrorCodes.CronNeverFires, L10n);
         }
 
         return new SchedulePreview(true, dueTimes, zone, null, null);
@@ -215,6 +218,7 @@ public sealed class ScheduleService(
     RunService runs,
     ScheduleOptions options,
     TimeProvider timeProvider,
+    Localizer L10n,
     ILogger<ScheduleService> logger)
 {
     /// <summary>How many outcomes the settings page lists per schedule (the card's "last outcomes").</summary>
@@ -241,7 +245,7 @@ public sealed class ScheduleService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         if (!await IsMemberAsync(context, actingUserId, cancellationToken))
         {
-            return ScheduleListResult.Forbidden("You are not a member of the active organization.");
+            return ScheduleListResult.Forbidden(L10n["You are not a member of the active organization."]);
         }
 
         if (!await context.Projects.AnyAsync(project => project.Id == projectId, cancellationToken))
@@ -303,7 +307,7 @@ public sealed class ScheduleService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         if (!await IsMemberAsync(context, actingUserId, cancellationToken))
         {
-            return ScheduleMutationResult.Forbidden("You are not a member of the active organization.");
+            return ScheduleMutationResult.Forbidden(L10n["You are not a member of the active organization."]);
         }
 
         var project = await context.Projects.SingleOrDefaultAsync(
@@ -311,21 +315,21 @@ public sealed class ScheduleService(
             cancellationToken);
         if (project is null)
         {
-            return ScheduleMutationResult.NotFound("That project no longer exists.");
+            return ScheduleMutationResult.NotFound(L10n["That project no longer exists."]);
         }
 
         var now = timeProvider.GetUtcNow();
-        var preview = SchedulePreview.Compute(input.Cron, input.TimeZone, now);
+        var preview = SchedulePreview.Compute(input.Cron, input.TimeZone, now, L10n);
         if (!preview.IsValid)
         {
-            return ScheduleMutationResult.Invalid(preview.ErrorCode!);
+            return ScheduleMutationResult.Invalid(preview.ErrorCode!, L10n);
         }
 
         var existing = await context.ProjectSchedules
             .CountAsync(schedule => schedule.ProjectId == projectId, cancellationToken);
         if (existing >= ScheduleErrorCodes.MaxSchedulesPerProject)
         {
-            return ScheduleMutationResult.Invalid(ScheduleErrorCodes.ScheduleLimit);
+            return ScheduleMutationResult.Invalid(ScheduleErrorCodes.ScheduleLimit, L10n);
         }
 
         var cron = input.Cron!.Trim();
@@ -356,7 +360,7 @@ public sealed class ScheduleService(
         catch (DbUpdateException failure) when (DatabaseErrors.IsUniqueViolation(failure, "ProjectSchedules"))
         {
             // The unique (ProjectId, Cron, TimeZone) index, not a pre-flight query, is the guard.
-            return ScheduleMutationResult.Invalid(ScheduleErrorCodes.ScheduleDuplicate);
+            return ScheduleMutationResult.Invalid(ScheduleErrorCodes.ScheduleDuplicate, L10n);
         }
 
         logger.LogInformation(
@@ -389,7 +393,7 @@ public sealed class ScheduleService(
         var normalized = flag?.Trim().ToLowerInvariant();
         if (normalized is not ("enabled" or "queue-anyway"))
         {
-            return ScheduleMutationResult.Invalid(ScheduleErrorCodes.FieldInvalid);
+            return ScheduleMutationResult.Invalid(ScheduleErrorCodes.FieldInvalid, L10n);
         }
 
         var activeOrganizationId = tenantContext.OrganizationId;
@@ -402,7 +406,7 @@ public sealed class ScheduleService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         if (!await IsMemberAsync(context, actingUserId, cancellationToken))
         {
-            return ScheduleMutationResult.Forbidden("You are not a member of the active organization.");
+            return ScheduleMutationResult.Forbidden(L10n["You are not a member of the active organization."]);
         }
 
         var schedule = await context.ProjectSchedules.SingleOrDefaultAsync(
@@ -410,7 +414,7 @@ public sealed class ScheduleService(
             cancellationToken);
         if (schedule is null)
         {
-            return ScheduleMutationResult.NotFound(ScheduleErrorCodes.MessageFor(ScheduleErrorCodes.ScheduleNotFound)!);
+            return ScheduleMutationResult.NotFound(ScheduleErrorCodes.MessageFor(ScheduleErrorCodes.ScheduleNotFound, L10n)!);
         }
 
         if (normalized == "enabled")
@@ -458,7 +462,7 @@ public sealed class ScheduleService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         if (!await IsMemberAsync(context, actingUserId, cancellationToken))
         {
-            return ScheduleMutationResult.Forbidden("You are not a member of the active organization.");
+            return ScheduleMutationResult.Forbidden(L10n["You are not a member of the active organization."]);
         }
 
         var schedule = await context.ProjectSchedules.SingleOrDefaultAsync(
@@ -466,7 +470,7 @@ public sealed class ScheduleService(
             cancellationToken);
         if (schedule is null)
         {
-            return ScheduleMutationResult.NotFound(ScheduleErrorCodes.MessageFor(ScheduleErrorCodes.ScheduleNotFound)!);
+            return ScheduleMutationResult.NotFound(ScheduleErrorCodes.MessageFor(ScheduleErrorCodes.ScheduleNotFound, L10n)!);
         }
 
         context.ProjectSchedules.Remove(schedule);

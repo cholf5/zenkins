@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using System.Text.RegularExpressions;
 using Zenkins.Shared.Secrets;
 
@@ -61,24 +62,24 @@ public static class SecretErrorCodes
     };
 
     /// <summary>The message rendered next to the field (and in the form-level alert).</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message the page renders for a code, in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        NameRequired => "Enter a secret name.",
+        NameRequired => L10n["Enter a secret name."],
         NameTooLong =>
-            $"The secret name must be at most {SecretValidation.MaxNameLength} characters.",
+            L10n["The secret name must be at most {0} characters.", SecretValidation.MaxNameLength],
         NameInvalid =>
-            "Use letters, digits and underscores only, starting with a letter or an underscore. "
-            + "The name must be usable as an environment variable (for example NUGET_TOKEN).",
-        NameDuplicate => "A secret with this name already exists in this organization.",
-        ValueRequired => "Enter the secret value.",
+            L10n["Use letters, digits and underscores only, starting with a letter or an underscore. The name must be usable as an environment variable (for example NUGET_TOKEN)."],
+        NameDuplicate => L10n["A secret with this name already exists in this organization."],
+        ValueRequired => L10n["Enter the secret value."],
         ValueTooLong =>
-            $"The secret value must be at most {SecretValidation.MaxValueLength} characters.",
+            L10n["The secret value must be at most {0} characters.", SecretValidation.MaxValueLength],
         KindInvalid =>
-            "Choose one of the supported kinds: a text value, a username/password pair, or a file.",
-        UsernameRequired => "Enter the username half of this secret.",
-        PasswordRequired => "Enter the password half of this secret.",
+            L10n["Choose one of the supported kinds: a text value, a username/password pair, or a file."],
+        UsernameRequired => L10n["Enter the username half of this secret."],
+        PasswordRequired => L10n["Enter the password half of this secret."],
         FileTooLarge =>
-            $"A file secret must be at most {SecretFileLimits.MaxBytes / 1024} KiB of content.",
+            L10n["A file secret must be at most {0} KiB of content.", SecretFileLimits.MaxBytes / 1024],
         _ => null,
     };
 }

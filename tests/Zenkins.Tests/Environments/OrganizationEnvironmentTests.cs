@@ -1,4 +1,5 @@
 using System.Net;
+using Zenkins.Tests.Localization;
 using Xunit;
 using Zenkins.Server.Data.Entities;
 using Zenkins.Server.Environments;
@@ -167,7 +168,7 @@ public sealed class OrganizationEnvironmentTests
             OrganizationEnvironmentErrorCodes.FieldFor(OrganizationEnvironmentErrorCodes.NameReserved));
         Assert.Contains(
             "ZENKINS_",
-            OrganizationEnvironmentErrorCodes.MessageFor(OrganizationEnvironmentErrorCodes.NameReserved),
+            OrganizationEnvironmentErrorCodes.MessageFor(OrganizationEnvironmentErrorCodes.NameReserved, TestText.English),
             StringComparison.Ordinal);
     }
 
@@ -259,7 +260,7 @@ public sealed class OrganizationEnvironmentTests
         Assert.Contains(
             OrganizationEnvironmentValidation.MaxVariables.ToString(
                 System.Globalization.CultureInfo.InvariantCulture),
-            OrganizationEnvironmentErrorCodes.MessageFor(OrganizationEnvironmentErrorCodes.LimitReached),
+            OrganizationEnvironmentErrorCodes.MessageFor(OrganizationEnvironmentErrorCodes.LimitReached, TestText.English),
             StringComparison.Ordinal);
     }
 

@@ -5,15 +5,15 @@
 @inject UserSession UserSession
 @inject OrganizationEnvironmentService Variables
 
-<PageTitle>Environment · Zenkins</PageTitle>
+<PageTitle>@L10n["Environment"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Organization environment</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Organization environment"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
-            <BbBadge Variant="BadgeVariant.Outline">Your role: @organization.Role</BbBadge>
+            <BbBadge Variant="BadgeVariant.Outline">@L10n["Your role: {0}", DisplayText.Role(organization.Role, L10n)]</BbBadge>
         }
     </div>
 
@@ -27,21 +27,15 @@
            anything sensitive belongs in Secrets, which are Owner-only and write-only. *@
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Configuration, not secrets</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Configuration, not secrets"]</BbCardTitle>
                 <BbCardDescription>
-                    Every project's steps receive these variables, frozen onto each run when it is queued.
-                    The values are plain configuration: they are shown here, on the run page and in any log
-                    a step echoes them into. Anything sensitive belongs in
-                    <a href="/secrets" class="bb:font-medium bb:underline bb:underline-offset-4">Secrets</a>,
-                    which are encrypted and write-only.
+                    @L10n["Every project's steps receive these variables, frozen onto each run when it is queued. The values are plain configuration: they are shown here, on the run page and in any log a step echoes them into. Anything sensitive belongs in"]
+                    <a href="/secrets" class="bb:font-medium bb:underline bb:underline-offset-4">@L10n["Secrets"]</a>@L10n[", which are encrypted and write-only."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <p class="bb:text-sm bb:text-muted-foreground">
-                    Precedence, lowest first: <code>ZENKINS_*</code> run metadata → organization variables →
-                    build parameters → pipeline <code>env</code> → step <code>env</code>. Names beginning
-                    with <code>@string.Join(", ", ServerEnvironmentNames.ReservedPrefixes)</code> are
-                    reserved for the server's own metadata and cannot be used here.
+                    @L10n["Precedence, lowest first:"] <code>ZENKINS_*</code> @L10n["run metadata"] → @L10n["organization variables"] → @L10n["build parameters"] → @L10n["pipeline"] <code>env</code> → @L10n["step"] <code>env</code>. @L10n["Names beginning with"] <code>@string.Join(", ", ServerEnvironmentNames.ReservedPrefixes)</code> @L10n["are reserved for the server's own metadata and cannot be used here."]
                 </p>
             </BbCardContent>
         </BbCard>
@@ -64,18 +58,15 @@
         {
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">New variable</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["New variable"]</BbCardTitle>
                     <BbCardDescription>
-                        The name must be usable as an environment variable (letters, digits and underscores)
-                        and unique in this organization. An organization holds at most
-                        @OrganizationEnvironmentValidation.MaxVariables variables of at most
-                        @OrganizationEnvironmentValidation.MaxValueLength characters each.
+                        @L10n["The name must be usable as an environment variable (letters, digits and underscores) and unique in this organization. An organization holds at most {0} variables of at most {1} characters each.", OrganizationEnvironmentValidation.MaxVariables, OrganizationEnvironmentValidation.MaxValueLength]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
                     <form method="post" action="/organizations/environment/create" data-zenkins-antiforgery class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row bb:sm:items-end">
                         <div class="bb:flex-1 bb:space-y-2">
-                            <label for="environment-name" class="bb:text-sm bb:font-medium">Name</label>
+                            <label for="environment-name" class="bb:text-sm bb:font-medium">@L10n["Name"]</label>
                             <input id="environment-name"
                                    name="Name"
                                    type="text"
@@ -89,7 +80,7 @@
                                    placeholder="REGISTRY_HOST" />
                         </div>
                         <div class="bb:flex-1 bb:space-y-2">
-                            <label for="environment-value" class="bb:text-sm bb:font-medium">Value</label>
+                            <label for="environment-value" class="bb:text-sm bb:font-medium">@L10n["Value"]</label>
                             <input id="environment-value"
                                    name="Value"
                                    type="text"
@@ -99,7 +90,7 @@
                                    spellcheck="false"
                                    placeholder="registry.internal" />
                         </div>
-                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Add variable</BbButton>
+                        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Add variable"]</BbButton>
                     </form>
                 </BbCardContent>
             </BbCard>
@@ -107,18 +98,18 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Variables of this organization</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Variables of this organization"]</BbCardTitle>
                 <BbCardDescription>
                     @(_canManage
-                        ? "Edits and deletes change future runs only: a queued or finished run keeps the snapshot it was created with."
-                        : "Read-only: only an organization Owner can add, edit or delete these. Every project's steps receive them.")
+                        ? L10n["Edits and deletes change future runs only: a queued or finished run keeps the snapshot it was created with."]
+                        : L10n["Read-only: only an organization Owner can add, edit or delete these. Every project's steps receive them."])
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (_variables.Count == 0)
                 {
-                    <BbEmpty Title="No variables configured"
-                             Description="Add a variable above to make it available to every project's steps.">
+                    <BbEmpty Title="@L10n["No variables configured"]"
+                             Description="@L10n["Add a variable above to make it available to every project's steps."]">
                         <Icon>
                             <LucideIcon Name="variable" Class="bb:h-12 bb:w-12" />
                         </Icon>
@@ -130,12 +121,12 @@
                         <table class="bb:w-full bb:text-sm">
                             <thead>
                                 <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Name</th>
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Value</th>
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">Updated</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Name"]</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Value"]</th>
+                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Updated"]</th>
                                     @if (_canManage)
                                     {
-                                        <th class="bb:py-2 bb:font-medium">Manage</th>
+                                        <th class="bb:py-2 bb:font-medium">@L10n["Manage"]</th>
                                     }
                                 </tr>
                             </thead>
@@ -146,14 +137,14 @@
                                         <td class="bb:py-3 bb:pr-4 bb:font-medium bb:font-mono">@variable.Name</td>
                                         <td id="@($"environment-value-{variable.Name}")"
                                             class="bb:py-3 bb:pr-4 bb:whitespace-pre-wrap bb:break-all bb:font-mono">@variable.Value</td>
-                                        <td class="bb:py-3 bb:pr-4">@variable.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                        <td class="bb:py-3 bb:pr-4">@L10n["{0} UTC", variable.UpdatedAt.ToString("yyyy-MM-dd HH:mm")]</td>
                                         @if (_canManage)
                                         {
                                             <td class="bb:py-3">
                                                 <div class="bb:flex bb:flex-col bb:gap-2">
                                                     <details class="bb:inline-block">
                                                         <summary class="bb:cursor-pointer bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs">
-                                                            Edit…
+                                                            @L10n["Edit…"]
                                                         </summary>
                                                         <form method="post" action="/organizations/environment/@variable.Id/update" data-zenkins-antiforgery class="bb:mt-2 bb:flex bb:flex-col bb:gap-2">
                                                             <label for="edit-name-@variable.Id" class="bb:sr-only">Name</label>
@@ -176,23 +167,22 @@
                                                                    spellcheck="false" />
                                                             <button type="submit"
                                                                     class="bb:self-start bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs bb:hover:bg-accent">
-                                                                Save
+                                                                @L10n["Save"]
                                                             </button>
                                                         </form>
                                                     </details>
 
                                                     <details class="bb:inline-block">
                                                         <summary class="bb:cursor-pointer bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive">
-                                                            Delete…
+                                                            @L10n["Delete…"]
                                                         </summary>
                                                         <form method="post" action="/organizations/environment/@variable.Id/delete" data-zenkins-antiforgery class="bb:mt-2 bb:flex bb:flex-col bb:gap-2">
                                                             <span class="bb:text-xs bb:text-muted-foreground">
-                                                                Delete @variable.Name? Runs already queued keep the
-                                                                snapshot they were created with.
+                                                                @L10n["Delete {0}? Runs already queued keep the snapshot they were created with.", variable.Name]
                                                             </span>
                                                             <button type="submit"
                                                                     class="bb:self-start bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive bb:hover:bg-destructive/10">
-                                                                Confirm delete
+                                                                @L10n["Confirm delete"]
                                                             </button>
                                                         </form>
                                                     </details>
@@ -229,14 +219,14 @@
 
     private string? Notice => NoticeCode switch
     {
-        "created" => "The variable was added.",
-        "updated" => "The variable was saved. Runs already queued keep their own snapshot.",
-        "deleted" => "The variable was deleted. Runs already queued keep their own snapshot.",
+        "created" => L10n["The variable was added."],
+        "updated" => L10n["The variable was saved. Runs already queued keep their own snapshot."],
+        "deleted" => L10n["The variable was deleted. Runs already queued keep their own snapshot."],
         _ => null,
     };
 
     // The value never travels in a query, so a form-level refusal carries no field name to echo.
-    private string? Error => OrganizationEnvironmentErrorCodes.MessageFor(ErrorCode);
+    private string? Error => OrganizationEnvironmentErrorCodes.MessageFor(ErrorCode, L10n);
 
     protected override async Task OnInitializedAsync()
     {

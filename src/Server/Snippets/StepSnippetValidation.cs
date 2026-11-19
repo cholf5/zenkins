@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Zenkins.Shared.Snippets;
 
 namespace Zenkins.Server.Snippets;
@@ -37,16 +38,17 @@ public static class SnippetErrorCodes
     };
 
     /// <summary>The sentence the page renders for a code; the raw code for one this build does not know.</summary>
-    public static string MessageFor(string? code) => code switch
+    /// <summary>The sentence the page renders for a code, in the UI's language; the raw code for one this build does not know.</summary>
+    public static string MessageFor(string? code, Localizer L10n) => code switch
     {
-        NameRequired => "A snippet needs a name.",
-        NameTooLong => $"A snippet name is at most {StepSnippetLimits.MaxNameLength} characters.",
-        NameDuplicate => "This organization already has a snippet with that name.",
-        KindInvalid => "Choose a known snippet kind.",
-        BodyRequired => "A snippet needs a body.",
-        BodyTooLong => "The body is longer than the text it feeds allows (32 KiB for a script step, 64 KiB for a Lua fragment).",
-        DescriptionTooLong => $"The description is at most {StepSnippetLimits.MaxDescriptionLength} characters.",
-        _ => code ?? "The snippet was refused.",
+        NameRequired => L10n["A snippet needs a name."],
+        NameTooLong => L10n["A snippet name is at most {0} characters.", StepSnippetLimits.MaxNameLength],
+        NameDuplicate => L10n["This organization already has a snippet with that name."],
+        KindInvalid => L10n["Choose a known snippet kind."],
+        BodyRequired => L10n["A snippet needs a body."],
+        BodyTooLong => L10n["The body is longer than the text it feeds allows (32 KiB for a script step, 64 KiB for a Lua fragment)."],
+        DescriptionTooLong => L10n["The description is at most {0} characters.", StepSnippetLimits.MaxDescriptionLength],
+        _ => code ?? L10n["The snippet was refused."],
     };
 }
 

@@ -1,0 +1,12 @@
+{
+  "An account with this email address already exists.": "该邮箱地址的账号已存在。",
+  "Email '{0}' is already taken.": "邮箱“{0}”已被占用。",
+  "Email '{0}' is invalid.": "邮箱“{0}”无效。",
+  "Username '{0}' is invalid, can only contain letters or digits.": "用户名“{0}”无效，只能包含字母或数字。",
+  "Passwords must have at least one digit ('0'-'9').": "密码必须包含至少一个数字（'0'-'9'）。",
+  "Passwords must have at least one lowercase ('a'-'z').": "密码必须包含至少一个小写字母（'a'-'z'）。",
+  "Passwords must have at least one non alphanumeric character.": "密码必须包含至少一个非字母数字字符。",
+  "Passwords must use at least {0} different characters.": "密码必须至少使用 {0} 个不同的字符。",
+  "Passwords must have at least one uppercase ('A'-'Z').": "密码必须包含至少一个大写字母（'A'-'Z'）。",
+  "Passwords must be at least {0} characters.": "密码长度至少为 {0} 个字符。"
+}

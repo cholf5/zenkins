@@ -27,7 +27,7 @@
                the same build stamp the binaries print for --version. Kept in the footer so it is
                visible on every signed-in page, and collapsed with the sidebar like the rest of it. *@
             <div class="bb:px-2 bb:py-1 bb:text-xs bb:text-muted-foreground bb:group-data-[collapsible=icon]:hidden">
-                CI server · shell preview · v@(ProductVersion.Current)
+                @L10n["CI server · shell preview · v{0}", ProductVersion.Current]
             </div>
         </BbSidebarFooter>
 
@@ -37,7 +37,7 @@
     <BbSidebarInset>
         <BbAppBar Sticky="false" SafeArea="false">
             <LeadingContent>
-                <BbSidebarTrigger aria-label="Toggle navigation" />
+                <BbSidebarTrigger aria-label="@L10n["Toggle navigation"]" />
             </LeadingContent>
 
             <TitleContent>
@@ -51,7 +51,7 @@
                        membership, so an organization the user does not belong to cannot be selected
                        even by editing the form. The visually-hidden summary also announces the list
                        to assistive technology (the menu content itself only exists while open). *@
-                    <span class="bb:sr-only">Organizations: @MembershipSummary</span>
+                    <span class="bb:sr-only">@L10n["Organizations: {0}", MembershipSummary]</span>
                     <BbDropdownMenu>
                         <BbDropdownMenuTrigger AsChild>
                             <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" Class="bb:gap-2">
@@ -65,7 +65,7 @@
                             </BbButton>
                         </BbDropdownMenuTrigger>
                         <BbDropdownMenuContent>
-                            <BbDropdownMenuLabel>Organization</BbDropdownMenuLabel>
+                            <BbDropdownMenuLabel>@L10n["Organization"]</BbDropdownMenuLabel>
                             @if (_session is { Organizations.Count: > 0 })
                             {
                                 @foreach (var organization in _session.Organizations)
@@ -80,24 +80,24 @@
                                                 <LucideIcon Name="@(organization.OrganizationId == _session.Organization?.OrganizationId ? "check" : "building-2")" Class="bb:h-4 bb:w-4 bb:shrink-0 bb:opacity-70" />
                                                 <span class="bb:truncate">@organization.Name</span>
                                             </span>
-                                            <span class="bb:text-xs bb:text-muted-foreground">@organization.Role</span>
+                                            <span class="bb:text-xs bb:text-muted-foreground">@RoleLabel(organization.Role)</span>
                                         </button>
                                     </form>
                                 }
 
                                 <BbDropdownMenuSeparator />
-                                <BbDropdownMenuItem Href="/organizations/members">Members</BbDropdownMenuItem>
-                                <BbDropdownMenuItem Href="/organizations/environment">Environment</BbDropdownMenuItem>
+                                <BbDropdownMenuItem Href="/organizations/members">@L10n["Members"]</BbDropdownMenuItem>
+                                <BbDropdownMenuItem Href="/organizations/environment">@L10n["Environment"]</BbDropdownMenuItem>
                                 @if (_session.CanManageActiveOrganization)
                                 {
-                                    <BbDropdownMenuItem Href="/organizations/settings">Organization settings</BbDropdownMenuItem>
+                                    <BbDropdownMenuItem Href="/organizations/settings">@L10n["Organization settings"]</BbDropdownMenuItem>
                                 }
                             }
                             else
                             {
-                                <BbDropdownMenuItem Disabled="true">No organization selected</BbDropdownMenuItem>
+                                <BbDropdownMenuItem Disabled="true">@L10n["No organization selected"]</BbDropdownMenuItem>
                                 <BbDropdownMenuSeparator />
-                                <BbDropdownMenuItem Href="/no-organization">What to do next</BbDropdownMenuItem>
+                                <BbDropdownMenuItem Href="/no-organization">@L10n["What to do next"]</BbDropdownMenuItem>
                             }
                         </BbDropdownMenuContent>
                     </BbDropdownMenu>
@@ -105,13 +105,14 @@
             </TitleContent>
 
             <Actions>
+                <LanguageSwitcher ReturnUrl="@_returnUrl" />
                 @* D-007: the multi-theme picker — dark/light, base gray scale, primary accent and
                    radius, persisted to bb-theme localStorage by ThemeService and replayed before
                    the first paint by theme-init.js (see App.razor). Ghost + square TriggerClass so
                    the trigger lines up with the icon-only user menu next to it. *@
                 <BbThemeSwitcher Variant="ButtonVariant.Ghost"
                                  TriggerClass="bb:h-9 bb:w-9 bb:p-0"
-                                 AdditionalAttributes="@(new Dictionary<string, object> { ["aria-label"] = "Customize theme" })" />
+                                 AdditionalAttributes="@(new Dictionary<string, object> { ["aria-label"] = L10n["Customize theme"] })" />
                 <BbDropdownMenu>
                     <BbDropdownMenuTrigger AsChild>
                         <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Icon" aria-label="@UserMenuLabel">
@@ -125,17 +126,17 @@
                     <BbDropdownMenuContent>
                         @if (_session is null)
                         {
-                            <BbDropdownMenuLabel>Not signed in</BbDropdownMenuLabel>
-                            <BbDropdownMenuItem Href="/account/login">Sign in</BbDropdownMenuItem>
+                            <BbDropdownMenuLabel>@L10n["Not signed in"]</BbDropdownMenuLabel>
+                            <BbDropdownMenuItem Href="/account/login">@L10n["Sign in"]</BbDropdownMenuItem>
                         }
                         else
                         {
-                            <BbDropdownMenuLabel>@(_session.Email ?? "Signed in")</BbDropdownMenuLabel>
-                            <BbDropdownMenuItem Disabled="true">@(_session.Organization is null ? "No organization" : _session.Organization.Role.ToString())</BbDropdownMenuItem>
+                            <BbDropdownMenuLabel>@(_session.Email ?? L10n["Signed in"])</BbDropdownMenuLabel>
+                            <BbDropdownMenuItem Disabled="true">@(_session.Organization is { } active ? RoleLabel(active.Role) : L10n["No organization"])</BbDropdownMenuItem>
                             <BbDropdownMenuSeparator />
                             @* A normal link to the static-SSR sign-out page; the cookie is cleared by a
                                POST form there, not by this navigation. *@
-                            <BbDropdownMenuItem Href="/account/logout">Sign out</BbDropdownMenuItem>
+                            <BbDropdownMenuItem Href="/account/logout">@L10n["Sign out"]</BbDropdownMenuItem>
                         }
                     </BbDropdownMenuContent>
                 </BbDropdownMenu>
@@ -164,17 +165,21 @@
     // endpoint sanitizes it again (and ignores it if it is not a local path).
     private string _returnUrl = "/";
 
-    private string OrganizationLabel => _session?.Organization?.Name ?? "No organization";
+    private string OrganizationLabel => _session?.Organization?.Name ?? L10n["No organization"];
 
     private string MembershipSummary => _session is { Organizations.Count: > 0 }
         ? string.Join(", ", _session.Organizations.Select(organization => organization.Name))
-        : "none";
+        : L10n["none"];
+
+    // The role badge and menu line show the word, not the enum name, so a Chinese UI does not read
+    // "Owner" in the middle of a sentence.
+    private string RoleLabel(OrganizationRole role) => DisplayText.Role(role, L10n);
 
     // Also what the HTTP smoke test asserts to prove the shell knows who is signed in: the user
     // menu itself is icon-only and its content only renders once the (interactive) menu opens.
     private string UserMenuLabel => _session?.Email is { } email
-        ? $"Open user menu for {email}"
-        : "Open user menu";
+        ? L10n["Open user menu for {0}", email]
+        : L10n["Open user menu"];
 
     protected override async Task OnInitializedAsync()
     {

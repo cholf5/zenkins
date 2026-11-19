@@ -19,9 +19,13 @@
 @using Zenkins.Server.Folders
 @using Zenkins.Server.Data
 @using Zenkins.Server.Data.Entities
+@using Zenkins.Server.Localization
 @using Zenkins.Server.LogStreaming
 @using Zenkins.Server.Organizations
 @using Zenkins.Server.Projects
 @using Zenkins.Server.Runs
 @using Zenkins.Server.Workers
 @using Zenkins.Shared
+
+@* The UI's copy is read through this one localizer, in both languages the app ships. *@
+@inject Zenkins.Server.Localization.Localizer L10n

@@ -1,6 +1,7 @@
 @* Account pages are static SSR (they must be able to set/clear the auth cookie), so this layout is
    deliberately plain HTML/CSS with no interactive components and no app shell. *@
 @inherits LayoutComponentBase
+@inject NavigationManager Navigation
 
 <div class="bb:flex bb:min-h-screen bb:items-center bb:justify-center bb:p-4">
     <div class="bb:w-full bb:max-w-md bb:space-y-6">
@@ -13,8 +14,17 @@
 
         @Body
 
+        @* Anonymous visitors can choose their language here, before any account exists. *@
+        <div class="bb:flex bb:justify-center">
+            <LanguageSwitcher ReturnUrl="@ReturnUrl" />
+        </div>
+
         <p class="bb:text-center bb:text-xs bb:text-muted-foreground">
-            Zenkins CI · self-hosted build server
+            @L10n["Zenkins CI · self-hosted build server"]
         </p>
     </div>
 </div>
+
+@code {
+    private string ReturnUrl => "/" + Navigation.ToBaseRelativePath(Navigation.Uri);
+}

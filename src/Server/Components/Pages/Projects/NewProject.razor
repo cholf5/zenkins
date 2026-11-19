@@ -3,11 +3,11 @@
 @inject UserSession UserSession
 @inject FolderService Folders
 
-<PageTitle>New project · Zenkins</PageTitle>
+<PageTitle>@L10n["New project"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-2xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">New project</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["New project"]</BbCardTitle>
         @if (_session?.Organization is { } organization)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@organization.Name</BbBadge>
@@ -29,17 +29,14 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Project details</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Project details"]</BbCardTitle>
                 <BbCardDescription>
-                    A Pipeline project is the Git repository, the default branch to build and the
-                    pipeline file inside it - or, since F-022, a Lua script stored here with no
-                    repository at all. A Freestyle project (F-020) needs no repository: its
-                    steps are configured on the server after it is created.
+                    @L10n["A Pipeline project is the Git repository, the default branch to build and the pipeline file inside it - or, since F-022, a Lua script stored here with no repository at all. A Freestyle project (F-020) needs no repository: its steps are configured on the server after it is created."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <ProjectFormCard Action="/projects/create"
-                                 SubmitLabel="Create project"
+                                 SubmitLabel="@L10n["Create project"]"
                                  CancelHref="/projects"
                                  Name="@Name"
                                  Kind="@Kind"
@@ -98,7 +95,7 @@
     [SupplyParameterFromQuery(Name = "conflict")]
     private string? ConflictName { get; set; }
 
-    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode);
+    private string? Error => ProjectErrorCodes.MessageFor(ErrorCode, L10n);
 
     protected override async Task OnInitializedAsync()
     {

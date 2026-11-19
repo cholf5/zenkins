@@ -4,7 +4,7 @@
 @inject WorkerService WorkerService
 @inject RunService RunsService
 
-<PageTitle>Worker @(_worker?.Name ?? "") · Zenkins</PageTitle>
+<PageTitle>@L10n["Worker"] @(_worker?.Name ?? "") · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     @if (_worker is null)
@@ -17,14 +17,14 @@
     {
         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-                <BbCardTitle As="h1" tabindex="-1">Worker @_worker.Name</BbCardTitle>
+                <BbCardTitle As="h1" tabindex="-1">@L10n["Worker"] @_worker.Name</BbCardTitle>
                 <BbBadge Variant="BadgeVariant.Outline">@_worker.Status</BbBadge>
                 @if (_worker.IsDisabled)
                 {
-                    <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                    <BbBadge Variant="BadgeVariant.Destructive">@L10n["Disabled"]</BbBadge>
                 }
             </div>
-            <BbButton Href="/workers" Variant="ButtonVariant.Outline">All workers</BbButton>
+            <BbButton Href="/workers" Variant="ButtonVariant.Outline">@L10n["All workers"]</BbButton>
         </div>
 
         @if (Notice is { } notice)
@@ -43,56 +43,55 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Machine</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Machine"]</BbCardTitle>
                 <BbCardDescription>
-                    What the worker reported about itself at registration and on every heartbeat.
-                    The status badge shows exactly what the offline sweeper (F-010) last wrote.
+                    @L10n["What the worker reported about itself at registration and on every heartbeat. The status badge shows exactly what the offline sweeper (F-010) last wrote."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 <dl id="worker-details" class="bb:grid bb:grid-cols-1 bb:gap-4 bb:text-sm bb:sm:grid-cols-3">
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Operating system</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Operating system"]</dt>
                         <dd id="worker-os">@_worker.Os</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Architecture</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Architecture"]</dt>
                         <dd id="worker-architecture">@_worker.Architecture</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Version</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Version"]</dt>
                         <dd id="worker-version">v@_worker.Version</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">CPU count</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["CPU count"]</dt>
                         <dd id="worker-cpus">@_worker.CpuCount</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Max concurrency</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Max concurrency"]</dt>
                         <dd id="worker-max-concurrency">@_worker.MaxConcurrency</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Tags</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Tags"]</dt>
                         <dd id="worker-tags">@(string.IsNullOrEmpty(_worker.Tags) ? "-" : _worker.Tags)</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Remote probes</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Remote probes"]</dt>
                         @* I-005: only a Worker that announced the capability is handed probes, so the
                            fact deserves to be visible rather than inferred from silence. *@
-                        <dd id="worker-can-probe">@(_worker.CanProbe ? "Yes" : "No")</dd>
+                        <dd id="worker-can-probe">@(_worker.CanProbe ? L10n["Yes"] : L10n["No"])</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Registered</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Registered"]</dt>
                         <dd>@_worker.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Last heartbeat</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Last heartbeat"]</dt>
                         <dd id="worker-last-heartbeat">
                             @(_worker.LastHeartbeatAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-") UTC
                         </dd>
                     </div>
                     <div>
-                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">Worker id</dt>
+                        <dt class="bb:text-xs bb:font-medium bb:text-muted-foreground">@L10n["Worker id"]</dt>
                         <dd class="bb:break-all">@_worker.Id</dd>
                     </div>
                 </dl>
@@ -101,17 +100,16 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Current runs</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Current runs"]</BbCardTitle>
                 <BbCardDescription>
-                    The runs this worker is executing right now. Disabled or not, runs already in
-                    flight continue until they report completion (card D-005).
+                    @L10n["The runs this worker is executing right now. Disabled or not, runs already in flight continue until they report completion (card D-005)."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (_runs.Current.Count == 0)
                 {
                     <p id="worker-current-runs-empty" class="bb:text-sm bb:text-muted-foreground">
-                        Not running anything right now.
+                        @L10n["Not running anything right now."]
                     </p>
                 }
                 else
@@ -122,7 +120,7 @@
                             <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                 <div class="bb:min-w-0">
                                     <p class="bb:font-medium">
-                                        <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
+                                        <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", run.Number]</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
                                             @run.GitBranch · @run.PipelinePath
                                         </span>
@@ -130,7 +128,7 @@
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
                                     <RunStatusBadge Status="@run.Status" />
-                                    <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, _now)</span>
+                                    <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, _now, L10n)</span>
                                 </div>
                             </li>
                         }
@@ -141,16 +139,16 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Recent runs</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Recent runs"]</BbCardTitle>
                 <BbCardDescription>
-                    This worker's latest queued and finished runs, newest first.
+                    @L10n["This worker's latest queued and finished runs, newest first."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (_runs.Recent.Count == 0)
                 {
                     <p id="worker-recent-runs-empty" class="bb:text-sm bb:text-muted-foreground">
-                        No run history yet.
+                        @L10n["No run history yet."]
                     </p>
                 }
                 else
@@ -161,7 +159,7 @@
                             <li class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                 <div class="bb:min-w-0">
                                     <p class="bb:font-medium">
-                                        <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
+                                        <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", run.Number]</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
                                             @run.GitBranch · @run.PipelinePath
                                         </span>
@@ -169,7 +167,7 @@
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
                                     <RunStatusBadge Status="@run.Status" />
-                                    <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, _now)</span>
+                                    <span>@RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, _now, L10n)</span>
                                     <span>@run.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
                                 </div>
                             </li>
@@ -185,10 +183,9 @@
                UI only mirrors what the service would enforce anyway (a Member's forged POST is a 403). *@
             <BbCard>
                 <BbCardHeader>
-                    <BbCardTitle As="h2">Controls</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Controls"]</BbCardTitle>
                     <BbCardDescription>
-                        Owner actions for this worker. Disabling stops it from claiming new work -
-                        runs already in flight continue, and it can be re-enabled at any time.
+                        @L10n["Owner actions for this worker. Disabling stops it from claiming new work - runs already in flight continue, and it can be re-enabled at any time."]
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
@@ -197,33 +194,32 @@
                             <p class="bb:text-sm">
                                 @if (_worker.IsDisabled)
                                 {
-                                    <span>The worker is disabled: it gets no new work from the queue.</span>
+                                    <span>@L10n["The worker is disabled: it gets no new work from the queue."]</span>
                                 }
                                 else
                                 {
-                                    <span>The worker is enabled and claims new work when it has a free slot.</span>
+                                    <span>@L10n["The worker is enabled and claims new work when it has a free slot."]</span>
                                 }
                             </p>
                             @if (_worker.IsDisabled)
                             {
                                 <form method="post" action="/workers/@_worker.Id/enable" data-zenkins-antiforgery>
-                                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Enable worker</BbButton>
+                                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Enable worker"]</BbButton>
                                 </form>
                             }
                             else
                             {
                                 <form method="post" action="/workers/@_worker.Id/disable" data-zenkins-antiforgery>
-                                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Disable worker</BbButton>
+                                    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Disable worker"]</BbButton>
                                 </form>
                             }
                         </div>
                         <div class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3">
                             <p class="bb:text-sm bb:text-muted-foreground">
-                                Deleting removes the worker and its tokens. A worker that has executed
-                                runs cannot be deleted - its runs keep their worker reference.
+                                @L10n["Deleting removes the worker and its tokens. A worker that has executed runs cannot be deleted - its runs keep their worker reference."]
                             </p>
                             <form method="post" action="/workers/@_worker.Id/delete" data-zenkins-antiforgery>
-                                <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">Delete worker</BbButton>
+                                <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">@L10n["Delete worker"]</BbButton>
                             </form>
                         </div>
                     </div>
@@ -260,18 +256,19 @@
 
     private string? Notice => NoticeCode switch
     {
-        "worker-disabled" => "The worker was disabled: it stops claiming new work, runs in flight continue.",
-        "worker-enabled" => "The worker was enabled: it claims new work again.",
+        "worker-disabled" => L10n["The worker was disabled: it stops claiming new work, runs in flight continue."],
+        "worker-enabled" => L10n["The worker was enabled: it claims new work again."],
         _ => null,
     };
 
     private string? Error => ErrorCode switch
     {
         // The refusal names the runs: the count the server measured rides the query (D-005).
-        WorkerErrorCodes.WorkerHasRuns when int.TryParse(RunsCountText, out var runCount) =>
-            $"This worker executed {runCount} run{(@runCount == 1 ? "" : "s")}, so it cannot be deleted - its runs keep their worker reference.",
+        WorkerErrorCodes.WorkerHasRuns when int.TryParse(RunsCountText, out var runCount) => runCount == 1
+            ? L10n["This worker executed 1 run, so it cannot be deleted - its runs keep their worker reference."]
+            : L10n["This worker executed {0} runs, so it cannot be deleted - its runs keep their worker reference.", runCount],
         WorkerErrorCodes.WorkerHasRuns =>
-            "This worker has run history, so it cannot be deleted - its runs keep their worker reference.",
+            L10n["This worker has run history, so it cannot be deleted - its runs keep their worker reference."],
         _ => null,
     };
 

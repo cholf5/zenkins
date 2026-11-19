@@ -1,0 +1,58 @@
+@using System.Linq.Expressions
+@typeparam TValue
+@implements IDisposable
+@* The message <see cref="InputBase{TValue}"/> validation produced for one field, translated through
+   the UI's localizer. DataAnnotations attributes can only carry compile-time English text, so their
+   Message is the catalogue key (see Translations.zh-Hans.json) and the language is applied here,
+   where the request/circuit's localizer is available. *@
+@if (Messages.Count > 0)
+{
+    @foreach (var message in Messages)
+    {
+        <div class="validation-message">@L10n[message]</div>
+    }
+}
+
+@code {
+    private FieldIdentifier _field;
+    private IReadOnlyList<string> _messages = [];
+
+    [CascadingParameter]
+    private EditContext? EditContext { get; set; }
+
+    /// <summary>The model property whose validation messages are shown.</summary>
+    [Parameter, EditorRequired]
+    public Expression<Func<TValue>> For { get; set; } = default!;
+
+    private IReadOnlyList<string> Messages => _messages;
+
+    protected override void OnInitialized()
+    {
+        _field = FieldIdentifier.Create(For);
+
+        if (EditContext is not null)
+        {
+            EditContext.OnValidationStateChanged += OnValidationStateChanged;
+        }
+
+        Refresh();
+    }
+
+    private void OnValidationStateChanged(object? sender, ValidationStateChangedEventArgs args)
+    {
+        Refresh();
+        StateHasChanged();
+    }
+
+    private void Refresh() =>
+        _messages = EditContext?.GetValidationMessages(_field).ToArray() ?? [];
+
+    /// <summary>Detaches from the edit context so a long-lived circuit does not leak this component.</summary>
+    public void Dispose()
+    {
+        if (EditContext is not null)
+        {
+            EditContext.OnValidationStateChanged -= OnValidationStateChanged;
+        }
+    }
+}

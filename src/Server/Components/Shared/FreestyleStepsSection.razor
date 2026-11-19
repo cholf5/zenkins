@@ -21,18 +21,18 @@
                     <div class="bb:flex bb:items-center bb:gap-1">
                         <button type="button" data-freestyle-action="move-up"
                                 class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                                aria-label="Move step @(stepIndex + 1) up">↑</button>
+                                aria-label="@L10n["Move step {0} up", stepIndex + 1]">↑</button>
                         <button type="button" data-freestyle-action="move-down"
                                 class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                                aria-label="Move step @(stepIndex + 1) down">↓</button>
+                                aria-label="@L10n["Move step {0} down", stepIndex + 1]">↓</button>
                         <button type="button" data-freestyle-action="remove"
                                 class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                                aria-label="Remove step @(stepIndex + 1)">Remove</button>
+                                aria-label="@L10n["Remove step {0}", stepIndex + 1]">@L10n["Remove"]</button>
                     </div>
                 </div>
                 <div class="bb:space-y-3 bb:text-sm">
                     <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-name-{stepIndex}")">Name</label>
+                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-name-{stepIndex}")">@L10n["Name"]</label>
                         <input data-freestyle-field="name"
                                id="@($"{ListKey}-step-name-{stepIndex}")"
                                value="@DisplayName(step)"
@@ -45,13 +45,13 @@
                     {
                         <div>
                             <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-stage-{stepIndex}")">
-                                Stage (blank = outside any stage)
+                                @L10n["Stage (blank = outside any stage)"]
                             </label>
                             <input data-freestyle-field="stage"
                                    id="@($"{ListKey}-step-stage-{stepIndex}")"
                                    value="@step.Stage"
                                    maxlength="@MaxStageLength"
-                                   placeholder="Build"
+                                   placeholder="@L10n["Build"]"
                                    autocomplete="off"
                                    spellcheck="false"
                                    class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
@@ -59,7 +59,7 @@
                     }
                     <div>
                         <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-script-{stepIndex}")">
-                            Script
+                            @L10n["Script"]
                         </label>
                         <textarea data-freestyle-field="script"
                                   id="@($"{ListKey}-step-script-{stepIndex}")"
@@ -67,15 +67,14 @@
                                   spellcheck="false"
                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs">@step.Script</textarea>
                         <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                            Runs on the claiming worker (cmd on Windows, sh -e on Unix) in the
-                            run's workspace. <code>${secret:NAME}</code> and <code>${env:NAME}</code>
-                            references are resolved just before the step starts.
+                            @L10n["Runs on the claiming worker (cmd on Windows, sh -e on Unix) in the run's workspace."] <code>${secret:NAME}</code> @L10n["and"] <code>${env:NAME}</code>
+                            @L10n["references are resolved just before the step starts."]
                         </p>
                     </div>
                     <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
                         <div>
                             <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-env-{stepIndex}")">
-                                Environment (one NAME=value per line)
+                                @L10n["Environment (one NAME=value per line)"]
                             </label>
                             <textarea data-freestyle-field="env-lines"
                                       id="@($"{ListKey}-step-env-{stepIndex}")"
@@ -85,7 +84,7 @@
                         </div>
                         <div>
                             <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-artifacts-{stepIndex}")">
-                                Artifacts (comma-separated paths)
+                                @L10n["Artifacts (comma-separated paths)"]
                             </label>
                             <input data-freestyle-field="artifacts-text"
                                    id="@($"{ListKey}-step-artifacts-{stepIndex}")"
@@ -98,7 +97,7 @@
                     <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
                         <div>
                             <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-timeout-{stepIndex}")">
-                                Timeout (seconds, blank = no limit)
+                                @L10n["Timeout (seconds, blank = no limit)"]
                             </label>
                             <input data-freestyle-field="timeout-seconds"
                                    id="@($"{ListKey}-step-timeout-{stepIndex}")"
@@ -111,7 +110,7 @@
                         </div>
                         <div>
                             <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-runs-on-{stepIndex}")">
-                                Needs a Worker with (blank = any)
+                                @L10n["Needs a Worker with (blank = any)"]
                             </label>
                             <input data-freestyle-field="runs-on"
                                    id="@($"{ListKey}-step-runs-on-{stepIndex}")"
@@ -123,7 +122,7 @@
                         </div>
                         <div>
                             <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-retry-{stepIndex}")">
-                                Attempts (blank = 1)
+                                @L10n["Attempts (blank = 1)"]
                             </label>
                             <input data-freestyle-field="retry"
                                    id="@($"{ListKey}-step-retry-{stepIndex}")"
@@ -139,7 +138,7 @@
                         <input type="checkbox"
                                data-freestyle-field="continue-on-error"
                                checked="@(step.ContinueOnError)" />
-                        <span class="bb:text-xs">Continue on error: a failure here does not stop the run.</span>
+                        <span class="bb:text-xs">@L10n["Continue on error: a failure here does not stop the run."]</span>
                     </label>
                 </div>
             </li>
@@ -150,23 +149,23 @@
         <li data-freestyle-step class="bb:rounded-md bb:border bb:border-input bb:p-4">
             <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
                 <span class="bb:text-sm bb:font-medium">
-                    Step <span data-freestyle-step-index></span>
+                    @L10n["Step"] <span data-freestyle-step-index></span>
                 </span>
                 <div class="bb:flex bb:items-center bb:gap-1">
                     <button type="button" data-freestyle-action="move-up"
                             class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                            aria-label="Move step up">↑</button>
+                            aria-label="@L10n["Move step up"]">↑</button>
                     <button type="button" data-freestyle-action="move-down"
                             class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                            aria-label="Move step down">↓</button>
+                            aria-label="@L10n["Move step down"]">↓</button>
                     <button type="button" data-freestyle-action="remove"
                             class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                            aria-label="Remove step">Remove</button>
+                            aria-label="@L10n["Remove step"]">@L10n["Remove"]</button>
                 </div>
             </div>
             <div class="bb:space-y-3 bb:text-sm">
                 <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="name">Name</label>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="name">@L10n["Name"]</label>
                     <input data-freestyle-field="name"
                            maxlength="200"
                            autocomplete="off"
@@ -181,14 +180,14 @@
                         </label>
                         <input data-freestyle-field="stage"
                                maxlength="@MaxStageLength"
-                               placeholder="Build"
+                               placeholder="@L10n["Build"]"
                                autocomplete="off"
                                spellcheck="false"
                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
                     </div>
                 }
                 <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="script">Script</label>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="script">@L10n["Script"]</label>
                     <textarea data-freestyle-field="script"
                               rows="6"
                               spellcheck="false"
@@ -250,7 +249,7 @@
                 </div>
                 <label class="bb:flex bb:items-center bb:gap-2">
                     <input type="checkbox" data-freestyle-field="continue-on-error" />
-                    <span class="bb:text-xs">Continue on error: a failure here does not stop the run.</span>
+                    <span class="bb:text-xs">@L10n["Continue on error: a failure here does not stop the run."]</span>
                 </label>
             </div>
         </li>
@@ -259,7 +258,7 @@
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
         <button type="button" data-freestyle-action="add"
                 class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-2 bb:text-sm">
-            Add step
+            @L10n["Add step"]
         </button>
     </div>
 

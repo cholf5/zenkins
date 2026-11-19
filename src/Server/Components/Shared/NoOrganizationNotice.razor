@@ -1,10 +1,8 @@
 @* Shown on app pages when the signed-in account has no organization membership yet: an explicit
    state with a next step instead of an empty dashboard. F-002 adds the invitation flow. *@
 <div role="status" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
-    <p class="bb:font-medium">No organization yet</p>
+    <p class="bb:font-medium">@L10n["No organization yet"]</p>
     <p class="bb:text-muted-foreground">
-        This account is active but is not a member of an organization, so projects, workers and
-        secrets stay unavailable. Ask an organization Owner to add you as a member, or sign out and
-        use a different account.
+        @L10n["This account is active but is not a member of an organization, so projects, workers and secrets stay unavailable. Ask an organization Owner to add you as a member, or sign out and use a different account."]
     </p>
 </div>

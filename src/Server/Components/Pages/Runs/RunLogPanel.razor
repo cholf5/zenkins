@@ -21,14 +21,14 @@
         <BbCardHeader>
             <div class="bb:flex bb:items-center bb:justify-between bb:gap-3">
                 <div>
-                    <BbCardTitle As="h2">Log</BbCardTitle>
+                    <BbCardTitle As="h2">@L10n["Log"]</BbCardTitle>
                     <BbCardDescription>
-                        Streamed from the worker while the run executes; stderr is shown in red.
+                        @L10n["Streamed from the worker while the run executes; stderr is shown in red."]
                     </BbCardDescription>
                 </div>
                 <a id="run-log-download"
                    class="bb:text-sm bb:font-medium bb:text-primary bb:hover:underline"
-                   href="@DownloadUrl">Download full log</a>
+                   href="@DownloadUrl">@L10n["Download full log"]</a>
             </div>
         </BbCardHeader>
         <BbCardContent>
@@ -44,9 +44,9 @@
                    manual restart the panel would stay frozen on whatever it had (review fix F6). *@
                 <div class="bb:flex bb:items-center bb:gap-3">
                     <BbButton Variant="ButtonVariant.Default" Size="ButtonSize.Small" OnClick="ReconnectAsync">
-                        Reconnect
+                        @L10n["Reconnect"]
                     </BbButton>
-                    <span class="bb:text-sm bb:text-muted-foreground">Reattach the live log stream.</span>
+                    <span class="bb:text-sm bb:text-muted-foreground">@L10n["Reattach the live log stream."]</span>
                 </div>
             }
             @* D-004's control surface. Every control below writes into the view model and re-plans;
@@ -55,26 +55,26 @@
                 <BbButton id="run-log-pause"
                           Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
                           OnClick="TogglePauseAsync">
-                    @(_plan.IsPaused ? "Resume" : "Pause")
+                    @(_plan.IsPaused ? L10n["Resume"] : L10n["Pause"])
                 </BbButton>
                 <span id="run-log-follow-state" role="status" class="bb:text-xs bb:text-muted-foreground">
                     @_plan.Indicator
                 </span>
                 <span class="bb:flex bb:items-center bb:gap-1">
-                    <input id="run-log-search" type="search" placeholder="Search this log"
+                    <input id="run-log-search" type="search" placeholder="@L10n["Search this log"]"
                            class="bb:h-8 bb:w-44 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:text-sm"
                            @bind="_search" @bind:event="oninput" @bind:after="ApplySearchAsync" />
                     <BbButton id="run-log-search-previous"
                               Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
                               Disabled="@(_plan.MatchCount == 0)"
                               OnClick="PreviousMatchAsync">
-                        Previous
+                        @L10n["Previous"]
                     </BbButton>
                     <BbButton id="run-log-search-next"
                               Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
                               Disabled="@(_plan.MatchCount == 0)"
                               OnClick="NextMatchAsync">
-                        Next
+                        @L10n["Next"]
                     </BbButton>
                 </span>
                 <span id="run-log-search-summary" role="status" class="bb:text-xs bb:text-muted-foreground">
@@ -84,29 +84,29 @@
                 {
                     @* Next/Previous left the tail; this is the way back (the same jump Resume does). *@
                     <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" OnClick="JumpToTailAsync">
-                        Back to latest
+                        @L10n["Back to latest"]
                     </BbButton>
                 }
                 <select id="run-log-step-filter"
-                        aria-label="Filter the log to one step"
+                        aria-label="@L10n["Filter the log to one step"]"
                         class="bb:h-8 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:text-sm"
                         value="@(_plan.StepFilter?.ToString() ?? "")"
                         @onchange="OnStepFilterSelectedAsync">
-                    <option value="">All steps</option>
+                    <option value="">@L10n["All steps"]</option>
                     @foreach (var step in Steps ?? [])
                     {
                         @if (step.Id is { } stepId)
                         {
                             var lines = _plan.StepCounts.GetValueOrDefault(stepId);
                             <option value="@stepId.ToString()">
-                                @step.Index. @step.Name · @(lines == 0 ? "no output" : $"{lines} line{(lines == 1 ? "" : "s")}")
+                                @step.Index. @step.Name · @(lines == 0 ? L10n["no output"] : lines == 1 ? L10n["{0} line", lines] : L10n["{0} lines", lines])
                             </option>
                         }
                         else
                         {
                             @* A step the run has not reached yet: no row, no id, nothing to filter on. *@
                             <option disabled>
-                                @step.Index. @step.Name · not started
+                                @step.Index. @step.Name · @L10n["not started"]
                             </option>
                         }
                     }
@@ -121,7 +121,7 @@
             @if (_plan.TotalLines == 0)
             {
                 <p id="run-log-empty" class="bb:text-sm bb:text-muted-foreground">
-                    @(_connecting ? "Connecting to the log stream…" : "No output was captured for this run.")
+                    @(_connecting ? L10n["Connecting to the log stream…"] : L10n["No output was captured for this run."])
                 </p>
             }
             else if (_plan.EmptyMessage is { } emptyMessage)
@@ -186,8 +186,10 @@
     private bool _connectionClosed;
     private string? _connectionError;
 
-    /// <summary>Everything the panel renders for the current instant, computed by the view model.</summary>
-    private RunLogPlan _plan = RunLogPanel.EmptyPlan();
+    /// <summary>Everything the panel renders for the current instant, computed by the view model.
+    /// <see cref="Replan"/> assigns it in <c>OnParametersSet</c>, which always runs before the first
+    /// render, so the copy is resolved with the localizer in hand.</summary>
+    private RunLogPlan _plan = null!;
 
     /// <summary>The search box's text, live-bound; the view model commits it on every keystroke.</summary>
     private string _search = string.Empty;
@@ -216,7 +218,7 @@
 
         if (string.IsNullOrEmpty(Ticket))
         {
-            _connectionError = "The log stream is not available for this session.";
+            _connectionError = L10n["The log stream is not available for this session."];
             return;
         }
 
@@ -251,7 +253,7 @@
         catch (Exception failure)
         {
             _connectionClosed = true;
-            _connectionError = $"The log stream could not be reached ({failure.Message}).";
+            _connectionError = L10n["The log stream could not be reached ({0}).", failure.Message];
         }
         finally
         {
@@ -278,7 +280,7 @@
             Logger.LogError(
                 failure, "Re-joining the log group of run {RunId} after a reconnect failed.", RunId);
             _connectionError =
-                $"The log stream reconnected but the run could not be re-joined ({failure.Message}).";
+                L10n["The log stream reconnected but the run could not be re-joined ({0}).", failure.Message];
             StateHasChanged();
         }
     });
@@ -292,8 +294,8 @@
     {
         _connectionClosed = true;
         _connectionError = error is null
-            ? "The log stream connection was closed."
-            : $"The log stream connection closed ({error.Message}).";
+            ? L10n["The log stream connection was closed."]
+            : L10n["The log stream connection closed ({0}).", error.Message];
         StateHasChanged();
         return Task.CompletedTask;
     });
@@ -318,7 +320,7 @@
         catch (Exception failure)
         {
             _connectionClosed = true;
-            _connectionError = $"The log stream could not be reached ({failure.Message}).";
+            _connectionError = L10n["The log stream could not be reached ({0}).", failure.Message];
         }
         finally
         {
@@ -390,7 +392,7 @@
         return Task.CompletedTask;
     }
 
-    private void Replan() => _plan = _viewModel.Plan(BuildStepHeaders());
+    private void Replan() => _plan = _viewModel.Plan(BuildStepHeaders(), L10n);
 
     private Task ReplanAsync()
     {
@@ -425,26 +427,6 @@
             ? "bb:text-red-500"
             : string.Empty;
     }
-
-    /// <summary>The plan before the first parameters arrive: an empty panel, following, no search.</summary>
-    private static RunLogPlan EmptyPlan() => new(
-        [],
-        TotalLines: 0,
-        FilteredLines: 0,
-        IsCapped: false,
-        CapNotice: null,
-        IsPaused: false,
-        NewWhilePaused: 0,
-        Indicator: "Following live",
-        SearchActive: false,
-        SearchText: string.Empty,
-        MatchCount: 0,
-        CurrentMatchIndex: 0,
-        CurrentMatchSeq: null,
-        SearchSummary: null,
-        EmptyMessage: null,
-        StepFilter: null,
-        StepCounts: new Dictionary<Guid, int>());
 
     public async ValueTask DisposeAsync()
     {

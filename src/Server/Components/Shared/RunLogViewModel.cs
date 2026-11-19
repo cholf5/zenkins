@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Zenkins.Shared.LogStreaming;
 
 namespace Zenkins.Server.Components.Shared;
@@ -226,9 +227,12 @@ public sealed class RunLogViewModel
     /// </para>
     /// </summary>
     /// <param name="stepHeaders">A recorded step id mapped to the header the page shows for it.</param>
-    public RunLogPlan Plan(IReadOnlyDictionary<Guid, string> stepHeaders)
+    /// <param name="L10n">The localizer the plan's indicator and notice texts are written in - the
+    /// panel prints them verbatim, so the copy is resolved where the text is built.</param>
+    public RunLogPlan Plan(IReadOnlyDictionary<Guid, string> stepHeaders, Localizer L10n)
     {
         ArgumentNullException.ThrowIfNull(stepHeaders);
+        ArgumentNullException.ThrowIfNull(L10n);
 
         lock (_gate)
         {
@@ -289,20 +293,20 @@ public sealed class RunLogViewModel
                 FilteredLines: view.Count,
                 IsCapped: isCapped,
                 CapNotice: isCapped
-                    ? $"Showing {window.Count} of {view.Count} lines (view capped at {RenderCap} lines) - the download has everything."
+                    ? L10n["Showing {0} of {1} lines (view capped at {2} lines) - the download has everything.", window.Count, view.Count, RenderCap]
                     : null,
                 IsPaused: _paused,
                 NewWhilePaused: waiting,
-                Indicator: IndicatorText(_paused, waiting),
+                Indicator: IndicatorText(_paused, waiting, L10n),
                 SearchActive: searchActive,
                 SearchText: _searchText,
                 MatchCount: matches.Count,
                 CurrentMatchIndex: matches.Count == 0 ? 0 : cursor,
                 CurrentMatchSeq: matches.Count == 0 || cursor == 0 ? null : matches[cursor - 1].Seq,
-                SearchSummary: SearchSummaryText(searchActive, _searchText, matches.Count, cursor),
+                SearchSummary: SearchSummaryText(searchActive, _searchText, matches.Count, cursor, L10n),
                 EmptyMessage: EmptyMessageText(
                     all.Count, view.Count, searchActive, _searchText,
-                    _stepFilter, viewport, stepHeaders),
+                    _stepFilter, viewport, stepHeaders, L10n),
                 StepFilter: _stepFilter,
                 StepCounts: stepCounts);
         }
@@ -347,11 +351,11 @@ public sealed class RunLogViewModel
     }
 
     /// <summary>The indicator's exact text - the panel's own statement of which state it is in.</summary>
-    private static string IndicatorText(bool paused, int waiting) => paused
-        ? waiting > 0 ? $"Paused - {waiting} new lines waiting" : "Paused"
-        : "Following live";
+    private static string IndicatorText(bool paused, int waiting, Localizer L10n) => paused
+        ? waiting > 0 ? L10n["Paused - {0} new lines waiting", waiting] : L10n["Paused"]
+        : L10n["Following live"];
 
-    private static string? SearchSummaryText(bool active, string text, int matchCount, int cursor)
+    private static string? SearchSummaryText(bool active, string text, int matchCount, int cursor, Localizer L10n)
     {
         if (!active)
         {
@@ -361,12 +365,19 @@ public sealed class RunLogViewModel
         if (matchCount == 0)
         {
             // The no-match statement D-004's AC asks for: the panel says so instead of showing silence.
-            return $"No matches for \"{text}\".";
+            return L10n["No matches for \"{0}\".", text];
         }
 
-        return cursor == 0
-            ? $"{matchCount} match{(matchCount == 1 ? "" : "es")} for \"{text}\"."
-            : $"Match {cursor} of {matchCount} for \"{text}\".";
+        if (cursor == 0)
+        {
+            // "N matches" / "1 match": the plural is a key of its own, because a language need not
+            // inflect the way English does.
+            return matchCount == 1
+                ? L10n["{0} match for \"{1}\".", matchCount, text]
+                : L10n["{0} matches for \"{1}\".", matchCount, text];
+        }
+
+        return L10n["Match {0} of {1} for \"{2}\".", cursor, matchCount, text];
     }
 
     private static string? EmptyMessageText(
@@ -376,7 +387,8 @@ public sealed class RunLogViewModel
         string searchText,
         Guid? stepFilter,
         IReadOnlyList<LogLineMessage> viewport,
-        IReadOnlyDictionary<Guid, string> stepHeaders)
+        IReadOnlyDictionary<Guid, string> stepHeaders,
+        Localizer L10n)
     {
         if (totalLines == 0 || viewLines > 0)
         {
@@ -388,19 +400,19 @@ public sealed class RunLogViewModel
         // the frozen view - the honest statement either way.
         if (stepFilter is { } filter)
         {
-            var header = stepHeaders.TryGetValue(filter, out var name) ? name : "the selected step";
+            var header = stepHeaders.TryGetValue(filter, out var name) ? name : L10n["the selected step"];
             var stepLinesInView = viewport.Count(line => line.StepId == filter);
             if (stepLinesInView == 0)
             {
-                return $"No output was captured for {header}.";
+                return L10n["No output was captured for {0}.", header];
             }
 
-            return $"No lines in {header} match \"{searchText}\".";
+            return L10n["No lines in {0} match \"{1}\".", header, searchText];
         }
 
         if (searchActive)
         {
-            return $"No lines match \"{searchText}\".";
+            return L10n["No lines match \"{0}\".", searchText];
         }
 
         return null;

@@ -10,19 +10,19 @@
 @inject SignInManager<User> SignInManager
 @inject NavigationManager Navigation
 
-<PageTitle>Register · Zenkins</PageTitle>
+<PageTitle>@L10n["Register"] · Zenkins</PageTitle>
 
 <div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
     <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
-        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">Create an account</h1>
+        <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">@L10n["Create an account"]</h1>
         <p class="bb:text-sm bb:text-muted-foreground">
             @if (_isFirstRun)
             {
-                <span>This deployment has no users yet: the first account becomes the <strong>Owner</strong> of the starter organization.</span>
+                <span>@L10n["This deployment has no users yet."] @L10n["The first account becomes the {0} of the starter organization.", L10n["Owner"]]</span>
             }
             else
             {
-                <span>Your account starts without an organization. An Owner has to add you as a member before you can work with projects.</span>
+                <span>@L10n["Your account starts without an organization. An Owner has to add you as a member before you can work with projects."]</span>
             }
         </p>
     </div>
@@ -36,53 +36,53 @@
                 <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
                     @foreach (var error in _errors)
                     {
-                        <p>@error</p>
+                        <p>@L10n[error]</p>
                     }
                 </div>
             }
 
             <div class="bb:space-y-2">
-                <label for="register-email" class="bb:text-sm bb:font-medium">Email</label>
+                <label for="register-email" class="bb:text-sm bb:font-medium">@L10n["Email"]</label>
                 <InputText id="register-email"
                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                            @bind-Value="Input!.Email"
                            autocomplete="username"
                            autofocus />
-                <ValidationMessage For="() => Input!.Email" class="validation-message" />
+                <LocalizedValidationMessage For="() => Input!.Email" />
             </div>
 
             <div class="bb:space-y-2">
-                <label for="register-password" class="bb:text-sm bb:font-medium">Password</label>
+                <label for="register-password" class="bb:text-sm bb:font-medium">@L10n["Password"]</label>
                 <InputText id="register-password"
                            type="password"
                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                            @bind-Value="Input!.Password"
                            autocomplete="new-password" />
                 <p class="bb:text-xs bb:text-muted-foreground">
-                    At least 12 characters, with upper and lower case letters, a digit and a symbol.
+                    @L10n["At least 12 characters, with upper and lower case letters, a digit and a symbol."]
                 </p>
-                <ValidationMessage For="() => Input!.Password" class="validation-message" />
+                <LocalizedValidationMessage For="() => Input!.Password" />
             </div>
 
             <div class="bb:space-y-2">
-                <label for="register-password-confirm" class="bb:text-sm bb:font-medium">Confirm password</label>
+                <label for="register-password-confirm" class="bb:text-sm bb:font-medium">@L10n["Confirm password"]</label>
                 <InputText id="register-password-confirm"
                            type="password"
                            class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                            @bind-Value="Input!.ConfirmPassword"
                            autocomplete="new-password" />
-                <ValidationMessage For="() => Input!.ConfirmPassword" class="validation-message" />
+                <LocalizedValidationMessage For="() => Input!.ConfirmPassword" />
             </div>
 
             <button type="submit"
                     class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
-                Create account
+                @L10n["Create an account"]
             </button>
         </EditForm>
 
         <p class="bb:mt-4 bb:text-center bb:text-sm bb:text-muted-foreground">
-            Already have an account?
-            <a href="/account/login" class="bb:font-medium bb:underline bb:underline-offset-4">Sign in</a>
+            @L10n["Already have an account?"]
+            <a href="/account/login" class="bb:font-medium bb:underline bb:underline-offset-4">@L10n["Sign in"]</a>
         </p>
     </div>
 </div>
@@ -125,7 +125,7 @@
         var user = await UserManager.FindByNameAsync(input.Email.Trim());
         if (user is null)
         {
-            _errors.Add("The account was created but could not be loaded. Try signing in.");
+            _errors.Add(L10n["The account was created but could not be loaded. Try signing in."]);
             return;
         }
 

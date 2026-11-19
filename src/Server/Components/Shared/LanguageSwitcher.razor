@@ -1,0 +1,26 @@
+@* The language switcher (v1: English and Simplified Chinese).
+   A plain POST, then a document reload: every string on the page was rendered in the old language,
+   so a partial re-render would leave the parts Blazor does not touch in the wrong language. The
+   endpoint writes the preference cookie and redirects here. Language names are their own names and
+   are never translated. *@
+<form method="post" action="/language" data-zenkins-antiforgery
+      class="bb:inline-flex bb:items-center bb:gap-0.5 bb:rounded-md bb:border bb:border-input bb:bg-background bb:p-0.5">
+    <input type="hidden" name="ReturnUrl" value="@ReturnUrl" />
+    @foreach (var choice in AppLanguage.Choices)
+    {
+        <button type="submit"
+                name="Language"
+                value="@choice.Code"
+                aria-pressed="@(L10n.Is(choice.Code) ? "true" : "false")"
+                class="bb:rounded-sm bb:px-2 bb:py-1 bb:text-xs bb:leading-none bb:transition-colors @(L10n.Is(choice.Code) ? "bb:bg-muted bb:font-medium bb:text-foreground" : "bb:text-muted-foreground bb:hover:bg-accent bb:hover:text-accent-foreground")">@choice.NativeName</button>
+    }
+</form>
+
+@code {
+    /// <summary>
+    /// Where the reload returns to. The endpoint sanitizes it again (a site-relative path only), so a
+    /// forged value cannot turn the switcher into an open redirect.
+    /// </summary>
+    [Parameter, EditorRequired]
+    public string ReturnUrl { get; set; } = "/";
+}

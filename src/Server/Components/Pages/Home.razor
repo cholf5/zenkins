@@ -4,11 +4,11 @@
 @inject UserSession UserSession
 @inject DashboardQuery Dashboard
 
-<PageTitle>Dashboard · Zenkins</PageTitle>
+<PageTitle>@L10n["Dashboard"] · Zenkins</PageTitle>
 
 <div class="bb:mx-auto bb:w-full bb:max-w-4xl bb:space-y-6">
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbCardTitle As="h1" tabindex="-1">Dashboard</BbCardTitle>
+        <BbCardTitle As="h1" tabindex="-1">@L10n["Dashboard"]</BbCardTitle>
         @if (_session?.HasOrganization == true)
         {
             <BbBadge Variant="BadgeVariant.Secondary">@_session.Organization!.Name</BbBadge>
@@ -20,13 +20,13 @@
         <NoOrganizationNotice />
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Finish setting up your account</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Finish setting up your account"]</BbCardTitle>
                 <BbCardDescription>
-                    The dashboard stays empty until this account belongs to an organization.
+                    @L10n["The dashboard stays empty until this account belongs to an organization."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
-                <BbButton Href="/no-organization" Variant="ButtonVariant.Default">See the next step</BbButton>
+                <BbButton Href="/no-organization" Variant="ButtonVariant.Default">@L10n["See the next step"]</BbButton>
             </BbCardContent>
         </BbCard>
     }
@@ -42,7 +42,7 @@
                 <BbCardContent>
                     <p id="dashboard-queued-count" class="bb:text-3xl bb:font-semibold">@summary.QueuedCount</p>
                     <p class="bb:text-sm bb:text-muted-foreground">
-                        @(summary.QueuedCount == 1 ? "run waiting in the queue" : "runs waiting in the queue")
+                        @L10n.Plural(summary.QueuedCount, "run waiting in the queue", "runs waiting in the queue")
                     </p>
                 </BbCardContent>
             </BbCard>
@@ -50,7 +50,7 @@
                 <BbCardContent>
                     <p id="dashboard-running-count" class="bb:text-3xl bb:font-semibold">@summary.RunningCount</p>
                     <p class="bb:text-sm bb:text-muted-foreground">
-                        @(summary.RunningCount == 1 ? "run executing on a worker" : "runs executing on workers")
+                        @L10n.Plural(summary.RunningCount, "run executing on a worker", "runs executing on workers")
                     </p>
                 </BbCardContent>
             </BbCard>
@@ -58,7 +58,7 @@
                 <BbCardContent>
                     <p id="dashboard-failure-count" class="bb:text-3xl bb:font-semibold">@summary.FailuresInWindow</p>
                     <p class="bb:text-sm bb:text-muted-foreground">
-                        failed or lost since @summary.WindowStart.ToString("yyyy-MM-dd")
+                        @L10n["failed or lost since {0}", summary.WindowStart.ToString("yyyy-MM-dd")]
                     </p>
                 </BbCardContent>
             </BbCard>
@@ -66,18 +66,17 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Workers</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Workers"]</BbCardTitle>
                 <BbCardDescription>
-                    Workers of the active organization. Online and offline are the statuses the
-                    offline monitor wrote - this page never judges a heartbeat by itself.
+                    @L10n["Workers of the active organization. Online and offline are the statuses the offline monitor wrote - this page never judges a heartbeat by itself."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (!summary.HasWorkers)
                 {
                     <BbEmpty id="dashboard-empty-workers"
-                             Title="No workers connected"
-                             Description="Mint a registration token on the Workers page and start a worker with it; queued runs wait until one heartbeats.">
+                             Title="@L10n["No workers connected"]"
+                             Description="@L10n["Mint a registration token on the Workers page and start a worker with it; queued runs wait until one heartbeats."]">
                         <Icon>
                             <LucideIcon Name="server" Class="bb:h-12 bb:w-12" />
                         </Icon>
@@ -87,11 +86,11 @@
                 {
                     <p id="dashboard-workers-summary" class="bb:flex bb:flex-wrap bb:items-baseline bb:gap-x-2 bb:text-sm">
                         <span id="dashboard-workers-online" class="bb:text-2xl bb:font-semibold">@summary.WorkersOnline</span>
-                        <span>online</span>
+                        <span>@L10n["online"]</span>
                         <span id="dashboard-workers-busy" class="bb:text-2xl bb:font-semibold">@summary.WorkersBusy</span>
-                        <span>busy</span>
+                        <span>@L10n["busy"]</span>
                         <span id="dashboard-workers-offline" class="bb:text-2xl bb:font-semibold">@summary.WorkersOffline</span>
-                        <span>offline</span>
+                        <span>@L10n["offline"]</span>
                     </p>
                 }
             </BbCardContent>
@@ -99,10 +98,9 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Recent runs</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Recent runs"]</BbCardTitle>
                 <BbCardDescription>
-                    The last 20 runs across the organization's projects, newest first. A running run
-                    shows live elapsed time; browse full history on a project's runs page.
+                    @L10n["The last 20 runs across the organization's projects, newest first. A running run shows live elapsed time; browse full history on a project's runs page."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
@@ -113,32 +111,32 @@
                     <p id="dashboard-disabled-projects" class="bb:mb-4 bb:text-sm bb:text-muted-foreground">
                         @if (summary.DisabledProjectCount == 1)
                         {
-                            <span>1 project is disabled - triggers are refused until it is enabled again.</span>
+                            <span>@L10n["1 project is disabled - triggers are refused until it is enabled again."]</span>
                         }
                         else
                         {
-                            <span>@summary.DisabledProjectCount projects are disabled - triggers are refused until each is enabled again.</span>
+                            <span>@L10n["{0} projects are disabled - triggers are refused until each is enabled again.", summary.DisabledProjectCount]</span>
                         }
                     </p>
                 }
                 @if (!summary.HasProjects)
                 {
                     <BbEmpty id="dashboard-empty-projects"
-                             Title="No projects yet"
-                             Description="Create a project and start its first run; queue, workers and recent activity appear here.">
+                             Title="@L10n["No projects yet"]"
+                             Description="@L10n["Create a project and start its first run; queue, workers and recent activity appear here."]">
                         <Icon>
                             <LucideIcon Name="folder-git-2" Class="bb:h-12 bb:w-12" />
                         </Icon>
                     </BbEmpty>
                     <div class="bb:mt-4">
-                        <BbButton Href="/projects/new" Variant="ButtonVariant.Default">New project</BbButton>
+                        <BbButton Href="/projects/new" Variant="ButtonVariant.Default">@L10n["New project"]</BbButton>
                     </div>
                 }
                 else if (summary.RecentRuns.Count == 0)
                 {
                     <BbEmpty id="dashboard-empty-runs"
-                             Title="No runs yet"
-                             Description="Open a project and start a run; it waits in the queue here until an eligible worker claims it.">
+                             Title="@L10n["No runs yet"]"
+                             Description="@L10n["Open a project and start a run; it waits in the queue here until an eligible worker claims it."]">
                         <Icon>
                             <LucideIcon Name="play" Class="bb:h-12 bb:w-12" />
                         </Icon>
@@ -153,7 +151,7 @@
                             <li id="@($"dashboard-run-{shortId}")" class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                 <div class="bb:min-w-0">
                                     <p class="bb:font-medium">
-                                        <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">Run #@run.Number</a>
+                                        <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", run.Number]</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
                                             <a href="/projects/@run.ProjectId">@run.ProjectName</a> · @run.GitBranch
                                         </span>
@@ -161,11 +159,11 @@
                                            still in flight when the project was disabled reads correctly. *@
                                         @if (run.ProjectDisabled)
                                         {
-                                            <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                                            <BbBadge Variant="BadgeVariant.Destructive">@L10n["Disabled"]</BbBadge>
                                         }
                                     </p>
                                     <p class="bb:text-xs bb:text-muted-foreground">
-                                        @run.TriggerType.ToLowerInvariant()
+                                        @RunDisplay.TriggerTypeText(run.TriggerType, L10n)
                                         @if (run.FailureReason is { } reason)
                                         {
                                             <span> · @reason</span>
@@ -175,7 +173,7 @@
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
                                     <RunStatusBadge Status="@run.Status" />
                                     <span id="@($"dashboard-run-{shortId}-duration")">
-                                        @RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, now)
+                                        @RunDisplay.DurationOrElapsed(run.StartedAt, run.EndedAt, now, L10n)
                                     </span>
                                 </div>
                             </li>
@@ -187,17 +185,16 @@
 
         <BbCard>
             <BbCardHeader>
-                <BbCardTitle As="h2">Recent failures</BbCardTitle>
+                <BbCardTitle As="h2">@L10n["Recent failures"]</BbCardTitle>
                 <BbCardDescription>
-                    Failed and lost runs among the recent ones, with the reason that was recorded.
-                    Canceled runs are a decision, not a failure, and never appear here.
+                    @L10n["Failed and lost runs among the recent ones, with the reason that was recorded. Canceled runs are a decision, not a failure, and never appear here."]
                 </BbCardDescription>
             </BbCardHeader>
             <BbCardContent>
                 @if (summary.RecentFailures.Count == 0)
                 {
                     <p id="dashboard-no-failures" class="bb:text-sm bb:text-muted-foreground">
-                        No failed or lost runs since @summary.WindowStart.ToString("yyyy-MM-dd").
+                        @L10n["No failed or lost runs since {0}.", summary.WindowStart.ToString("yyyy-MM-dd")]
                     </p>
                 }
                 else
@@ -208,11 +205,11 @@
                             <li id="@($"dashboard-failure-{failure.RunId.ToString("N")[..8]}")" class="bb:flex bb:flex-wrap bb:items-center bb:justify-between bb:gap-3 bb:py-3">
                                 <div class="bb:min-w-0">
                                     <p class="bb:text-sm bb:font-medium">
-                                        <a href="/projects/@failure.ProjectId/runs/@failure.Number" class="bb:underline bb:underline-offset-4">Run #@failure.Number</a>
+                                        <a href="/projects/@failure.ProjectId/runs/@failure.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", failure.Number]</a>
                                         <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">@failure.ProjectName · @failure.GitBranch</span>
                                     </p>
                                     <p class="bb:text-xs bb:text-muted-foreground">
-                                        @(failure.FailureReason ?? $"exit code {failure.ExitCode}")
+                                        @(failure.FailureReason ?? L10n["exit code {0}", failure.ExitCode])
                                     </p>
                                 </div>
                                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">

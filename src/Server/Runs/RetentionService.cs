@@ -1,3 +1,4 @@
+using Zenkins.Server.Localization;
 using Microsoft.EntityFrameworkCore;
 using Zenkins.Server.Artifacts;
 using Zenkins.Server.Data;
@@ -114,13 +115,13 @@ public static class RetentionErrorCodes
     public const string OutOfRange = "retention-out-of-range";
 
     /// <summary>The sentence for a code, or null when the code is not one of ours.</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message the settings card renders for a code, in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        KeepInvalid => "The keep count must be a whole number of builds (blank keeps every build).",
-        DaysInvalid => "The day window must be a whole number of days (blank keeps every build).",
+        KeepInvalid => L10n["The keep count must be a whole number of builds (blank keeps every build)."],
+        DaysInvalid => L10n["The day window must be a whole number of days (blank keeps every build)."],
         OutOfRange =>
-            $"The keep count must be between 0 and {RetentionLimits.MaxKeep} and the day window between 0 and "
-            + $"{RetentionLimits.MaxDays}.",
+            L10n["The keep count must be between 0 and {0} and the day window between 0 and {1}.", RetentionLimits.MaxKeep, RetentionLimits.MaxDays],
         _ => null,
     };
 }
@@ -168,6 +169,7 @@ public sealed class RetentionService(
     ITenantContext tenantContext,
     ISystemDataScope systemDataScope,
     ArtifactStore artifactStore,
+    Localizer L10n,
     ILogger<RetentionService> logger)
 {
     // ---------------------------------------------------------------------
@@ -208,7 +210,7 @@ public sealed class RetentionService(
         {
             return RetentionMutationResult.Invalid(
                 RetentionErrorCodes.OutOfRange,
-                RetentionErrorCodes.MessageFor(RetentionErrorCodes.OutOfRange)!);
+                RetentionErrorCodes.MessageFor(RetentionErrorCodes.OutOfRange, L10n)!);
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);

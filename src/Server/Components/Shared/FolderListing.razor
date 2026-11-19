@@ -5,7 +5,7 @@
 
    Every form here is a plain HTML form (no EditForm), like the rest of the project surfaces: it posts to
    the real endpoint, is antiforgery-validated by UseAntiforgery and works without a Blazor circuit. *@
-<nav aria-label="Breadcrumb" class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-sm">
+<nav aria-label="@L10n["Breadcrumb"]" class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-sm">
     @for (var index = 0; index < Listing.Breadcrumbs.Count; index++)
     {
         var crumb = Listing.Breadcrumbs[index];
@@ -28,16 +28,16 @@
 </nav>
 
 <div data-projects-summary class="bb:flex bb:flex-wrap bb:items-center bb:gap-3 bb:text-xs bb:text-muted-foreground">
-    <span>@Listing.Folders.Count folder(s) here</span>
-    <span>@Listing.Projects.Count project(s) here</span>
-    <span>@Listing.SubtreeProjectCount project(s) in this subtree</span>
+    <span>@L10n["{0} folder(s) here", Listing.Folders.Count]</span>
+    <span>@L10n["{0} project(s) here", Listing.Projects.Count]</span>
+    <span>@L10n["{0} project(s) in this subtree", Listing.SubtreeProjectCount]</span>
     @if (Listing.Everywhere)
     {
-        <BbBadge Variant="BadgeVariant.Secondary">Searching everywhere</BbBadge>
+        <BbBadge Variant="BadgeVariant.Secondary">@L10n["Searching everywhere"]</BbBadge>
     }
     else if (Listing.Query is { Length: > 0 })
     {
-        <BbBadge Variant="BadgeVariant.Outline">Searching this subtree</BbBadge>
+        <BbBadge Variant="BadgeVariant.Outline">@L10n["Searching this subtree"]</BbBadge>
     }
 </div>
 
@@ -47,32 +47,32 @@
         <input type="hidden" name="folder" value="@currentId" />
     }
     <div class="bb:flex-1 bb:space-y-2">
-        <label for="folder-search" class="bb:text-sm bb:font-medium">Search projects and folders</label>
+        <label for="folder-search" class="bb:text-sm bb:font-medium">@L10n["Search projects and folders"]</label>
         <input id="folder-search"
                name="q"
                type="search"
                value="@Listing.Query"
                autocomplete="off"
                spellcheck="false"
-               placeholder="name contains…"
+               placeholder="@L10n["name contains…"]"
                class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
     </div>
     <div class="bb:space-y-2">
-        <label for="folder-search-scope" class="bb:text-sm bb:font-medium">Scope</label>
+        <label for="folder-search-scope" class="bb:text-sm bb:font-medium">@L10n["Scope"]</label>
         <select id="folder-search-scope"
                 name="scope"
                 class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
-            <option value="here" selected="@(!Listing.Everywhere)">This folder and everything under it</option>
-            <option value="all" selected="@(Listing.Everywhere)">Everywhere in the organization</option>
+            <option value="here" selected="@(!Listing.Everywhere)">@L10n["This folder and everything under it"]</option>
+            <option value="all" selected="@(Listing.Everywhere)">@L10n["Everywhere in the organization"]</option>
         </select>
     </div>
-    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Search</BbButton>
+    <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Search"]</BbButton>
 </form>
 
 @if (Listing.Folders.Count > 0)
 {
     <div class="bb:space-y-2">
-        <h2 class="bb:text-sm bb:font-medium">Folders</h2>
+        <h2 class="bb:text-sm bb:font-medium">@L10n["Folders"]</h2>
         <ul data-folder-list class="bb:divide-y">
             @foreach (var folder in Listing.Folders)
             {
@@ -90,7 +90,7 @@
                         <span>@folder.ProjectCount project(s) here</span>
                         <span>@folder.SubtreeProjectCount in the subtree</span>
                         <span>@folder.ChildFolderCount subfolder(s)</span>
-                        <span>Level @folder.Depth</span>
+                        <span>@L10n["Level {0}", folder.Depth]</span>
                     </div>
                 </li>
             }
@@ -100,10 +100,10 @@
 
 @if (Listing.Projects.Count == 0)
 {
-    <BbEmpty Title="@(Listing.Query is { Length: > 0 } ? "Nothing matches this search" : "No projects in this folder")"
+    <BbEmpty Title="@(Listing.Query is { Length: > 0 } ? L10n["Nothing matches this search"] : L10n["No projects in this folder"])"
              Description="@(Listing.Query is { Length: > 0 }
-                 ? "Try the other scope, or clear the search."
-                 : "Create a project here, or open a subfolder.")">
+                 ? L10n["Try the other scope, or clear the search."]
+                 : L10n["Create a project here, or open a subfolder."])">
         <Icon>
             <LucideIcon Name="folder-git-2" Class="bb:h-12 bb:w-12" />
         </Icon>
@@ -123,22 +123,22 @@ else
                     <p class="bb:truncate bb:text-xs bb:text-muted-foreground">
                         @(project.RepositoryUrl
                             ?? (project.Kind == ProjectKinds.Freestyle
-                                ? "Freestyle project - steps configured on the server"
-                                : "Inline pipeline - script stored on the server"))
+                                ? L10n["Freestyle project - steps configured on the server"]
+                                : L10n["Inline pipeline - script stored on the server"]))
                     </p>
                 </div>
                 <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2 bb:text-xs bb:text-muted-foreground">
                     @if (project.Disabled)
                     {
-                        <BbBadge Variant="BadgeVariant.Destructive">Disabled</BbBadge>
+                        <BbBadge Variant="BadgeVariant.Destructive">@L10n["Disabled"]</BbBadge>
                     }
                     @if (project.Kind == ProjectKinds.Freestyle)
                     {
-                        <BbBadge Variant="BadgeVariant.Secondary">Freestyle</BbBadge>
+                        <BbBadge Variant="BadgeVariant.Secondary">@L10n["Freestyle"]</BbBadge>
                     }
                     else if (project.PipelineSource == ProjectSources.Inline)
                     {
-                        <BbBadge Variant="BadgeVariant.Secondary">Inline</BbBadge>
+                        <BbBadge Variant="BadgeVariant.Secondary">@L10n["Inline"]</BbBadge>
                         <span>pipeline.lua</span>
                     }
                     else
@@ -161,12 +161,12 @@ else
 
                         @if (project.LastRunAt is { } ranAt)
                         {
-                            <span>ran @ranAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                            <span>@L10n["ran {0} UTC", ranAt.ToString("yyyy-MM-dd HH:mm")]</span>
                         }
                     }
                     else
                     {
-                        <BbBadge Variant="BadgeVariant.Outline">never run</BbBadge>
+                        <BbBadge Variant="BadgeVariant.Outline">@L10n["never run"]</BbBadge>
                     }
 
                     @if (FolderOptions.Count > 0)
@@ -177,17 +177,17 @@ else
                             {
                                 <input type="hidden" name="FromFolderId" value="@fromId" />
                             }
-                            <label for="project-move-@project.Id" class="bb:sr-only">Move to folder</label>
+                            <label for="project-move-@project.Id" class="bb:sr-only">@L10n["Move to folder"]</label>
                             <select id="project-move-@project.Id"
                                     name="FolderId"
                                     class="bb:flex bb:h-8 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:py-1 bb:text-xs">
-                                <option value="" selected="@(project.FolderId is null)">Root</option>
+                                <option value="" selected="@(project.FolderId is null)">@L10n["Root"]</option>
                                 @foreach (var option in FolderOptions)
                                 {
                                     <option value="@option.Id" selected="@(project.FolderId == option.Id)">@option.Path</option>
                                 }
                             </select>
-                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">Move</BbButton>
+                            <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Move"]</BbButton>
                         </form>
                     }
                 </div>

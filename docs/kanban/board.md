@@ -11,6 +11,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
+| [F-043](issues/f-043-ui-localization.md) | UI localization: English and Simplified Chinese, cookie-remembered, mechanically checked | P1 | L | none | — |
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
 
 ## Done

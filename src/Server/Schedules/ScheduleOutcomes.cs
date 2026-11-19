@@ -1,3 +1,5 @@
+using Zenkins.Server.Localization;
+
 using Zenkins.Server.Projects;
 
 namespace Zenkins.Server.Schedules;
@@ -66,37 +68,42 @@ public static class ScheduleOutcomes
     /// The sentence the settings page shows for one outcome. <paramref name="runNumber"/> is the run's number
     /// where the row has one (the queued run, or the run that was in flight for an overlap skip).
     /// </summary>
-    public static string Describe(string outcome, int? runNumber, int collapsedDueTimes, string? detail)
+    public static string Describe(
+        string outcome,
+        int? runNumber,
+        int collapsedDueTimes,
+        string? detail,
+        Localizer L10n)
     {
         var sentence = outcome switch
         {
             Queued => runNumber is { } number
-                ? $"Queued run #{number}."
-                : "Queued a run.",
+                ? L10n["Queued run #{0}.", number]
+                : L10n["Queued a run."],
             SkippedOverlap => runNumber is { } number
-                ? $"Skipped: run #{number} was still queued or running."
-                : "Skipped: a run of this project was still queued or running.",
-            SkippedDisabled => "Skipped: the project or the schedule is disabled.",
-            SkippedQueueFull => "Skipped: the project's queue is full.",
+                ? L10n["Skipped: run #{0} was still queued or running.", number]
+                : L10n["Skipped: a run of this project was still queued or running."],
+            SkippedDisabled => L10n["Skipped: the project or the schedule is disabled."],
+            SkippedQueueFull => L10n["Skipped: the project's queue is full."],
             SkippedRefused => detail switch
             {
-                "steps-missing" => "Skipped: this Freestyle project has no steps to run.",
-                null or "" => "Skipped: the trigger was refused.",
-                _ => $"Skipped: the trigger was refused ({detail}).",
+                "steps-missing" => L10n["Skipped: this Freestyle project has no steps to run."],
+                null or "" => L10n["Skipped: the trigger was refused."],
+                _ => L10n["Skipped: the trigger was refused ({0}).", detail],
             },
-            Missed => "Missed: the due time passed while nothing was evaluating this schedule.",
-            SkippedNonexistent => "Skipped: that clock time does not exist in the schedule's time zone (DST).",
+            Missed => L10n["Missed: the due time passed while nothing was evaluating this schedule."],
+            SkippedNonexistent => L10n["Skipped: that clock time does not exist in the schedule's time zone (DST)."],
             _ => outcome,
         };
 
         if (collapsedDueTimes > 0)
         {
-            sentence += $" (+{collapsedDueTimes} earlier due time(s) before this one)";
+            sentence += " " + L10n["(+{0} earlier due time(s) before this one)", collapsedDueTimes];
         }
 
         if (string.Equals(detail, TruncatedDetail, StringComparison.Ordinal))
         {
-            sentence += " Earlier misses are not listed (the list keeps the newest entries).";
+            sentence += " " + L10n["Earlier misses are not listed (the list keeps the newest entries)."];
         }
 
         return sentence;
@@ -151,22 +158,21 @@ public static class ScheduleErrorCodes
     };
 
     /// <summary>The message rendered next to the field (and in the form-level alert).</summary>
-    public static string? MessageFor(string? code) => code switch
+    /// <summary>The message rendered next to the field (and in the form-level alert), in the UI's language.</summary>
+    public static string? MessageFor(string? code, Localizer L10n) => code switch
     {
-        CronRequired => "Enter a cron expression.",
+        CronRequired => L10n["Enter a cron expression."],
         CronInvalid =>
-            "That is not a 5-field cron expression. Use minute hour day-of-month month day-of-week, "
-            + "for example 0 3 * * * (every day at 03:00) or */15 9-17 * * MON-FRI.",
+            L10n["That is not a 5-field cron expression. Use minute hour day-of-month month day-of-week, for example 0 3 * * * (every day at 03:00) or */15 9-17 * * MON-FRI."],
         CronNeverFires =>
-            "That expression never fires - no date in the next eight years matches it (30 February, for example).",
-        TimeZoneRequired => "Enter a time zone.",
+            L10n["That expression never fires - no date in the next eight years matches it (30 February, for example)."],
+        TimeZoneRequired => L10n["Enter a time zone."],
         TimeZoneUnknown =>
-            "That time zone is not one the server knows. Use an IANA id such as Europe/Berlin, "
-            + "America/New_York or UTC.",
-        ScheduleLimit => $"A project can carry at most {MaxSchedulesPerProject} schedules.",
-        ScheduleDuplicate => "This project already has a schedule with that expression and time zone.",
-        ScheduleNotFound => "That schedule no longer exists on this project.",
-        FieldInvalid => "The request did not name one of the schedule's settings.",
+            L10n["That time zone is not one the server knows. Use an IANA id such as Europe/Berlin, America/New_York or UTC."],
+        ScheduleLimit => L10n["A project can carry at most {0} schedules.", MaxSchedulesPerProject],
+        ScheduleDuplicate => L10n["This project already has a schedule with that expression and time zone."],
+        ScheduleNotFound => L10n["That schedule no longer exists on this project."],
+        FieldInvalid => L10n["The request did not name one of the schedule's settings."],
         _ => null,
     };
 }

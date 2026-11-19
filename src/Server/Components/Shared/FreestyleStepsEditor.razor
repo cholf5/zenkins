@@ -9,7 +9,7 @@
     @if (ErrorCode is not null)
     {
         <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
-            <p>@(ProjectErrorCodes.MessageFor(ErrorCode) ?? "The step list was refused.")</p>
+            <p>@(ProjectErrorCodes.MessageFor(ErrorCode, L10n) ?? L10n["The step list was refused."])</p>
         </div>
     }
 
@@ -19,7 +19,7 @@
     {
         <div id="freestyle-snippets" class="bb:mb-6 bb:rounded-md bb:border bb:border-input bb:p-3">
             <label for="freestyle-snippet-select" class="bb:mb-1 bb:block bb:text-sm bb:font-medium">
-                Insert a snippet step
+                @L10n["Insert a snippet step"]
             </label>
             <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
                 <select id="freestyle-snippet-select"
@@ -32,11 +32,10 @@
                 </select>
                 <button type="button" data-freestyle-action="insert-snippet"
                         class="bb:rounded-md bb:border bb:border-input bb:px-3 bb:py-1 bb:text-sm">
-                    Insert step
+                    @L10n["Insert step"]
                 </button>
                 <span class="bb:text-xs bb:text-muted-foreground">
-                    Copies the snippet's script into a new step. Later edits to the snippet do not change this
-                    project.
+                    @L10n["Copies the snippet's script into a new step. Later edits to the snippet do not change this project."]
                 </span>
             </div>
         </div>
@@ -46,38 +45,38 @@
         <FreestyleStepsSection ListKey="steps"
                                FieldName="StepsJson"
                                TemplateId="freestyle-step-template"
-                               Title="Steps"
-                               Description="The main list, run in order. A failure stops the list unless the step says continue on error."
+                               Title="@L10n["Steps"]"
+                               Description="@L10n["The main list, run in order. A failure stops the list unless the step says continue on error."]"
                                Steps="Steps"
                                ShowStage="true" />
 
         <FreestyleStepsSection ListKey="always"
                                FieldName="AlwaysStepsJson"
                                TemplateId="freestyle-step-template-always"
-                               Title="Post steps: always"
-                               Description="Runs after the main list whatever happened - cleanup, artifact upload, notification. On a canceled run these steps get a bounded grace window."
+                               Title="@L10n["Post steps: always"]"
+                               Description="@L10n["Runs after the main list whatever happened - cleanup, artifact upload, notification. On a canceled run these steps get a bounded grace window."]"
                                Steps="PostAlways"
                                StripPostPrefix="true" />
 
         <FreestyleStepsSection ListKey="success"
                                FieldName="SuccessStepsJson"
                                TemplateId="freestyle-step-template-success"
-                               Title="Post steps: on success"
-                               Description="Runs after the main list only when it succeeded, before the always steps. Never runs together with the failure set."
+                               Title="@L10n["Post steps: on success"]"
+                               Description="@L10n["Runs after the main list only when it succeeded, before the always steps. Never runs together with the failure set."]"
                                Steps="PostSuccess"
                                StripPostPrefix="true" />
 
         <FreestyleStepsSection ListKey="failure"
                                FieldName="FailureStepsJson"
                                TemplateId="freestyle-step-template-failure"
-                               Title="Post steps: on failure"
-                               Description="Runs after the main list only when it failed, before the always steps. Never runs together with the success set."
+                               Title="@L10n["Post steps: on failure"]"
+                               Description="@L10n["Runs after the main list only when it failed, before the always steps. Never runs together with the success set."]"
                                Steps="PostFailure"
                                StripPostPrefix="true" />
     </div>
 
     <div class="bb:mt-6 bb:flex bb:flex-wrap bb:items-center bb:gap-3">
-        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">Save steps</BbButton>
+        <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Save steps"]</BbButton>
     </div>
 </form>
 
