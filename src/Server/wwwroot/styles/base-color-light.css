@@ -1,0 +1,57 @@
+/*
+ * Light-mode surfaces for the base gray scales.
+ *
+ * The palette sheet (`_content/BlazorBlueprint.Components/css/themes.css`) gives every base color
+ * the same light canvas — `--background`, `--card` and `--popover` are `oklch(1 0 0)`, pure white,
+ * for zinc, slate, gray, neutral and stone alike. Only the low-chroma steps underneath (border,
+ * muted-foreground, primary) carry the palette's hue, so picking a base color in light mode moves a
+ * few tokens by 1–5 of 255 and the window looks untouched. In dark mode the same choice is visible
+ * because the canvas itself is tinted (L 0.129–0.147) — that asymmetry is the palette, not a bug in
+ * the switcher, and it is why this file exists.
+ *
+ * So each scale's own hue is lifted onto the four surface tokens, at a chroma that survives a
+ * full-window area without turning the app into a colour. Zinc is deliberately absent: B-007 pins
+ * "picked nothing" and "picked zinc" to the library's own pair byte for byte, so the default
+ * rendering does not move. Neutral is a pure gray, so its lift is a lightness step rather than a
+ * hue (`0.986 0 0` = rgb(250, 250, 250) against the white canvas).
+ *
+ * Contrast is the constraint that fixed the numbers. At L 0.986 every palette's own
+ * `--muted-foreground` still clears AA against the tinted canvas (4.54–4.65:1); dropping the canvas
+ * to 0.973 for the sidebar put slate at 4.38:1, so the sidebar takes the same value as the canvas
+ * instead of a darker step, and `.sidebar-border` (from the palette) keeps the rail's edge.
+ *
+ * Cascading: these rules are unlayered and load *after* the palette sheet, so a bare attribute
+ * selector ties with the palette's light rule on specificity (0,1,0) and wins on document order,
+ * while the palette's dark rules (`.dark[data-base-color=…]`, 0,2,0) keep winning in dark mode —
+ * which is why this file changes nothing there. Do not qualify these selectors with `:not(.dark)`:
+ * it would raise them to (0,2,0) and make the light tint a candidate in dark mode for any base
+ * color that a future palette update ships without a dark twin. The dark invariant is pinned by
+ * `BaseColorLightSurfaceTests` instead.
+ */
+[data-base-color="slate"] {
+    --background: oklch(0.986 0.018 264.695);
+    --card: oklch(0.986 0.018 264.695);
+    --popover: oklch(0.986 0.018 264.695);
+    --sidebar: oklch(0.986 0.018 264.695);
+}
+
+[data-base-color="gray"] {
+    --background: oklch(0.986 0.009 261.692);
+    --card: oklch(0.986 0.009 261.692);
+    --popover: oklch(0.986 0.009 261.692);
+    --sidebar: oklch(0.986 0.009 261.692);
+}
+
+[data-base-color="neutral"] {
+    --background: oklch(0.986 0 0);
+    --card: oklch(0.986 0 0);
+    --popover: oklch(0.986 0 0);
+    --sidebar: oklch(0.986 0 0);
+}
+
+[data-base-color="stone"] {
+    --background: oklch(0.986 0.014 60);
+    --card: oklch(0.986 0.014 60);
+    --popover: oklch(0.986 0.014 60);
+    --sidebar: oklch(0.986 0.014 60);
+}

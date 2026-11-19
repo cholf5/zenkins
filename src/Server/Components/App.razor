@@ -30,6 +30,12 @@
          stylesheet an accent picked in the theme switcher would never render. Unlayered with
          compound .dark[data-base-color=...] selectors, so dark mode survives an attribute. -->
     <link rel="stylesheet" href="_content/BlazorBlueprint.Components/css/themes.css" />
+    <!-- Light-mode surfaces for slate/gray/neutral/stone. The palette above paints every light
+         canvas pure white, so a base color picked in light mode was invisible; this sheet tints
+         only --background/--card/--popover/--sidebar, and only in light mode (the palette's
+         .dark[data-base-color=...] rules outrank it there). Loaded after the palette on purpose:
+         the tie on specificity is broken by document order. -->
+    <link rel="stylesheet" href="styles/base-color-light.css" />
     <link rel="stylesheet" href="app.css" />
 
     <!-- Classic, blocking: resolves and persists the theme before the first paint. The cookie
