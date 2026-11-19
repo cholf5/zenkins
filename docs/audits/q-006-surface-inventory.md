@@ -49,6 +49,10 @@ side value (cookie session, token row, ticket or webhook row), never a client-co
 | GET/POST | /account/login | anonymous sign-in form (no tenant rows) | — | — |
 | GET/POST | /account/logout | anonymous sign-out (no tenant rows) | — | — |
 | GET/POST | /account/register | anonymous first-run registration (no tenant rows) | — | — |
+| GET/POST | /setup | anonymous first-run gate (no tenant rows; it reads the bootstrap marker only) | once the marker exists the page sends a signed-in browser to `/` and everyone else to sign-in, so the wizard cannot create a second organization | An_empty_deployment_sends_both_account_pages_to_the_wizard |
+| GET/POST | /setup/owner | anonymous; the first Owner form creates the organization, its membership and the bootstrap marker in one transaction | a submission after the marker exists is refused and writes nothing; nothing tenant-owned is read or written before the marker says the deployment is empty | A_finished_setup_is_not_offered_again_and_the_service_refuses_late_submissions |
+| GET/POST | /setup/worker | cookie session → active organization; the worker is created in the caller's own organization | anonymous = redirect to sign-in before any read; a Member = 403 before any row is written | The_worker_step_refuses_anonymous_visitors_and_members |
+| POST | /language | anonymous; writes the localisation cookie only, reads no tenant rows | the return target must stay on this site (no open redirect) and an unknown code sets no cookie | The_switcher_cannot_become_an_open_redirect |
 | GET/POST | /error | exception-handler re-execution target (no tenant rows) | — | — |
 | GET/POST | /not-found | status-page re-execution target (no tenant rows) | — | — |
 | POST | /organizations/switch | membership of the session user (never the form value) | non-member target = 403, previous selection kept | Switching_to_an_organization_without_membership_is_refused_and_keeps_the_selection |
