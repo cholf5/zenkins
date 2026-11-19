@@ -8,6 +8,16 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **"Add step" and "Add parameter" add a row again (B-011).** On a live page every **Add step**
+  button on a Freestyle project's Steps tab - the main list and the three post lists - and **Add
+  parameter** on the Parameters tab did nothing at all. Both editors clone the new row from a
+  `<template>`, and they read it from `template.content`, which holds the row only for HTML the parser
+  built; Blazor's renderer inserts a component's children with `appendChild`, so once the interactive
+  circuit took over the prerendered page the row was a plain child of the template and the clone threw
+  `TypeError: Cannot read properties of null (reading 'cloneNode')`. The row is now resolved from
+  `content` or from the template element, so the editor works before and after activation; the
+  insert-snippet path shares that resolution, and a missing row returns instead of throwing.
+
 - **The project form's kind switch works wherever the reader came from (B-010).** Choosing
   **Freestyle** on the create form used to leave the repository fields (and their `required`) on
   screen, so the browser refused the submit with "fill out this field"; the definition-source choice

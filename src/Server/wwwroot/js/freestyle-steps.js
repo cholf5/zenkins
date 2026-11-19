@@ -70,6 +70,15 @@
         }
     }
 
+    // B-011: a <template>'s children live in template.content only when the HTML parser put them there.
+    // Blazor's renderer inserts a component's children with appendChild, which lands them on the template
+    // element itself - so once the circuit has activated the prerendered page, content is empty and the row
+    // is a plain child node. Reading content alone threw "Cannot read properties of null (reading
+    // 'cloneNode')" and "Add step" did nothing at all.
+    function templateRow(template) {
+        return template.content.firstElementChild || template.firstElementChild;
+    }
+
     function addStep(section) {
         var template = section.querySelector("template");
         var list = section.querySelector(LIST_SELECTOR);
@@ -77,7 +86,12 @@
             return;
         }
 
-        list.appendChild(template.content.firstElementChild.cloneNode(true));
+        var source = templateRow(template);
+        if (!source) {
+            return;
+        }
+
+        list.appendChild(source.cloneNode(true));
         renumber(list);
     }
 
@@ -100,7 +114,12 @@
             return;
         }
 
-        var row = template.content.firstElementChild.cloneNode(true);
+        var source = templateRow(template);
+        if (!source) {
+            return;
+        }
+
+        var row = source.cloneNode(true);
         var name = row.querySelector('[data-freestyle-field="name"]');
         var script = row.querySelector('[data-freestyle-field="script"]');
         if (name) {

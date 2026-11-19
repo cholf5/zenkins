@@ -69,8 +69,12 @@
             case "add":
                 var template = form.querySelector("#parameter-row-template");
                 var list = form.querySelector("[data-parameter-rows-list]");
-                if (template && list) {
-                    list.appendChild(template.content.firstElementChild.cloneNode(true));
+                // B-011: same trap as js/freestyle-steps.js - Blazor's renderer appends the template's row to
+                // the element with appendChild, so after the circuit activates the row is no longer in
+                // template.content and "Add parameter" threw on a null row and did nothing.
+                var source = template ? (template.content.firstElementChild || template.firstElementChild) : null;
+                if (source && list) {
+                    list.appendChild(source.cloneNode(true));
                     renumber(form);
                 }
                 break;
