@@ -152,11 +152,22 @@ public sealed class DashboardAccessPageTests : IClassFixture<DashboardPageFixtur
         AssertReadonlyDashboard(memberHtml);
         Assert.Equal("1", DashboardPageReader.TextById(memberHtml, "dashboard-queued-count"));
 
-        // Not one form is rendered anywhere in the static page: the shell's organization switcher
-        // only exists while its menu is open, so what the operator sees on "/" is links and
-        // numbers - nothing that can POST.
-        static void AssertReadonlyDashboard(string html) =>
-            Assert.DoesNotContain("<form", html, StringComparison.OrdinalIgnoreCase);
+        // The dashboard's own body offers nothing that can POST. Scoped to [data-dashboard] because
+        // the shell inside <main> is not static-only any more: F-043 put the language switcher there
+        // and F-002 the organization switcher, both of them real forms, and a whole-page search for
+        // `<form` now reads the chrome instead of the page.
+        static void AssertReadonlyDashboard(string html)
+        {
+            var start = html.IndexOf("data-dashboard", StringComparison.Ordinal);
+            Assert.True(start > 0, "The dashboard does not render its page hook ([data-dashboard]).");
+
+            var end = html.IndexOf("</main>", start, StringComparison.Ordinal);
+            Assert.True(end > start, "The dashboard's page hook is not inside <main>.");
+
+            var body = html[start..end];
+            Assert.DoesNotContain("<form", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("<button", body, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }
 

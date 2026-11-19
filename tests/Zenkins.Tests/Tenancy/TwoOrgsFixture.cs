@@ -396,6 +396,16 @@ public sealed class TwoOrgsFixture : IDisposable
             new Organization { Id = OrgAId, Name = OrgAName },
             new Organization { Id = OrgBId, Name = OrgBName });
 
+        // F-044: the first-run gate answers /account/login with a redirect to /setup while this row
+        // is absent, and the fixture seeds exactly the state a completed bootstrap leaves behind - an
+        // Owner with an organization. Without the marker those seeded accounts could not sign in, and
+        // every page suite built on this fixture failed on a 302 it never asserted.
+        context.BootstrapMarkers.Add(new BootstrapMarker
+        {
+            OrganizationId = OrgAId,
+            UserId = OrgAOwnerUserId,
+        });
+
         context.OrganizationMembers.AddRange(
             new OrganizationMember
             {
