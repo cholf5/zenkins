@@ -153,7 +153,24 @@ Expected:
 
 ### 2026-11-19
 
-- Card written; implementation in progress.
+- Card written, then implemented in one pass: `SetupGateMiddleware` (case-insensitive, trailing-slash
+  tolerant, and the one place that sends an unreadable first-run state to `/setup` instead of an
+  exception page), `SetupReadiness` (version, provider, credential-free database target, key-ring and
+  artifact paths, and a real `GetPendingMigrationsAsync` answer with the two exception families a
+  database surface can raise for "unreachable"), `SetupLayout` + the shared step indicator, and the
+  three static-SSR pages.
+- `BootstrapService` now takes the organization name (argument, with `StarterOrganizationName` still
+  the fallback for the direct path); `RegistrationService.RegisterOwnerAsync` is the wizard's entry
+  and refuses a completed setup by name instead of creating an account without an organization.
+- The old first-run hint on `/account/register` is gone (the gate makes it unreachable); the page is
+  a plain "later accounts join as Members" form now.
+- Local smoke on the workstation (build only, no test run): the four redirects, the welcome page's
+  real SQLite path and schema state, the Owner POST's 302 to `/setup/worker` with the auth cookie,
+  the typed name on the dashboard, the minted `zreg_…` token with both start commands, and the
+  Production pending-migration warning were each observed by hand; a catalogue scan of the source
+  showed no missing or orphaned keys.
+- Tests are written (`SetupWizardTests`, 8 facts) but run on a Windows machine against the pushed
+  branch, not on the macOS workstation. Results go here when they arrive.
 
 ## Bugs
 
@@ -168,4 +185,4 @@ Expected:
   `tests/Zenkins.Tests/Setup/SetupWizardTests.cs`.
 - How to run/verify: `dotnet build Zenkins.slnx -c Debug`; `dotnet test --filter "Category=Auth"`
   and `Category=Localization` on a Windows machine (the build is not run on the macOS workstation).
-- Results: <to be filled in>
+- Results: pending the Windows run (build + the fast suite on `feat/f-044-setup-wizard`).
