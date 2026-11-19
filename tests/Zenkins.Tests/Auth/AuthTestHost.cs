@@ -135,10 +135,12 @@ public sealed class AuthTestHost : IDisposable
     {
         confirmPassword ??= password;
 
+        // F-044: the wizard's first page is a welcome with no form; the Owner form (and its
+        // antiforgery token) lives one step further, at /setup/owner.
         using var probe = await client.GetAsync("/setup");
         if (probe.StatusCode == HttpStatusCode.OK)
         {
-            var ownerHtml = await probe.Content.ReadAsStringAsync();
+            var ownerHtml = await GetStringAsync(client, "/setup/owner");
             return await PostFormAsync(client, "/setup/owner", new Dictionary<string, string>
             {
                 ["Input.OrganizationName"] = organizationName,

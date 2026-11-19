@@ -32,11 +32,11 @@ public sealed class SetupWizardTests : IDisposable
 
         using var login = await client.GetAsync("/account/login", CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, login.StatusCode);
-        Assert.Equal("/setup", login.Headers.Location?.PathAndQuery);
+        Assert.Equal("/setup", PathOf(login));
 
         using var register = await client.GetAsync("/account/register", CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, register.StatusCode);
-        Assert.Equal("/setup", register.Headers.Location?.PathAndQuery);
+        Assert.Equal("/setup", PathOf(register));
 
         var welcome = await AuthTestHost.GetStringAsync(client, "/setup");
         Assert.Contains("Welcome to Zenkins", welcome, StringComparison.Ordinal);
@@ -68,7 +68,7 @@ public sealed class SetupWizardTests : IDisposable
         using var created = await PostOwnerAsync(client, "Contoso CI", OwnerEmail);
 
         Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
-        Assert.Equal("/setup/worker", created.Headers.Location?.PathAndQuery);
+        Assert.Equal("/setup/worker", PathOf(created));
         Assert.NotNull(AuthTestHost.FindAuthCookie(created));
 
         var snapshot = await _host.ReadSnapshotAsync();
@@ -94,11 +94,11 @@ public sealed class SetupWizardTests : IDisposable
         // The wizard is done: its first two pages are gone for a signed-in Owner.
         using var welcome = await client.GetAsync("/setup", CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, welcome.StatusCode);
-        Assert.Equal("/", welcome.Headers.Location?.PathAndQuery);
+        Assert.Equal("/", PathOf(welcome));
 
         using var owner = await client.GetAsync("/setup/owner", CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, owner.StatusCode);
-        Assert.Equal("/", owner.Headers.Location?.PathAndQuery);
+        Assert.Equal("/", PathOf(owner));
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public sealed class SetupWizardTests : IDisposable
         using var anonymous = _host.CreateClient();
         using var closed = await anonymous.GetAsync("/setup", CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, closed.StatusCode);
-        Assert.Equal("/account/login", closed.Headers.Location?.PathAndQuery);
+        Assert.Equal("/account/login", PathOf(closed));
 
         using var register = await anonymous.GetAsync("/account/register", CancellationToken);
         Assert.Equal(HttpStatusCode.OK, register.StatusCode);
@@ -270,7 +270,7 @@ public sealed class SetupWizardTests : IDisposable
 
         using var register = await client.GetAsync("/account/register", CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, register.StatusCode);
-        Assert.Equal("/setup", register.Headers.Location?.PathAndQuery);
+        Assert.Equal("/setup", PathOf(register));
 
         var welcome = await AuthTestHost.GetStringAsync(client, "/setup");
         Assert.Contains("migrations behind the server binaries", welcome, StringComparison.Ordinal);
@@ -311,4 +311,15 @@ public sealed class SetupWizardTests : IDisposable
         string url,
         IReadOnlyDictionary<string, string> fields) =>
         AuthTestHost.PostFormAsync(client, url, fields);
+
+    /// <summary>
+    /// The redirect's path. TestServer answers with either shape - a relative <c>Location</c> (whose
+    /// <c>PathAndQuery</c> throws) or an absolute one - so both are reduced to the path the browser
+    /// would follow. Comparing the raw string instead pinned the host, not the redirect.
+    /// </summary>
+    private static string? PathOf(HttpResponseMessage response)
+    {
+        var location = response.Headers.Location;
+        return location is null ? null : location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
+    }
 }
