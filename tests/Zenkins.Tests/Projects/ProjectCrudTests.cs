@@ -351,7 +351,11 @@ public sealed class ProjectCrudTests
         // The confirmation page is not offered to a Member either, but the 403 above is the guard.
         var deletePage = await AuthTestHost.GetStringAsync(memberClient, $"/projects/{projectId}/delete/confirm");
         Assert.Contains("Owner access required", deletePage, StringComparison.Ordinal);
-        Assert.DoesNotContain($"/projects/{projectId}/delete", deletePage, StringComparison.Ordinal);
+
+        // Assert on the form's action, not on the bare path: since F-043 the app bar's own forms
+        // echo the current URL as a hidden ReturnUrl (/projects/{id}/delete/confirm), so a substring
+        // match on /projects/{id}/delete found the layout's state, not a delete form.
+        Assert.DoesNotContain($"action=\"/projects/{projectId}/delete\"", deletePage, StringComparison.Ordinal);
 
         // The Owner deletes with the confirmation form's POST.
         var ownerDelete = await OrganizationTestHost.PostFormAsync(
