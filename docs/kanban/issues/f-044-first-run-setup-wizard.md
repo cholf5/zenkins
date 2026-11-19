@@ -4,7 +4,7 @@ title: First-run setup wizard — welcome, deployment facts, Owner account, orga
 type: feature
 priority: P1
 size: L
-status: review
+status: done
 created: 2026-11-19
 updated: 2026-11-19
 blocked: none
@@ -174,6 +174,8 @@ Expected:
   the typed name on the dashboard, the minted `zreg_…` token with both start commands, and the
   Production pending-migration warning were each observed by hand; a catalogue scan of the source
   showed no missing or orphaned keys.
+- Moved to Done on the owner's instruction, without the independent review pass the board
+  normally requires; the facts below were run and read by the author of the change.
 - Tests were run on the workstation against the categories this card touches, not the whole suite:
   `Category=Auth` 44/44, `Category=Localization` 18/18, `Category=Theme` 14/14, `Category=Forms`
   12/12 (`dotnet test -c Debug --no-build`), 88 facts, 0 failures, 0 skips.

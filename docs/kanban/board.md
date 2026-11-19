@@ -12,7 +12,6 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [F-043](issues/f-043-ui-localization.md) | UI localization: English and Simplified Chinese, cookie-remembered, mechanically checked | P1 | L | none | — |
-| [F-044](issues/f-044-first-run-setup-wizard.md) | First-run setup wizard: welcome with deployment facts, Owner account, organization name, first Worker | P1 | L | none | F-001, F-002, F-004 |
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
 | [B-010](issues/b-010-project-form-kind-switch.md) | The project form's kind switch only works when the page's script happened to run — Freestyle still demands a repository URL, and the inline script box does not exist | P1 | M | none | F-020, F-022 |
 
@@ -109,3 +108,4 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [F-042](issues/f-042-project-folders.md) | Project folders: nested grouping per organization | P3 | 2026-11-18 |
 | [F-039](issues/f-039-completion-notifications.md) | Completion notifications: signed outbound webhooks on failure, success and recovery | P2 | 2026-11-18 |
 | [F-035](issues/f-035-step-snippets.md) | Step snippets: reusable, insertable step definitions shared across an organization | P3 | 2026-11-18 |
+| [F-044](issues/f-044-first-run-setup-wizard.md) | First-run setup wizard: welcome with deployment facts, Owner account, organization name, optional first Worker | P1 | 2026-11-19 |
