@@ -27,6 +27,7 @@ using Zenkins.Server.Projects;
 using Zenkins.Server.Runs;
 using Zenkins.Server.Schedules;
 using Zenkins.Server.Secrets;
+using Zenkins.Server.Setup;
 using Zenkins.Server.Snippets;
 using Zenkins.Server.Webhooks;
 using Zenkins.Server.Workers;
@@ -61,6 +62,10 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddZenkinsData(builder.Configuration);
 builder.Services.AddZenkinsIdentity();
 builder.Services.AddZenkinsOrganizations();
+
+// F-044: the first-run setup wizard's deployment facts. The gate that makes /setup the only door into
+// an empty deployment is middleware, registered in the pipeline below.
+builder.Services.AddZenkinsSetup();
 
 // Two UI languages (v1: English and Simplified Chinese): the catalogue, the request/circuit
 // language, and the localizer every component reads its copy through.
@@ -248,6 +253,11 @@ app.Use(async (context, next) =>
 });
 
 app.UseAuthentication();
+
+// F-044: the first-run gate. It needs the authenticated principal to choose between the dashboard and
+// sign-in for a finished setup, and it redirects before authorization can answer 401/403.
+app.UseMiddleware<SetupGateMiddleware>();
+
 app.UseAuthorization();
 
 // Selects the request tenant from the signed-in user's memberships (never from the URL).

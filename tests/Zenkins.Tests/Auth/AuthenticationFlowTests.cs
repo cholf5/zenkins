@@ -18,20 +18,22 @@ public sealed class AuthenticationFlowTests : IDisposable
     private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task Registration_posts_in_static_ssr_returns_an_auth_cookie_and_the_shell_shows_the_owner()
+    public async Task The_first_account_posts_in_static_ssr_returns_an_auth_cookie_and_the_shell_shows_the_owner()
     {
         using var client = _host.CreateClient();
 
-        // The account page must be static SSR: the form posts back to the endpoint (no circuit
-        // handler) and carries the antiforgery token the middleware validates.
-        var registerHtml = await AuthTestHost.GetStringAsync(client, "/account/register");
-        Assert.Contains("action=\"/account/register\"", registerHtml, StringComparison.Ordinal);
-        Assert.Contains("name=\"__RequestVerificationToken\"", registerHtml, StringComparison.Ordinal);
+        // The wizard's Owner form must be static SSR: it posts back to the page (no circuit handler)
+        // and carries the antiforgery token the middleware validates. A circuit has no HttpContext,
+        // so a form that needed one could never set the authentication cookie.
+        var ownerHtml = await AuthTestHost.GetStringAsync(client, "/setup/owner");
+        Assert.Contains("action=\"/setup/owner\"", ownerHtml, StringComparison.Ordinal);
+        Assert.Contains("name=\"__RequestVerificationToken\"", ownerHtml, StringComparison.Ordinal);
 
         using var response = await AuthTestHost.RegisterAsync(client, AliceEmail);
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal("/", response.Headers.Location?.PathAndQuery);
+        // F-044: the first account is created by the wizard, so the redirect continues the wizard.
+        Assert.Equal("/setup/worker", response.Headers.Location?.PathAndQuery);
 
         var cookie = AuthTestHost.FindAuthCookie(response);
         Assert.NotNull(cookie);
@@ -210,13 +212,14 @@ public sealed class AuthenticationFlowTests : IDisposable
 
         using var response = await AuthTestHost.PostFormAsync(
             client,
-            "/account/register",
+            "/setup/owner",
             new Dictionary<string, string>
             {
+                ["Input.OrganizationName"] = "Contoso CI",
                 ["Input.Email"] = AliceEmail,
                 ["Input.Password"] = AuthTestHost.ValidPassword,
                 ["Input.ConfirmPassword"] = AuthTestHost.ValidPassword,
-                ["_handler"] = "register",
+                ["_handler"] = "setup-owner",
             });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);

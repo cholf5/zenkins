@@ -31,10 +31,13 @@ public interface IBootstrapService
 
     /// <summary>
     /// Creates the starter organization, Owner membership and marker for <paramref name="user"/>,
-    /// or reports that another transaction already did it.
+    /// or reports that another transaction already did it. <paramref name="organizationName"/> is
+    /// the name the setup wizard collected; <see langword="null"/> keeps
+    /// <see cref="BootstrapService.StarterOrganizationName"/>.
     /// </summary>
     Task<BootstrapOutcome> TryCreateOwnerOrganizationAsync(
         User user,
+        string? organizationName = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -57,7 +60,10 @@ public interface IBootstrapService
 /// </summary>
 public sealed class BootstrapService(ZenkinsDbContext context, ISystemDataScope systemDataScope) : IBootstrapService
 {
-    /// <summary>Name of the organization created by the first-run bootstrap.</summary>
+    /// <summary>
+    /// Name of the organization created by the first-run bootstrap when no name was collected.
+    /// The setup wizard (F-044) always passes one; the direct registration path falls back to this.
+    /// </summary>
     public const string StarterOrganizationName = "Starter Organization";
 
     /// <inheritdoc />
@@ -72,13 +78,19 @@ public sealed class BootstrapService(ZenkinsDbContext context, ISystemDataScope 
     /// </summary>
     public async Task<BootstrapOutcome> TryCreateOwnerOrganizationAsync(
         User user,
+        string? organizationName = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(user);
 
         using var scope = systemDataScope.BeginScope();
 
-        var organization = new Organization { Name = StarterOrganizationName };
+        var organization = new Organization
+        {
+            Name = string.IsNullOrWhiteSpace(organizationName)
+                ? StarterOrganizationName
+                : organizationName.Trim(),
+        };
         context.Organizations.Add(organization);
         context.OrganizationMembers.Add(new OrganizationMember
         {

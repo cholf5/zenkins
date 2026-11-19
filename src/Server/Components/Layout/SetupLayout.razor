@@ -1,0 +1,32 @@
+@* The setup wizard's shell (card F-044). Wider than the account layout because the welcome page
+   carries a facts table, and static SSR like the account layout because the Owner form has to set the
+   authentication cookie and a circuit has no HttpContext to do that with. *@
+@inherits LayoutComponentBase
+@inject NavigationManager Navigation
+
+<div class="bb:flex bb:min-h-screen bb:justify-center bb:px-4 bb:py-10">
+    <div class="bb:w-full bb:max-w-2xl bb:space-y-6">
+        <div class="bb:flex bb:items-center bb:gap-2">
+            <span class="bb:flex bb:h-9 bb:w-9 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:text-primary-foreground">
+                <LucideIcon Name="zap" Class="bb:h-5 bb:w-5" />
+            </span>
+            <span class="bb:text-lg bb:font-semibold bb:tracking-tight">Zenkins</span>
+            <span class="bb:text-sm bb:text-muted-foreground">@L10n["Setup"]</span>
+        </div>
+
+        @Body
+
+        @* A first visitor can choose their language before any account exists. *@
+        <div class="bb:flex bb:justify-center">
+            <LanguageSwitcher ReturnUrl="@ReturnUrl" />
+        </div>
+
+        <p class="bb:text-center bb:text-xs bb:text-muted-foreground">
+            @L10n["Zenkins CI · self-hosted build server"]
+        </p>
+    </div>
+</div>
+
+@code {
+    private string ReturnUrl => "/" + Navigation.ToBaseRelativePath(Navigation.Uri);
+}

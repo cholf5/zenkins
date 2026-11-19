@@ -37,13 +37,14 @@ public sealed class ThemeShellTests
         Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
         using var host = new AuthTestHost();
 
-        // The account pages are static SSR, so the contract is observable without signing in.
+        // The wizard is static SSR like the account pages (F-044), so the contract is observable
+        // without signing in.
         using var dark = host.CreateClient();
         dark.DefaultRequestHeaders.Add("Cookie", $"{ThemePreference.CookieName}={ThemePreference.DarkValue}");
-        AssertShellTheme(await AuthTestHost.GetStringAsync(dark, "/account/login"), isDark: true);
+        AssertShellTheme(await AuthTestHost.GetStringAsync(dark, "/setup"), isDark: true);
 
         using var plain = host.CreateClient();
-        AssertShellTheme(await AuthTestHost.GetStringAsync(plain, "/account/login"), isDark: false);
+        AssertShellTheme(await AuthTestHost.GetStringAsync(plain, "/setup"), isDark: false);
 
         // Q-013: the negatives. `light` is the other canonical value and must render light even
         // though the package's own resolver would fall back to the OS preference from it; `Dark`
@@ -51,11 +52,11 @@ public sealed class ThemeShellTests
         // and must not become a dark shell behind the bridge's back.
         using var light = host.CreateClient();
         light.DefaultRequestHeaders.Add("Cookie", $"{ThemePreference.CookieName}={ThemePreference.LightValue}");
-        AssertShellTheme(await AuthTestHost.GetStringAsync(light, "/account/login"), isDark: false);
+        AssertShellTheme(await AuthTestHost.GetStringAsync(light, "/setup"), isDark: false);
 
         using var wrongCase = host.CreateClient();
         wrongCase.DefaultRequestHeaders.Add("Cookie", $"{ThemePreference.CookieName}=Dark");
-        AssertShellTheme(await AuthTestHost.GetStringAsync(wrongCase, "/account/login"), isDark: false);
+        AssertShellTheme(await AuthTestHost.GetStringAsync(wrongCase, "/setup"), isDark: false);
     }
 
     [Fact(Timeout = 2 * 60 * 1000)]

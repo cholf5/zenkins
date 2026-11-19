@@ -20,9 +20,9 @@ internal static class ShellStylesheets
         using var host = new AuthTestHost();
         using var client = host.CreateClient();
 
-        // The account pages are static SSR, so this needs no signed-in session; App.razor renders
-        // the same <head> for them and for the shell.
-        var page = await AuthTestHost.GetStringAsync(client, "/account/login");
+        // The setup wizard (F-044) is static SSR, so this needs no signed-in session; App.razor
+        // renders the same <head> for it and for the shell.
+        var page = await AuthTestHost.GetStringAsync(client, "/setup");
 
         var hrefs = ServedThemeCascade.StylesheetHrefs(page);
         Assert.Contains(AppThemePath, hrefs);

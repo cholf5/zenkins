@@ -1,0 +1,170 @@
+@page "/setup/owner"
+@layout SetupLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Identity
+@inject RegistrationService Registration
+@inject UserManager<User> UserManager
+@inject SignInManager<User> SignInManager
+@inject NavigationManager Navigation
+
+<PageTitle>@L10n["Owner account"] · Zenkins</PageTitle>
+
+<div class="bb:space-y-4">
+    <SetupStepIndicator Current="2" />
+
+    <div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
+        <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
+            <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">@L10n["Create the Owner account"]</h1>
+            <p class="bb:text-sm bb:text-muted-foreground">
+                @L10n["The first account owns this deployment: it manages Workers, secrets and members. Later accounts join the organization as Members."]
+            </p>
+        </div>
+
+        <div class="bb:p-6 bb:pt-0">
+            <EditForm Model="Input!" FormName="@FormName" OnValidSubmit="CreateOwnerAsync" class="bb:space-y-4">
+                <DataAnnotationsValidator />
+
+                @if (_errors.Count > 0)
+                {
+                    <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                        @foreach (var error in _errors)
+                        {
+                            <p>@ErrorText(error)</p>
+                        }
+                    </div>
+                }
+
+                <div class="bb:space-y-2">
+                    <label for="setup-organization-name" class="bb:text-sm bb:font-medium">@L10n["Organization name"]</label>
+                    <InputText id="setup-organization-name"
+                               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                               @bind-Value="Input!.OrganizationName"
+                               autocomplete="organization"
+                               autofocus />
+                    <p class="bb:text-xs bb:text-muted-foreground">
+                        @L10n["The name every member sees in the organization switcher. You can rename it later in Organization settings."]
+                    </p>
+                    <LocalizedValidationMessage For="() => Input!.OrganizationName" />
+                </div>
+
+                <div class="bb:space-y-2">
+                    <label for="setup-email" class="bb:text-sm bb:font-medium">@L10n["Email"]</label>
+                    <InputText id="setup-email"
+                               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                               @bind-Value="Input!.Email"
+                               autocomplete="username" />
+                    <LocalizedValidationMessage For="() => Input!.Email" />
+                </div>
+
+                <div class="bb:space-y-2">
+                    <label for="setup-password" class="bb:text-sm bb:font-medium">@L10n["Password"]</label>
+                    <InputText id="setup-password"
+                               type="password"
+                               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                               @bind-Value="Input!.Password"
+                               autocomplete="new-password" />
+                    <p class="bb:text-xs bb:text-muted-foreground">
+                        @L10n["At least 12 characters, with upper and lower case letters, a digit and a symbol."]
+                    </p>
+                    <LocalizedValidationMessage For="() => Input!.Password" />
+                </div>
+
+                <div class="bb:space-y-2">
+                    <label for="setup-password-confirm" class="bb:text-sm bb:font-medium">@L10n["Confirm password"]</label>
+                    <InputText id="setup-password-confirm"
+                               type="password"
+                               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                               @bind-Value="Input!.ConfirmPassword"
+                               autocomplete="new-password" />
+                    <LocalizedValidationMessage For="() => Input!.ConfirmPassword" />
+                </div>
+
+                <button type="submit"
+                        class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                    @L10n["Create the Owner account"]
+                </button>
+            </EditForm>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string FormName = "setup-owner";
+
+    private readonly List<string> _errors = [];
+
+    [SupplyParameterFromForm(FormName = FormName)]
+    private OwnerInput? Input { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // A plain GET renders the empty form; a form post supplies the model itself. The default is
+        // a suggestion in the visitor's language - whatever is stored is what the operator typed.
+        // A finished setup is the gate's business (it redirects before this page renders); if one
+        // commits between the gate and the submit, RegisterOwnerAsync refuses by name.
+        Input ??= new() { OrganizationName = L10n["Starter Organization"] };
+    }
+
+    /// <summary>
+    /// Identity's own messages are catalogue keys already; the one message this service produces is
+    /// translated here, where the key is visible to the coverage test, instead of through a lookup
+    /// the scanner cannot see.
+    /// </summary>
+    private string ErrorText(string error) => error switch
+    {
+        RegistrationService.SetupAlreadyCompletedMessage => L10n["Setup has already been completed. Sign in instead."],
+        _ => L10n[error],
+    };
+
+    private async Task CreateOwnerAsync()
+    {
+        _errors.Clear();
+
+        var input = Input!;
+        var result = await Registration.RegisterOwnerAsync(
+            input.Email,
+            input.Password,
+            input.OrganizationName);
+
+        if (!result.Succeeded)
+        {
+            _errors.AddRange(result.Errors);
+            return;
+        }
+
+        // The account exists; sign it in so the wizard continues as the new Owner instead of asking
+        // for the same credentials again (static SSR: this sets the cookie on the response).
+        var user = await UserManager.FindByNameAsync(input.Email.Trim());
+        if (user is null)
+        {
+            _errors.Add(L10n["The account was created but could not be loaded. Sign in instead."]);
+            return;
+        }
+
+        await SignInManager.SignInAsync(user, isPersistent: false);
+        Navigation.NavigateTo("/setup/worker");
+    }
+
+    /// <summary>The Owner form. The name bound is the organization column's; the password is Identity's.</summary>
+    public sealed class OwnerInput
+    {
+        [Required(ErrorMessage = "Enter an organization name.")]
+        [StringLength(200, ErrorMessage = "The organization name must be at most 200 characters.")]
+        public string OrganizationName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Enter your email address.")]
+        [EmailAddress(ErrorMessage = "Enter a valid email address.")]
+        [StringLength(256)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Choose a password.")]
+        [StringLength(128, MinimumLength = 12, ErrorMessage = "Use at least 12 characters.")]
+        public string Password { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Repeat the password.")]
+        [Compare(nameof(Password), ErrorMessage = "The passwords do not match.")]
+        public string ConfirmPassword { get; set; } = string.Empty;
+    }
+}

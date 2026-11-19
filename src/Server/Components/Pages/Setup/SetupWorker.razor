@@ -1,0 +1,149 @@
+@page "/setup/worker"
+@layout SetupLayout
+@attribute [Authorize]
+@attribute [ExcludeFromInteractiveRouting]
+@using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
+@inject UserSession UserSession
+@inject WorkerService WorkerService
+@inject NavigationManager Navigation
+
+<PageTitle>@L10n["First worker"] · Zenkins</PageTitle>
+
+<div class="bb:space-y-4">
+    <SetupStepIndicator Current="3" />
+
+    <div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
+        <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
+            <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">@L10n["Register the first Worker"]</h1>
+            <p class="bb:text-sm bb:text-muted-foreground">
+                @L10n["Builds run on Workers, never on this server. Mint a single-use registration token and start a Worker with it on any machine that can reach this server."]
+            </p>
+        </div>
+
+        <div class="bb:space-y-4 bb:p-6 bb:pt-0">
+            @if (_error is { } error)
+            {
+                <p role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">@error</p>
+            }
+
+            @if (_session is { HasOrganization: false })
+            {
+                <p role="alert" class="bb:rounded-md bb:border bb:border-input bb:bg-muted bb:p-3 bb:text-sm">
+                    @L10n["This account has no organization yet, so there is no organization to register a Worker with."]
+                </p>
+            }
+            else if (!CanManage)
+            {
+                <p role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                    @L10n["Only an organization Owner can register a Worker."]
+                </p>
+            }
+            else if (_token is null)
+            {
+                <p class="bb:text-sm">
+                    @L10n["You can skip this step and add a Worker later from the Workers page; an organization without a Worker can be set up, it just cannot build."]
+                </p>
+
+                <EditForm Model="Input!" FormName="@FormName" OnValidSubmit="MintAsync">
+                    <button type="submit"
+                            class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                        @L10n["Create registration token"]
+                    </button>
+                </EditForm>
+            }
+            else
+            {
+                <div role="status" class="bb:space-y-3 bb:rounded-md bb:border bb:border-input bb:bg-muted/40 bb:p-4">
+                    <p class="bb:text-sm">@L10n["Copy this token now: it is shown exactly once and cannot be retrieved again."]</p>
+                    <code id="setup-registration-token" class="bb:block bb:overflow-x-auto bb:rounded bb:bg-background bb:p-2 bb:font-mono bb:text-xs">@_token</code>
+                </div>
+
+                <div class="bb:space-y-2">
+                    <p class="bb:text-sm bb:font-medium">@L10n["Start the Worker with these two environment variables:"]</p>
+
+                    <p class="bb:text-xs bb:text-muted-foreground">@L10n["Linux or macOS"]</p>
+                    <pre class="bb:overflow-x-auto bb:rounded bb:bg-muted/40 bb:p-3 bb:font-mono bb:text-xs">export ZENKINS_SERVER_URL=@ServerUrl
+export ZENKINS_REGISTRATION_TOKEN=@_token
+dotnet Zenkins.Worker.dll</pre>
+
+                    <p class="bb:text-xs bb:text-muted-foreground">@L10n["Windows (cmd)"]</p>
+                    <pre class="bb:overflow-x-auto bb:rounded bb:bg-muted/40 bb:p-3 bb:font-mono bb:text-xs">set ZENKINS_SERVER_URL=@ServerUrl
+set ZENKINS_REGISTRATION_TOKEN=@_token
+Zenkins.Worker.exe</pre>
+
+                    <p class="bb:text-xs bb:text-muted-foreground">
+                        @L10n["The Worker registers itself once with that token, then keeps its own credential on that machine. It appears on the Workers page while it is online."]
+                    </p>
+                </div>
+            }
+
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                <a href="/"
+                   class="bb:inline-flex bb:h-9 bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                    @L10n["Finish setup"]
+                </a>
+                @if (_token is not null)
+                {
+                    <a href="/workers" class="bb:text-sm bb:font-medium bb:underline bb:underline-offset-4">@L10n["Go to Workers"]</a>
+                }
+                else
+                {
+                    <a href="/" class="bb:text-sm bb:font-medium bb:underline bb:underline-offset-4">@L10n["Skip for now"]</a>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string FormName = "setup-worker";
+
+    private UserSessionInfo? _session;
+    private string? _token;
+    private string? _error;
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = FormName)]
+    private MintInput? Input { get; set; }
+
+    private bool CanManage => _session is { HasOrganization: true, CanManageActiveOrganization: true };
+
+    private string ServerUrl => Navigation.BaseUri.TrimEnd('/');
+
+    protected override async Task OnInitializedAsync()
+    {
+        Input ??= new();
+        _session = await UserSession.GetAsync();
+    }
+
+    private async Task MintAsync()
+    {
+        _error = null;
+
+        var userId = HttpContext?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            _error = L10n["The account could not be identified. Sign in again and reload this page."];
+            return;
+        }
+
+        var result = await WorkerService.CreateRegistrationTokenAsync(userId);
+        if (result.Status != WorkerOperationStatus.Success || result.Token is null)
+        {
+            // Never the token: the refusal text is the service's, and it carries no secret.
+            _error = L10n[result.Message ?? "Only an organization Owner can create registration tokens."];
+            return;
+        }
+
+        _token = result.Token;
+    }
+
+    /// <summary>The mint form has no user-editable fields; the antiforgery token is the only input.</summary>
+    public sealed class MintInput
+    {
+        public bool Confirm { get; set; }
+    }
+}

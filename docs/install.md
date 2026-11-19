@@ -215,31 +215,39 @@ root are ensured before the first request is served — and the startup migratio
 published app is a Production host by design; nothing in this guide relies on Development. (A
 `curl -I` on `/` answers 405 — the page has no HEAD handler; use GET.)
 
-### 3.4 First-run Owner bootstrap
+### 3.4 First-run setup wizard
 
 Open <http://127.0.0.1:5000> in a browser:
 
-1. You are redirected to **/account/login**; go to **Register**.
-2. The page says the first account becomes the **Owner** of a starter organization. Register with
-   any email and a password of at least 12 characters containing upper and lower case letters, a
-   digit and a symbol.
-3. You land on the dashboard showing the **Starter Organization** badge. This state is permanent:
-   later sign-ups get an account without an organization until an Owner adds them
-   ([`docs/development.md`](development.md) §3).
+1. You are redirected to **/account/login**, and because the deployment has no accounts yet that
+   page sends you to **/setup** (card F-044).
+2. The welcome page shows this deployment's version, its database, the key-ring and artifact
+   directories, and whether the schema is up to date. A schema that is behind the binaries blocks
+   setup with the `dotnet ef database update` remedy instead of failing later.
+3. **Start setup** asks for an organization name, an email and a password of at least 12 characters
+   containing upper and lower case letters, a digit and a symbol. Submitting signs you in as the
+   **Owner** of the organization you named.
+4. The Worker step is optional: it mints a single-use registration token and prints the two
+   environment variables to start a Worker with. **Skip for now** or **Finish setup** lands on the
+   dashboard.
 
-Headless equivalent (verified; the antiforgery token comes from the rendered form for
-`/account/register` and from `<meta name="request-verification-token">` on the other pages):
+The wizard is gone once setup is done, and later sign-ups get an account without an organization
+until an Owner adds them ([`docs/development.md`](development.md) §3).
+
+Headless equivalent (verified; the antiforgery token comes from the rendered form and the cookie jar
+carries the antiforgery cookie and, after the POST, `Zenkins.Auth`):
 
 ```bash
-curl -s -c cookies.txt -b cookies.txt http://127.0.0.1:5000/account/register -o register.html
-TOKEN=$(grep -o 'name="__RequestVerificationToken" value="[^"]*"' register.html | head -1 | sed 's/.*value="//; s/"$//')
-curl -si -b cookies.txt -c cookies.txt -X POST http://127.0.0.1:5000/account/register \
-  --data-urlencode "_handler=register" \
+curl -s -c cookies.txt -b cookies.txt http://127.0.0.1:5000/setup/owner -o owner.html
+TOKEN=$(grep -o 'name="__RequestVerificationToken" value="[^"]*"' owner.html | head -1 | sed 's/.*value="//; s/"$//')
+curl -si -b cookies.txt -c cookies.txt -X POST http://127.0.0.1:5000/setup/owner \
+  --data-urlencode "_handler=setup-owner" \
   --data-urlencode "__RequestVerificationToken=$TOKEN" \
+  --data-urlencode "Input.OrganizationName=Contoso CI" \
   --data-urlencode "Input.Email=owner@example.com" \
-  --data-urlencode "Input.Password=CorrectHorse9!" \
-  --data-urlencode "Input.ConfirmPassword=CorrectHorse9!" | head -1     # HTTP/1.1 302 Found
-curl -s -b cookies.txt http://127.0.0.1:5000/ | grep -o 'Starter Organization' | head -1
+  --data-urlencode "Input.Password=CorrectHorse9!Battery" \
+  --data-urlencode "Input.ConfirmPassword=CorrectHorse9!Battery" | head -1     # HTTP/1.1 302 Found
+curl -s -b cookies.txt http://127.0.0.1:5000/ | grep -o 'Contoso CI' | head -1
 ```
 
 ### 3.5 Register a worker
@@ -753,8 +761,9 @@ ConnectionStrings__Default="Data Source=/opt/zenkins/server/App_Data/zenkins.db"
 
 A bare `dotnet ef database update --project src/Server` creates a *second*, empty database under
 `src/Server/App_Data` (the design-time content root) and leaves the deployment's untouched — the
-published app then fails on `/account/register` with `no such table: BootstrapMarkers`
-([`docs/development.md`](development.md) §6, where this exact symptom was verified).
+published app then sends every entry page to `/setup`, which reports the schema as behind the
+binaries (`no such table: BootstrapMarkers` behind the failure) instead of answering an exception
+page ([`docs/development.md`](development.md) §6, where this exact symptom was verified).
 
 **Rollback and the downgrade answer.** Rollback is: stop → restore the old binaries → restore the
 `App_Data` backup taken in step 2 → start. **Downgrading a database whose schema has already
@@ -895,7 +904,7 @@ quoted in that section, so a future run can compare row by row.
 | 5 | §3.3 | `curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}"` on `/` | `302 -> …/account/login?ReturnUrl=%2F` |
 | 6 | §3.3 | `ls <zenkins-home>/App_Data` | `artifacts`, `keys`, `zenkins.db`, `zenkins.db-shm`, `zenkins.db-wal` |
 | 7 | §3.3 | `tail -2 <zenkins-home>/logs/server.log` | `Hosting environment: Production`, `Content root path: …/zenkins/server` |
-| 8 | §3.4 | browser registration, then the headless `curl` POST | `302 Found`; dashboard contains `Starter Organization` |
+| 8 | §3.4 | browser setup wizard, then the headless `curl` POST to `/setup/owner` | `302 Found` to `/setup/worker`; dashboard contains the typed organization name |
 | 9 | §3.5 | first Worker start with `ZENKINS_REGISTRATION_TOKEN` | registered, worker id assigned, token persisted, online, log stream connected |
 | 10 | §3.5 | Worker restart with only `ZENKINS_SERVER_URL` and `ZENKINS_WORKER_NAME` | `using the persisted worker token from …`, back online with no token |
 | 11 | §3.6 | project + `pipeline.lua` + **Run** | run `Success` in 0.6 s; artifact download 17 bytes, byte-identical to the pipeline's output |

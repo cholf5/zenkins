@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -119,14 +120,36 @@ public sealed class AuthTestHost : IDisposable
         BaseAddress = new Uri("https://localhost"),
     });
 
-    /// <summary>Registers an account through the real static-SSR form (token, post, redirect).</summary>
+    /// <summary>
+    /// Seeds an Owner through whichever door the product offers (F-044): on an empty deployment that
+    /// is the setup wizard's Owner form, and once the bootstrap marker exists it is the ordinary
+    /// registration form. Every suite that seeds an Owner therefore produces the state the product
+    /// would produce, including the organization's name.
+    /// </summary>
     public static async Task<HttpResponseMessage> RegisterAsync(
         HttpClient client,
         string email,
         string password = ValidPassword,
-        string? confirmPassword = null)
+        string? confirmPassword = null,
+        string organizationName = "Starter Organization")
     {
         confirmPassword ??= password;
+
+        using var probe = await client.GetAsync("/setup");
+        if (probe.StatusCode == HttpStatusCode.OK)
+        {
+            var ownerHtml = await probe.Content.ReadAsStringAsync();
+            return await PostFormAsync(client, "/setup/owner", new Dictionary<string, string>
+            {
+                ["Input.OrganizationName"] = organizationName,
+                ["Input.Email"] = email,
+                ["Input.Password"] = password,
+                ["Input.ConfirmPassword"] = confirmPassword,
+                ["__RequestVerificationToken"] = ExtractAntiforgeryToken(ownerHtml),
+                ["_handler"] = "setup-owner",
+            });
+        }
+
         var registerHtml = await GetStringAsync(client, "/account/register");
         var token = ExtractAntiforgeryToken(registerHtml);
 

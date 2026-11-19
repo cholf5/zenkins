@@ -4,7 +4,8 @@
 
 A lightweight, cross-platform, self-hosted CI server. Built with C# / .NET 10, Blazor Server, and Lua pipelines — no Java, no Docker required.
 
-> Status: **pre-alpha**. The Server runs: first-run Owner bootstrap, cookie sign-in, Organizations
+> Status: **pre-alpha**. The Server runs: the first-run setup wizard (welcome with deployment facts,
+> Owner account, organization name, optional first Worker), cookie sign-in, Organizations
 > and members, organization switching, and projects scoped to the active organization (create/edit as
 > a Member, delete reserved to an Owner). Workers can register with an Owner-minted registration
 > token and keep heartbeats (F-004/F-005). Runs can be triggered from a project page, queued,
@@ -60,8 +61,8 @@ dotnet build -c Release
 dotnet run --project src/Server
 ```
 
-Then open <http://localhost:5067> and register: the first account becomes the Owner of a starter
-organization and lands on the dashboard. Later accounts start without an organization until an Owner
+Then open <http://localhost:5067>: an empty deployment runs a short setup wizard that creates the
+Owner account, names the organization and can register the first Worker. Later accounts start without an organization until an Owner
 adds them as a member.
 
 Full instructions — verified prerequisites, PostgreSQL, configuration, repository layout and

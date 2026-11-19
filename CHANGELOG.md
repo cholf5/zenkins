@@ -8,6 +8,20 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **First-run setup wizard (F-044).** An empty deployment now answers its first browser with a
+  three-step wizard instead of a registration form. The welcome page shows this deployment's facts -
+  version, database target, key-ring and artifact directories - and a real schema check: a database
+  behind the binaries is reported with the `dotnet ef database update` remedy (and an unreachable one
+  with its error) rather than as a 500 on the first request. The Owner form collects the
+  organization's name (no more forced `Starter Organization`) and writes the account, the
+  organization, the Owner membership and the bootstrap marker in the same transaction as before; the
+  optional Worker step mints a single-use registration token and prints the two environment variables
+  to start a worker with. While the marker is absent `/account/login` and `/account/register`
+  redirect to `/setup`; once it exists the wizard redirects out and ordinary registration resumes.
+  The wizard path refuses a late submission after another browser finished setup instead of creating
+  an account without an organization. All three pages are static SSR and ship in English and
+  Simplified Chinese like the rest of the UI.
+
 - **UI localization (F-043).** The browser UI ships in English and Simplified Chinese. A first visit
   follows the browser's `Accept-Language` (`zh*` → 简体中文, `en*` → English, anything else English),
   and the switcher in the shell and on the sign-in pages writes an HttpOnly `zenkins-lang` cookie that

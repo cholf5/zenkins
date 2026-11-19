@@ -28,20 +28,20 @@ public sealed class LanguageSwitchTests
 
         // No cookie: the browser's header decides, best match first.
         client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("zh-CN,zh;q=0.9,en;q=0.8");
-        var chinese = Decode(await AuthTestHost.GetStringAsync(client, "/account/login"));
+        var chinese = Decode(await AuthTestHost.GetStringAsync(client, "/setup"));
         Assert.Contains("<html lang=\"zh-Hans\"", chinese, StringComparison.Ordinal);
-        Assert.Contains("登录", chinese, StringComparison.Ordinal);
+        Assert.Contains("欢迎使用 Zenkins", chinese, StringComparison.Ordinal);
 
         // The switcher is a real POST: it sets the cookie and redirects back to the page it was on.
         var token = AuthTestHost.ExtractAntiforgeryToken(chinese);
         using var switched = await AuthTestHost.PostFormAsync(client, "/language", new Dictionary<string, string>
         {
             ["Language"] = AppLanguage.English,
-            ["ReturnUrl"] = "/account/login",
+            ["ReturnUrl"] = "/setup",
             ["__RequestVerificationToken"] = token,
         });
         Assert.Equal(HttpStatusCode.Redirect, switched.StatusCode);
-        Assert.Equal("/account/login", switched.Headers.Location?.OriginalString);
+        Assert.Equal("/setup", switched.Headers.Location?.OriginalString);
 
         var languageCookie = FindLanguageCookie(switched);
         Assert.NotNull(languageCookie);
@@ -50,9 +50,9 @@ public sealed class LanguageSwitchTests
         Assert.Contains("samesite=lax", languageCookie, StringComparison.OrdinalIgnoreCase);
 
         // The cookie now wins over the still-Chinese header.
-        var english = Decode(await AuthTestHost.GetStringAsync(client, "/account/login"));
+        var english = Decode(await AuthTestHost.GetStringAsync(client, "/setup"));
         Assert.Contains("<html lang=\"en\"", english, StringComparison.Ordinal);
-        Assert.Contains("Sign in", english, StringComparison.Ordinal);
+        Assert.Contains("Welcome to Zenkins", english, StringComparison.Ordinal);
     }
 
     [Fact(Timeout = 2 * 60 * 1000)]
@@ -62,13 +62,13 @@ public sealed class LanguageSwitchTests
         using var host = new AuthTestHost();
         using var client = host.CreateClient();
 
-        var page = Decode(await AuthTestHost.GetStringAsync(client, "/account/login"));
+        var page = Decode(await AuthTestHost.GetStringAsync(client, "/setup"));
         var token = AuthTestHost.ExtractAntiforgeryToken(page);
 
         using var refused = await AuthTestHost.PostFormAsync(client, "/language", new Dictionary<string, string>
         {
             ["Language"] = "fr",
-            ["ReturnUrl"] = "/account/login",
+            ["ReturnUrl"] = "/setup",
             ["__RequestVerificationToken"] = token,
         });
 
@@ -83,7 +83,7 @@ public sealed class LanguageSwitchTests
         using var host = new AuthTestHost();
         using var client = host.CreateClient();
 
-        var page = Decode(await AuthTestHost.GetStringAsync(client, "/account/login"));
+        var page = Decode(await AuthTestHost.GetStringAsync(client, "/setup"));
         var token = AuthTestHost.ExtractAntiforgeryToken(page);
 
         using var switched = await AuthTestHost.PostFormAsync(client, "/language", new Dictionary<string, string>

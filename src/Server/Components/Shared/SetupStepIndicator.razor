@@ -1,0 +1,40 @@
+@* The three-step progress line the setup pages share (card F-044). Plain markup: the wizard is static
+   SSR, so there is no circuit to re-render it. *@
+<ol class="bb:flex bb:flex-wrap bb:gap-x-2 bb:gap-y-1 bb:text-sm" aria-label="@L10n["Setup steps"]">
+    @foreach (var (number, title) in Steps)
+    {
+        var current = number == Current;
+        var done = number < Current;
+        <li class="bb:flex bb:items-center bb:gap-2 @(current ? "bb:font-semibold bb:text-foreground" : "bb:text-muted-foreground")"
+            aria-current="@(current ? "step" : null)">
+            <span class="bb:flex bb:h-5 bb:w-5 bb:items-center bb:justify-center bb:rounded-full bb:border bb:text-xs @(current || done ? "bb:border-primary bb:bg-primary bb:text-primary-foreground" : "bb:border-input")">
+                @if (done)
+                {
+                    <LucideIcon Name="check" Class="bb:h-3 bb:w-3" />
+                }
+                else
+                {
+                    @number
+                }
+            </span>
+            <span>@title</span>
+            @if (number < Steps.Length)
+            {
+                <span aria-hidden="true" class="bb:px-1 bb:text-muted-foreground">/</span>
+            }
+        </li>
+    }
+</ol>
+
+@code {
+    /// <summary>Which step the page is, one-based.</summary>
+    [Parameter]
+    public int Current { get; set; } = 1;
+
+    private (int Number, string Title)[] Steps =>
+    [
+        (1, L10n["Welcome"]),
+        (2, L10n["Owner account"]),
+        (3, L10n["First worker"]),
+    ];
+}

@@ -12,6 +12,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | ID | Title | Priority | Size | Blocked | Dependencies |
 |---|---|---|---|---|---|
 | [F-043](issues/f-043-ui-localization.md) | UI localization: English and Simplified Chinese, cookie-remembered, mechanically checked | P1 | L | none | — |
+| [F-044](issues/f-044-first-run-setup-wizard.md) | First-run setup wizard: welcome with deployment facts, Owner account, organization name, first Worker | P1 | L | none | F-001, F-002, F-004 |
 | [P-001](issues/p-001-release-engineering.md) | Release engineering: version, tag, CHANGELOG, verify.sh, CI (the v1.0 gate) | P1 | M | user: push → CI green → tag | B-001, Q-009 |
 
 ## Done

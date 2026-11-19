@@ -5,7 +5,6 @@
 @using System.ComponentModel.DataAnnotations
 @using Microsoft.AspNetCore.Identity
 @inject RegistrationService Registration
-@inject IBootstrapService Bootstrap
 @inject UserManager<User> UserManager
 @inject SignInManager<User> SignInManager
 @inject NavigationManager Navigation
@@ -16,14 +15,7 @@
     <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
         <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">@L10n["Create an account"]</h1>
         <p class="bb:text-sm bb:text-muted-foreground">
-            @if (_isFirstRun)
-            {
-                <span>@L10n["This deployment has no users yet."] @L10n["The first account becomes the {0} of the starter organization.", L10n["Owner"]]</span>
-            }
-            else
-            {
-                <span>@L10n["Your account starts without an organization. An Owner has to add you as a member before you can work with projects."]</span>
-            }
+            @L10n["Your account starts without an organization. An Owner has to add you as a member before you can work with projects."]
         </p>
     </div>
 
@@ -91,7 +83,6 @@
     private const string FormName = "register";
 
     private readonly List<string> _errors = [];
-    private bool _isFirstRun;
 
     [SupplyParameterFromQuery]
     private string? ReturnUrl { get; set; }
@@ -103,10 +94,6 @@
     {
         // A plain GET renders the empty form; a form post supplies the model itself.
         Input ??= new();
-
-        // Informational only (the bootstrap itself is decided by the database marker inside the
-        // registration transaction); a stale hint must never influence authorization.
-        _isFirstRun = !await Bootstrap.HasCompletedAsync();
     }
 
     private async Task RegisterAsync()

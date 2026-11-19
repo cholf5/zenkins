@@ -259,6 +259,18 @@ loop (`dotnet run` from a clone).
 > quoted here are the ones those runs produced. PowerShell equivalents differ only in shell syntax
 > (`$env:`, `Remove-Item`, `Tee-Object`) and are given wherever they differ.
 
+> F-044 (the first-run setup wizard) added **8** facts on 2026-11-19, all in the fast suite
+> (`Category=Auth`, `SetupWizardTests`): the gate's two account pages, the welcome page's own deployment
+> facts (version, provider, the real SQLite file, the schema state) with no rows written, the Owner
+> form's one-transaction write of the typed organization name and the sign-in, its blank and over-long
+> name refusals, Identity's password policy left in charge, the post-setup lockout plus the service's
+> late-submission refusal, the Worker step's single token display and start command, its anonymous and
+> Member refusals, and a Production host whose database is behind the binaries explained by the wizard
+> instead of a crash. It also moved `AuthTestHost.RegisterAsync` - the Owner seed every suite uses -
+> through the wizard, and the three anonymous-page suites (theme shell, stylesheet cascade, language
+> switch) onto `/setup`, because `/account/login` is no longer an anonymous page on an empty
+> deployment. No new category and no new exclusion - the sextuple filter is unchanged.
+
 ## 1. Prerequisites
 
 **.NET 10 SDK — that is the only prerequisite.**
@@ -352,7 +364,7 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1679 fast / 1712 everything.** The fast figure is a counted
+**The current baseline is counted, and it is 1687 fast / 1720 everything.** The fast figure is a counted
 run of the tree that carries Q-023, measured with `--list-tests` on the filter in the table below (which now
 also excludes `Category=Load`); everything is that count plus the five slow categories (23), `Category=Load`
 (1) and Postgres (9), all counted in the same pass. Every per-card note in this file quotes the counts of
@@ -584,21 +596,31 @@ Two things, both of which matter locally:
    **500** for those two prefixes — the static web asset manifest is a publish artifact. Use
    Development for local work, or run the published output (§6).
 
-### First-run registration
+### First-run setup (the setup wizard)
 
-1. `GET http://localhost:5067/` redirects to `/account/login` (302, `ReturnUrl=%2F`).
-2. Go to **Register** (`/account/register`). Because the deployment has no users yet, the page says
-   the first account becomes the **Owner** of the starter organization.
-3. Register with any email and a password of at least 12 characters containing upper and lower case
-   letters, a digit and a symbol (Identity policy in `src/Server/Auth/IdentitySetup.cs`).
-4. The account is signed in automatically and lands on the dashboard, which shows a
-   `Starter Organization` badge and an empty *Build activity* card.
+An empty deployment answers its first browser with a three-step wizard (card F-044):
 
-What registration writes, in **one** transaction: the `User` row (ASP.NET Identity), the
-`Organization` row named `Starter Organization`, an `OrganizationMember` row with role `Owner`, and
-the single-row bootstrap marker that makes the first-run state permanent. Later sign-ups get an
-account **without** an organization; they are redirected to `/no-organization` and stay there until
-an Owner adds them as a member (Organizations → Members).
+1. `GET http://localhost:5067/` redirects to `/account/login` (302, `ReturnUrl=%2F`), and while the
+   deployment has no accounts that page — like `/account/register` — redirects to **`/setup`** (302).
+2. The welcome page shows this deployment's version, its database (the SQLite file, or
+   `host / database` for PostgreSQL — never the connection string), the key-ring and artifact
+   directories, and the real schema state. A schema that is behind the binaries blocks setup with
+   the `dotnet ef database update` remedy instead of failing later.
+3. **Start setup** opens the Owner form: an organization name (prefilled, and whatever you type is
+   what is stored), an email and a password of at least 12 characters containing upper and lower
+   case letters, a digit and a symbol (Identity policy in `src/Server/Auth/IdentitySetup.cs`).
+   Submitting signs you in and continues to the Worker step.
+4. The Worker step is optional: mint a single-use registration token (`zreg_…`, shown once) and start
+   a worker with the two environment variables the page prints. **Skip for now** or **Finish setup**
+   lands on the dashboard.
+
+What the Owner form writes, in **one** transaction: the `User` row (ASP.NET Identity), the
+`Organization` row with the name you typed, an `OrganizationMember` row with role `Owner`, and the
+single-row bootstrap marker that makes the first-run state permanent. Once the marker exists the
+wizard is gone (`/setup` and `/setup/owner` redirect out) and `/account/register` works normally:
+later sign-ups get an account **without** an organization, are redirected to `/no-organization`, and
+stay there until an Owner adds them as a member (Organizations → Members). The direct registration
+path keeps `Starter Organization` as its fallback name; the wizard always collects one.
 
 ### Sign out
 
@@ -623,7 +645,7 @@ Remove-Item -Recurse -Force src/Server/bin/Debug/net10.0/App_Data, src/Server/Ap
 dotnet run --project src/Server
 ```
 
-The register page says "first account becomes the Owner" again afterwards. This is the standard
+The setup wizard is offered again afterwards (`/account/register` redirects to `/setup`). This is the standard
 recovery for a dev database you no longer trust — see §6. A *published* run keeps its database in
 `App_Data/` under the **publish directory** (§6), not in the repository: delete that directory's
 `App_Data` instead.
@@ -633,23 +655,24 @@ recovery for a dev database you no longer trust — see §6. A *published* run k
 The browser path above is the normal one. To check the same flow from a terminal:
 
 ```bash
-curl -s -c cookies.txt http://localhost:5067/account/register -o register.html
-TOKEN=$(grep -o 'name="__RequestVerificationToken" value="[^"]*"' register.html | head -1 | sed 's/.*value="//; s/"$//')
+curl -s -c cookies.txt http://localhost:5067/setup/owner -o owner.html
+TOKEN=$(grep -o 'name="__RequestVerificationToken" value="[^"]*"' owner.html | head -1 | sed 's/.*value="//; s/"$//')
 
-curl -si -b cookies.txt -c cookies.txt -X POST http://localhost:5067/account/register \
-  --data-urlencode "_handler=register" \
+curl -si -b cookies.txt -c cookies.txt -X POST http://localhost:5067/setup/owner \
+  --data-urlencode "_handler=setup-owner" \
   --data-urlencode "__RequestVerificationToken=$TOKEN" \
+  --data-urlencode "Input.OrganizationName=Contoso CI" \
   --data-urlencode "Input.Email=owner@example.com" \
-  --data-urlencode "Input.Password=CorrectHorse9!" \
-  --data-urlencode "Input.ConfirmPassword=CorrectHorse9!" | head -1   # HTTP/1.1 302 Found
+  --data-urlencode "Input.Password=CorrectHorse9!Battery" \
+  --data-urlencode "Input.ConfirmPassword=CorrectHorse9!Battery" | head -1   # HTTP/1.1 302 Found
 
-curl -s -b cookies.txt http://localhost:5067/ | grep -o 'Starter Organization' | head -1
+curl -s -b cookies.txt http://localhost:5067/ | grep -o 'Contoso CI' | head -1
 
-rm -f cookies.txt register.html   # scratch files from this smoke test
+rm -f cookies.txt owner.html   # scratch files from this smoke test
 ```
 
-The POST answers `302` with `Location: http://localhost:5067/` and sets the `Zenkins.Auth` cookie; the
-last command prints `Starter Organization`. Antiforgery is required: the token comes from the
+The POST answers `302` with `Location: http://localhost:5067/setup/worker` and sets the `Zenkins.Auth`
+cookie; the last command prints the organization name. Antiforgery is required: the token comes from the
 rendered form (`__RequestVerificationToken`) together with the antiforgery cookie in `cookies.txt`.
 A second registration with a different email redirects to `/no-organization` instead.
 

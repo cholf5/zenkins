@@ -156,7 +156,7 @@ public sealed class BootstrapTests : IDisposable
 
             return await scope.ServiceProvider
                 .GetRequiredService<BootstrapService>()
-                .TryCreateOwnerOrganizationAsync(user, cancellationToken);
+                .TryCreateOwnerOrganizationAsync(user, organizationName: null, cancellationToken);
         }
 
         var outcomes = await Task.WhenAll(

@@ -1,0 +1,114 @@
+@page "/setup"
+@layout SetupLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using Zenkins.Server.Data
+@using Zenkins.Server.Setup
+@inject SetupReadiness Readiness
+
+<PageTitle>@L10n["Set up Zenkins"] · Zenkins</PageTitle>
+
+<div class="bb:space-y-4">
+    <SetupStepIndicator Current="1" />
+
+    <div class="bb:rounded-xl bb:border bb:bg-card bb:text-card-foreground bb:shadow-sm">
+        <div class="bb:space-y-1.5 bb:p-6 bb:pb-4">
+            <h1 class="bb:text-lg bb:font-semibold bb:tracking-tight" tabindex="-1">@L10n["Welcome to Zenkins"]</h1>
+            <p class="bb:text-sm bb:text-muted-foreground">
+                @L10n["This deployment has no accounts yet. The next two pages create the Owner account and name the organization; the last one can register the first Worker."]
+            </p>
+        </div>
+
+        <div class="bb:space-y-4 bb:p-6 bb:pt-0">
+            <div class="bb:rounded-md bb:border bb:border-input bb:bg-muted/40 bb:p-4">
+                <h2 class="bb:text-sm bb:font-medium">@L10n["This deployment"]</h2>
+                @if (_facts is null)
+                {
+                    <p class="bb:mt-2 bb:text-sm bb:text-muted-foreground">@L10n["Reading the deployment's facts…"]</p>
+                }
+                else
+                {
+                    <dl class="bb:mt-2 bb:grid bb:gap-x-4 bb:gap-y-1 bb:text-sm bb:sm:grid-cols-[max-content_1fr]">
+                        <dt class="bb:text-muted-foreground">@L10n["Version"]</dt>
+                        <dd class="bb:font-mono">@_facts.Version</dd>
+
+                        <dt class="bb:text-muted-foreground">@L10n["Database"]</dt>
+                        <dd class="bb:font-mono">@ProviderLabel · @_facts.DatabaseTarget</dd>
+
+                        <dt class="bb:text-muted-foreground">@L10n["Schema"]</dt>
+                        <dd class="bb:font-mono">@SchemaLabel</dd>
+
+                        <dt class="bb:text-muted-foreground">@L10n["Key ring directory"]</dt>
+                        <dd class="bb:break-all bb:font-mono">@_facts.KeyRingDirectory</dd>
+
+                        <dt class="bb:text-muted-foreground">@L10n["Artifact store"]</dt>
+                        <dd class="bb:break-all bb:font-mono">@_facts.ArtifactRoot</dd>
+                    </dl>
+
+                    @if (_facts.SchemaState == SetupSchemaState.MigrationsPending)
+                    {
+                        <div role="alert" class="bb:mt-4 bb:space-y-2 bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                            <p>@PendingMigrationsLabel</p>
+                            <p>@L10n["A server outside Development does not migrate on startup. Run this from the release's checkout on the server machine, with the deployment's connection string, then reload this page:"]</p>
+                            <pre class="bb:overflow-x-auto bb:rounded bb:bg-background bb:p-2 bb:font-mono bb:text-xs">dotnet ef database update --project src/Server</pre>
+                        </div>
+                    }
+                    else if (_facts.SchemaState == SetupSchemaState.Unreachable)
+                    {
+                        <div role="alert" class="bb:mt-4 bb:space-y-2 bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
+                            <p>@L10n["The database could not be used. Check the connection configuration, then restart the server and reload this page."]</p>
+                            @if (_facts.Problem is { } problem)
+                            {
+                                <pre class="bb:overflow-x-auto bb:rounded bb:bg-background bb:p-2 bb:font-mono bb:text-xs">@problem</pre>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="bb:mt-2 bb:text-sm">@L10n["Connected, and the schema is up to date."]</p>
+                    }
+                }
+            </div>
+
+            @if (_facts is { SchemaState: SetupSchemaState.Ready })
+            {
+                <p class="bb:text-sm bb:text-muted-foreground">
+                    @L10n["Back up the database, the key-ring directory and the artifact store together - they are one deployment's data."]
+                    @L10n["Nothing has been created yet."]
+                </p>
+                <a href="/setup/owner"
+                   class="bb:inline-flex bb:h-9 bb:w-full bb:items-center bb:justify-center bb:rounded-md bb:bg-primary bb:px-4 bb:text-sm bb:font-medium bb:text-primary-foreground">
+                    @L10n["Start setup"]
+                </a>
+            }
+            else
+            {
+                <p class="bb:text-sm bb:text-muted-foreground">@L10n["Setup waits until the database is usable."]</p>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private SetupFacts? _facts;
+
+    private string ProviderLabel => _facts is null
+        ? string.Empty
+        : _facts.Provider == DatabaseProvider.Sqlite ? "SQLite" : "PostgreSQL";
+
+    private string SchemaLabel => _facts?.SchemaState switch
+    {
+        SetupSchemaState.Ready => L10n["Up to date"],
+        SetupSchemaState.MigrationsPending => L10n["{0} pending migrations", _facts.PendingMigrations],
+        _ => L10n["Unreachable"],
+    };
+
+    private string PendingMigrationsLabel => _facts is null || _facts.PendingMigrations == 1
+        ? L10n["The database schema is one migration behind the server binaries."]
+        : L10n["The database schema is {0} migrations behind the server binaries.", _facts.PendingMigrations];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _facts = await Readiness.GetAsync();
+    }
+}

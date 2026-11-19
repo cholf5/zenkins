@@ -79,6 +79,7 @@ public sealed class RegistrationTransactionTests
 
         public Task<BootstrapOutcome> TryCreateOwnerOrganizationAsync(
             User user,
+            string? organizationName = null,
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("Injected bootstrap failure after the account insert.");
     }
@@ -96,6 +97,7 @@ public sealed class RegistrationTransactionTests
 
         public Task<BootstrapOutcome> TryCreateOwnerOrganizationAsync(
             User user,
+            string? organizationName = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(BootstrapOutcome.AlreadyCompleted);
     }
