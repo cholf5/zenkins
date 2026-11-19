@@ -23,7 +23,7 @@ namespace Zenkins.Worker;
 public sealed class WorkerDefinitionValidationLoop(
     WorkerConfiguration configuration,
     WorkerApiClient api,
-    string workerToken,
+    WorkerCredential credential,
     WorkDirectoryService workDirectories,
     BackoffScheduler backoff,
     TextWriter log,
@@ -85,7 +85,7 @@ public sealed class WorkerDefinitionValidationLoop(
         {
             try
             {
-                var claimed = await api.ClaimDefinitionValidationAsync(workerToken, shutdown);
+                var claimed = await api.ClaimDefinitionValidationAsync(credential.Current, shutdown);
                 backoff.Reset();
                 return claimed;
             }
@@ -140,7 +140,7 @@ public sealed class WorkerDefinitionValidationLoop(
                 return;
             }
 
-            await api.ReportDefinitionValidationAsync(workerToken, validation.ValidationId, report, shutdown);
+            await api.ReportDefinitionValidationAsync(credential.Current, validation.ValidationId, report, shutdown);
         }
         finally
         {
@@ -260,14 +260,14 @@ public sealed class WorkerDefinitionValidationLoop(
         var credentialDelivered = false;
         try
         {
-            var credential = await api.FetchDefinitionGitCredentialAsync(
-                workerToken, validation.ValidationId, shutdown);
-            credentialDelivered = credential is not null;
+            var gitCredential = await api.FetchDefinitionGitCredentialAsync(
+                credential.Current, validation.ValidationId, shutdown);
+            credentialDelivered = gitCredential is not null;
 
             var workspace = new Git.GitWorkspace(configuration.BuildGitWorkspaceOptions(
                 scratch,
                 log: line => log.WriteLine("Zenkins Worker: " + line)));
-            await workspace.CloneAsync(repositoryUrl, branch, credential, shutdown);
+            await workspace.CloneAsync(repositoryUrl, branch, gitCredential, shutdown);
             await workspace.CheckoutAsync(commit, shutdown);
 
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath))

@@ -151,11 +151,11 @@ public sealed class WorkerApiDefinitiveReportingTests : IDisposable
         // The log stream client is never started here (HasEverConnected stays false), so the
         // loop's drain step cannot wait on a connection this stub server has no endpoint for.
         var logStreams = new LogStreamClient(
-            configuration, "stub-worker-token", BackoffScheduler.Default(), Console.Out, Console.Error);
+            configuration, new WorkerCredential("zwrk_stub-worker-token"), BackoffScheduler.Default(), Console.Out, Console.Error);
         var loop = new WorkerRunLoop(
             configuration,
             api,
-            "stub-worker-token",
+            new WorkerCredential("zwrk_stub-worker-token"),
             new WorkDirectoryService(configuration.WorkRoot),
             logStreams,
             new BackoffScheduler(TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(1)),

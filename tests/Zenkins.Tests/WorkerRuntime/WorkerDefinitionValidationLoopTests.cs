@@ -242,7 +242,7 @@ public sealed class WorkerDefinitionValidationLoopTests : IDisposable
         var loop = new WorkerDefinitionValidationLoop(
             configuration,
             new WorkerApiClient(host.Host.CreateClient()),
-            workerToken,
+            new WorkerCredential(workerToken),
             new WorkDirectoryService(configuration.WorkRoot),
             BackoffScheduler.Default(),
             TextWriter.Null,

@@ -49,7 +49,7 @@ namespace Zenkins.Worker;
 public sealed class WorkerRunLoop(
     WorkerConfiguration configuration,
     WorkerApiClient api,
-    string workerToken,
+    WorkerCredential credential,
     WorkDirectoryService workDirectories,
     LogStreamClient logStreams,
     BackoffScheduler backoff,
@@ -153,7 +153,7 @@ public sealed class WorkerRunLoop(
             WorkerClaimResponse? claimed;
             try
             {
-                claimed = await api.ClaimAsync(workerToken, shutdown);
+                claimed = await api.ClaimAsync(credential.Current, shutdown);
             }
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
             {
@@ -460,7 +460,7 @@ public sealed class WorkerRunLoop(
             parameterValues = await RunParameterFileMaterializer.MaterializeAsync(
                 claim,
                 work,
-                (name, token) => api.FetchRunParameterFileAsync(workerToken, claim.RunId, name, token),
+                (name, token) => api.FetchRunParameterFileAsync(credential.Current, claim.RunId, name, token),
                 Emit,
                 shutdown);
         }
@@ -527,8 +527,8 @@ public sealed class WorkerRunLoop(
                 // F-015: the run's redaction filter, the per-run secret cache (a fetch per name at most),
                 // the server-side step sink and the step announcement that stamps the log per step.
                 Redactor = redactor,
-                Secrets = new RunSecretCache(new ServerSecretSource(api, workerToken, claim.RunId)),
-                StepSink = new ServerStepSink(api, workerToken, claim.RunId, backoff, errorLog),
+                Secrets = new RunSecretCache(new ServerSecretSource(api, credential.Current, claim.RunId)),
+                StepSink = new ServerStepSink(api, credential.Current, claim.RunId, backoff, errorLog),
                 OnStepChanged = currentStep.Set,
 
                 // F-015: the killed step records why it died, through the one shared predicate (so a test that
@@ -542,7 +542,7 @@ public sealed class WorkerRunLoop(
                 // console app reads them as Artifacts__MaxFileBytes). The run's kill token bounds each
                 // upload.
                 Artifacts = new Zenkins.Worker.Artifacts.ArtifactPublisher(
-                    new Zenkins.Worker.Artifacts.ArtifactUploadClient(api, workerToken),
+                    new Zenkins.Worker.Artifacts.ArtifactUploadClient(api, credential.Current),
                     claim.RunId,
                     string.Equals(
                         claim.DefinitionSource
@@ -557,7 +557,7 @@ public sealed class WorkerRunLoop(
                     Emit),
             },
             definitions,
-            cancellationToken => api.FetchGitCredentialAsync(workerToken, claim.RunId, cancellationToken),
+            cancellationToken => api.FetchGitCredentialAsync(credential.Current, claim.RunId, cancellationToken),
             (commit, specJson, cancellationToken) =>
                 ReportDefinitionAsync(claim.RunId, commit, specJson, shutdown));
 
@@ -663,7 +663,7 @@ public sealed class WorkerRunLoop(
             {
                 // F-013: the commit is reported with the definition report below - the clone happens
                 // after the accept, so nothing has been resolved yet at this point.
-                var response = await api.AcceptAsync(workerToken, runId, gitCommit: null, shutdown);
+                var response = await api.AcceptAsync(credential.Current, runId, gitCommit: null, shutdown);
                 return response.DeadlineAt ?? DateTimeOffset.MaxValue;
             }
             catch (WorkerApiRejectedException rejection)
@@ -748,7 +748,7 @@ public sealed class WorkerRunLoop(
         {
             try
             {
-                await report(workerToken, shutdown);
+                await report(credential.Current, shutdown);
                 return true;
             }
             catch (WorkerApiRejectedException rejection)

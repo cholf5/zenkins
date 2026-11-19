@@ -8,6 +8,24 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **A Worker that the Server no longer recognises gets its identity back (B-012).** The Worker's
+  identity is a token, not its name: the Server authenticates the hash of a `zwrk_…` credential, and
+  the name only picks a row (Server) and a directory (Worker). So a restart could end in two failures
+  nobody could see from the outside. If the store looked elsewhere - a different host, port, worker
+  name, or service account changes the path - the Worker printed a configuration error that read like
+  a rejected name. If the stored credential was found but the Server had replaced its data, or the
+  credential had been revoked, every loop retried the same dead token forever: the message said
+  "mint a new registration token and re-register", but re-registration was unreachable because a
+  registration token in the environment was ignored while a token *file* existed. Now the Worker
+  checks its persisted credential once at startup when a registration token is configured, and again
+  on every heartbeat: a definitive 401/403 with a registration token in the environment re-registers
+  (same name, so the same row, history and queue) and rotates one shared credential that every loop
+  and the log-stream reconnect read, so recovery needs no restart. A healthy credential is never
+  replaced and a staged registration token is never burned; a transport failure or a request timeout
+  changes nothing; and with no registration token the stderr line names the exact file to delete and
+  the variable to set. A registration token the Server has already burned is reported once instead of
+  retried.
+
 - **"Add step" and "Add parameter" add a row again (B-011).** On a live page every **Add step**
   button on a Freestyle project's Steps tab - the main list and the three post lists - and **Add
   parameter** on the Parameters tab did nothing at all. Both editors clone the new row from a

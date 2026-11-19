@@ -26,7 +26,7 @@ namespace Zenkins.Worker;
 public sealed class WorkerProbeLoop(
     WorkerConfiguration configuration,
     WorkerApiClient api,
-    string workerToken,
+    WorkerCredential credential,
     WorkDirectoryService workDirectories,
     BackoffScheduler backoff,
     TextWriter log,
@@ -89,7 +89,7 @@ public sealed class WorkerProbeLoop(
         {
             try
             {
-                var claimed = await api.ClaimProbeAsync(workerToken, shutdown);
+                var claimed = await api.ClaimProbeAsync(credential.Current, shutdown);
                 backoff.Reset();
                 return claimed;
             }
@@ -138,9 +138,9 @@ public sealed class WorkerProbeLoop(
             {
                 // The material is fetched per probe, under this probe's lease: nothing is cached on disk
                 // and nothing from a previous probe can be replayed.
-                var credential = await api.FetchProbeGitCredentialAsync(workerToken, probe.ProbeId, shutdown);
+                var gitCredential = await api.FetchProbeGitCredentialAsync(credential.Current, probe.ProbeId, shutdown);
                 var runner = new GitRefsProbe(configuration.BuildProbeOptions(work));
-                result = await runner.ProbeAsync(probe.RepositoryUrl, credential, shutdown);
+                result = await runner.ProbeAsync(probe.RepositoryUrl, gitCredential, shutdown);
             }
             catch (GitException failure)
             {
@@ -193,7 +193,7 @@ public sealed class WorkerProbeLoop(
         {
             try
             {
-                await api.ReportProbeAsync(workerToken, probe.ProbeId, request, shutdown);
+                await api.ReportProbeAsync(credential.Current, probe.ProbeId, request, shutdown);
                 await log.WriteLineAsync(
                     $"Zenkins Worker: probe {probe.ProbeId} reported as '{result.Outcome}' "
                     + $"({result.Heads.Length} head(s)).");

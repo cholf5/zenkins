@@ -50,7 +50,7 @@ public interface ILogStreamSink
 /// </summary>
 public sealed class LogStreamClient(
     WorkerConfiguration configuration,
-    string workerToken,
+    WorkerCredential credential,
     BackoffScheduler backoff,
     TextWriter log,
     TextWriter errorLog,
@@ -106,7 +106,9 @@ public sealed class LogStreamClient(
             var connection = new HubConnectionBuilder()
                 .WithUrl(new Uri(configuration.ServerUrl, "hubs/worker-logs"), options =>
                 {
-                    options.AccessTokenProvider = () => Task.FromResult<string?>(workerToken);
+                    // Read on every connect attempt, never captured: a credential the heartbeat loop
+                    // replaced (401/403 → re-registration) has to reach this reconnect too.
+                    options.AccessTokenProvider = () => Task.FromResult<string?>(credential.Current);
                     configureConnection?.Invoke(options);
                 })
                 .AddJsonProtocol(options =>

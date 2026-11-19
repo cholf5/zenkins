@@ -256,12 +256,13 @@ public sealed class WorkerRunLoopTests : IDisposable
         // stream client is never started here (HasEverConnected stays false), so the loop's
         // drain step cannot wait on a connection this test never opens.
         var api = new WorkerApiClient(host.Inner.Inner.Host.CreateClient());
+        var credential = new WorkerCredential(workerToken);
         var logStreams = new LogStreamClient(
-            configuration, workerToken, BackoffScheduler.Default(), Console.Out, Console.Error);
+            configuration, credential, BackoffScheduler.Default(), Console.Out, Console.Error);
         var loop = new WorkerRunLoop(
             configuration,
             api,
-            workerToken,
+            credential,
             new WorkDirectoryService(configuration.WorkRoot),
             logStreams,
             new BackoffScheduler(TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(2)),
