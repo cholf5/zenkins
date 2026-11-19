@@ -8,6 +8,19 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **A run page renders its log panel again (B-013).** Starting a run landed the browser on the error
+  boundary - **出错 / 页面渲染失败。** (*Something went wrong / The page failed to render.*) - a moment
+  after the run was queued, so a fresh Freestyle project could not be used at all. The run page's log
+  panel rendered `_plan.Indicator` while that plan was still null: the plan was filled in
+  `OnParametersSet`, but on an interactive circuit Blazor renders a component once while its
+  `OnInitializedAsync` is awaiting the log hub - before that hook runs. Prerendering never showed it,
+  which is why the server-rendered pages and their facts stayed green. The panel now builds the plan
+  on demand (`Plan => _plan ??= _viewModel.Plan(...)`), so the intermediate render draws the same
+  empty shell the panel always shows when no line has arrived, in the page's language. One fact
+  (`LogPanelFirstRenderTests`) constructs the panel with no lifecycle call and holds the plan
+  non-null; it fails on the pre-fix component. Found through a real browser run of a queued Freestyle
+  build, with the server's `RunLogPanel` `NullReferenceException` as the trace.
+
 - **A Worker that the Server no longer recognises gets its identity back (B-012).** The Worker's
   identity is a token, not its name: the Server authenticates the hash of a `zwrk_…` credential, and
   the name only picks a row (Server) and a directory (Worker). So a restart could end in two failures
