@@ -55,10 +55,10 @@
                 <BbButton id="run-log-pause"
                           Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
                           OnClick="TogglePauseAsync">
-                    @(_plan.IsPaused ? L10n["Resume"] : L10n["Pause"])
+                    @(Plan.IsPaused ? L10n["Resume"] : L10n["Pause"])
                 </BbButton>
                 <span id="run-log-follow-state" role="status" class="bb:text-xs bb:text-muted-foreground">
-                    @_plan.Indicator
+                    @Plan.Indicator
                 </span>
                 <span class="bb:flex bb:items-center bb:gap-1">
                     <input id="run-log-search" type="search" placeholder="@L10n["Search this log"]"
@@ -66,21 +66,21 @@
                            @bind="_search" @bind:event="oninput" @bind:after="ApplySearchAsync" />
                     <BbButton id="run-log-search-previous"
                               Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
-                              Disabled="@(_plan.MatchCount == 0)"
+                              Disabled="@(Plan.MatchCount == 0)"
                               OnClick="PreviousMatchAsync">
                         @L10n["Previous"]
                     </BbButton>
                     <BbButton id="run-log-search-next"
                               Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
-                              Disabled="@(_plan.MatchCount == 0)"
+                              Disabled="@(Plan.MatchCount == 0)"
                               OnClick="NextMatchAsync">
                         @L10n["Next"]
                     </BbButton>
                 </span>
                 <span id="run-log-search-summary" role="status" class="bb:text-xs bb:text-muted-foreground">
-                    @_plan.SearchSummary
+                    @Plan.SearchSummary
                 </span>
-                @if (_plan.CurrentMatchIndex > 0)
+                @if (Plan.CurrentMatchIndex > 0)
                 {
                     @* Next/Previous left the tail; this is the way back (the same jump Resume does). *@
                     <BbButton Variant="ButtonVariant.Ghost" Size="ButtonSize.Small" OnClick="JumpToTailAsync">
@@ -90,14 +90,14 @@
                 <select id="run-log-step-filter"
                         aria-label="@L10n["Filter the log to one step"]"
                         class="bb:h-8 bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-2 bb:text-sm"
-                        value="@(_plan.StepFilter?.ToString() ?? "")"
+                        value="@(Plan.StepFilter?.ToString() ?? "")"
                         @onchange="OnStepFilterSelectedAsync">
                     <option value="">@L10n["All steps"]</option>
                     @foreach (var step in Steps ?? [])
                     {
                         @if (step.Id is { } stepId)
                         {
-                            var lines = _plan.StepCounts.GetValueOrDefault(stepId);
+                            var lines = Plan.StepCounts.GetValueOrDefault(stepId);
                             <option value="@stepId.ToString()">
                                 @step.Index. @step.Name · @(lines == 0 ? L10n["no output"] : lines == 1 ? L10n["{0} line", lines] : L10n["{0} lines", lines])
                             </option>
@@ -112,19 +112,19 @@
                     }
                 </select>
             </div>
-            @if (_plan.IsCapped)
+            @if (Plan.IsCapped)
             {
                 @* D-004's stated bound: the cap is said out loud, and the download is named as the
                    way to get everything. *@
-                <p id="run-log-cap" class="bb:text-xs bb:text-muted-foreground">@_plan.CapNotice</p>
+                <p id="run-log-cap" class="bb:text-xs bb:text-muted-foreground">@Plan.CapNotice</p>
             }
-            @if (_plan.TotalLines == 0)
+            @if (Plan.TotalLines == 0)
             {
                 <p id="run-log-empty" class="bb:text-sm bb:text-muted-foreground">
                     @(_connecting ? L10n["Connecting to the log stream…"] : L10n["No output was captured for this run."])
                 </p>
             }
-            else if (_plan.EmptyMessage is { } emptyMessage)
+            else if (Plan.EmptyMessage is { } emptyMessage)
             {
                 @* A selected step that produced no output, or a search that matched nothing: the
                    panel says so instead of showing silence. *@
@@ -137,7 +137,7 @@
                 @* One header per step segment (F-015): a line carries the step it was emitted in, so the log
                    reads as "what each step printed" instead of one undifferentiated stream. The current
                    search match (D-004's navigation) is highlighted. *@
-                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var entry in _plan.Entries)
+                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var entry in Plan.Entries)
 {
     @if (entry.Header is { } header)
     {
@@ -187,9 +187,18 @@
     private string? _connectionError;
 
     /// <summary>Everything the panel renders for the current instant, computed by the view model.
-    /// <see cref="Replan"/> assigns it in <c>OnParametersSet</c>, which always runs before the first
-    /// render, so the copy is resolved with the localizer in hand.</summary>
-    private RunLogPlan _plan = null!;
+    /// <see cref="Replan"/> refreshes it whenever the state behind the controls changes.</summary>
+    private RunLogPlan? _plan;
+
+    /// <summary>
+    /// The plan the markup renders. It is built on demand rather than assumed to exist: the circuit
+    /// renders this panel once while <see cref="OnInitializedAsync"/> is awaiting the log hub - a
+    /// render that happens <em>before</em> <see cref="OnParametersSet"/> runs - and a null plan there
+    /// failed the whole page (the run page's ErrorBoundary). The view model holds no lines at that
+    /// point, which is exactly the empty shell the panel should show; the localizer is already
+    /// injected, so the copy is resolved in the same language as the rest of the page.
+    /// </summary>
+    private RunLogPlan Plan => _plan ??= _viewModel.Plan(BuildStepHeaders(), L10n);
 
     /// <summary>The search box's text, live-bound; the view model commits it on every keystroke.</summary>
     private string _search = string.Empty;
@@ -337,7 +346,7 @@
     /// resume jumps to the tail. The indicator on the plan says which state the panel is in.</summary>
     private Task TogglePauseAsync()
     {
-        if (_plan.IsPaused)
+        if (Plan.IsPaused)
         {
             _viewModel.Resume();
         }
@@ -418,7 +427,7 @@
     /// <summary>A line's classes: stderr in red (F-008), the current search match highlighted.</summary>
     private string LineClass(LogLineMessage line)
     {
-        if (_plan.CurrentMatchSeq is { } matchSeq && line.Seq == matchSeq)
+        if (Plan.CurrentMatchSeq is { } matchSeq && line.Seq == matchSeq)
         {
             return "bb:font-bold bb:text-primary";
         }
