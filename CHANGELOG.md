@@ -19,7 +19,7 @@ signed-in page, so a tag below can be checked against the binaries that carry it
   registration token in the environment was ignored while a token *file* existed. Now the Worker
   checks its persisted credential once at startup when a registration token is configured, and again
   on every heartbeat: a definitive 401/403 with a registration token in the environment re-registers
-  (same name, so the same row, history and queue) and rotates one shared credential that every loop
+  (same name, so the same row and history) and rotates one shared credential that every loop
   and the log-stream reconnect read, so recovery needs no restart. A healthy credential is never
   replaced and a staged registration token is never burned; a transport failure or a request timeout
   changes nothing; and with no registration token the stderr line names the exact file to delete and

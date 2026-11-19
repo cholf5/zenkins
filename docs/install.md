@@ -289,9 +289,11 @@ a trial, or under your own daemon mechanism — no Worker service template ships
 If the Server no longer knows the persisted credential (its database was replaced or restored, or an
 Owner revoked the worker), the Worker does not sit in a 401 loop: a definitive 401/403 with a
 registration token in the environment makes it register again under the same name — same row, same
-history, same queue — and keep running. Leave the line in its unit's environment and a supervised
+history — and keep running. Leave the line in its unit's environment and a supervised
 worker heals itself; leave it out and the one stderr line names the file to delete and the variable
-to set (§10).
+to set (§10). [`docs/worker-registration.md`](worker-registration.md) is the reference for the whole
+credential lifecycle — what the two tokens are, where the credential lives, and every
+re-registration case.
 
 ### 3.6 First real build
 
@@ -653,7 +655,8 @@ never the current directory. `work/` is disposable; the token file is the worker
 Server stops accepting it, a registration token in the environment makes the next start (or the next
 heartbeat, if the worker is already running) register again under the same name; with no registration
 token the worker says so and names the file, and the repair is: mint a token, delete that one file,
-start the worker — see §10.
+start the worker — see §10. The full lifecycle (the two credentials, the store's path scheme, every
+re-registration case) is [`docs/worker-registration.md`](worker-registration.md).
 
 The knobs an operator actually sets (all environment variables; `WorkerConfiguration.cs` is the
 authoritative list with ranges and defaults):
@@ -868,15 +871,16 @@ before any request is served — that is the first place to look.
 
 **The worker says `the server rejected the worker token with 401/403 (unknown, used or revoked)`.**
 The persisted credential no longer matches a server-side token (server database replaced or restored,
-the token revoked, or §10's 403-not-Zenkins trap). If `ZENKINS_REGISTRATION_TOKEN` is set, the worker
-replaces the credential by itself — at startup and on the next heartbeat — and keeps its name, row and
-history; a registration token that the Server has already burned is reported once (at startup: exit
+the token revoked, or another service answering on that port). If `ZENKINS_REGISTRATION_TOKEN` is
+set, the worker replaces the credential by itself — at startup and on the next heartbeat — and keeps
+its name, row and history; a registration token that the Server has already burned is reported once (at startup: exit
 code 3) and cannot heal anything, so mint a fresh one. With no registration token, mint one and
 restart the worker; it no longer needs the file deleted, and if it prints
 `configuration error: no persisted worker token at …` the store is looking somewhere else — the
 path is keyed by the server URL's **host and port** and by the worker **name**, so a changed URL, a
 changed name, or a service account with a different `HOME` reads an empty directory (§6's
-`ZENKINS_DATA_DIR`).
+`ZENKINS_DATA_DIR`). [`docs/worker-registration.md`](worker-registration.md) §11 maps every log line
+to its cause and fix.
 
 **A published server started by hand answers 500 for `/_framework/…` and `/_content/…`.** You ran
 an apphost out of a half-copied folder. The Server is a folder artifact: ship `wwwroot/` and the

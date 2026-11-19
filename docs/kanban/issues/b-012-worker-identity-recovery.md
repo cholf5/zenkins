@@ -14,7 +14,7 @@ blocked: none
 
 A Worker that restarts always comes back. If the Server still accepts its persisted credential, the
 restart is a no-op; if the Server no longer does, and the operator supplied a registration token, the
-Worker registers again and keeps its name (and therefore its row, history and queue) instead of
+Worker registers again and keeps its name (and therefore its row and history) instead of
 looping on 401 forever. With no registration token, the one stderr line names the exact file and the
 exact fix.
 
@@ -74,7 +74,9 @@ Worker has a correct recovery move available the moment the Server gives a defin
       means).
 - [x] Tests: `WorkerIdentityRecoveryTests` (four cases: restart heal, no-token guidance, no needless
       replacement, running heal).
-- [x] Docs: `docs/install.md` §6 + §10, `CHANGELOG.md`.
+- [x] Docs: a reference page `docs/worker-registration.md` (the two credentials, the store's path
+      scheme, first registration, restarts, every re-registration case, troubleshooting by log line),
+      linked from `README.md`, and `docs/install.md` §3.5 + §6 + §10, `CHANGELOG.md`.
 
 ## Dependencies
 

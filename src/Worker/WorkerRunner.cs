@@ -20,7 +20,7 @@ namespace Zenkins.Worker;
 /// the token authenticates. A token the Server no longer knows (its data was replaced or restored,
 /// or an Owner revoked it) is not survivable by waiting, but it is recoverable: with a registration
 /// token in the environment the worker registers again and keeps the same name (and therefore the
-/// same row, history and queue) instead of dying behind a 401 until an operator finds a file to
+/// same row and history) instead of dying behind a 401 until an operator finds a file to
 /// delete. <see cref="WorkerCredential"/> is what every loop reads, so the replacement reaches them
 /// without a restart.
 /// </para>

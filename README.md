@@ -43,6 +43,9 @@ The Server never executes builds. Workers connect outbound to the Server, pull j
 - [Development setup](docs/development.md) — clone, build, run, configure, troubleshoot
 - [Installation and upgrade guide](docs/install.md) — deploy the published binaries as a service on
   Windows, Linux or macOS, configure, upgrade with data intact, uninstall
+- [Worker registration and identity](docs/worker-registration.md) — the two tokens, where the
+  credential lives, first registration, restarts, and how a Worker recovers a credential the Server
+  no longer accepts
 - [Lua runtime contract](docs/lua-runtime.md) — engine, sandbox surface, execution model, fixtures
 - [API v1](docs/api-v1.md) — scoped organization tokens, the trigger/read/tail/cancel routes, and the
   refusal shapes a script sees
@@ -80,6 +83,7 @@ docs/
   prd.md                 # product requirements
   development.md         # developer setup guide
   install.md             # install, upgrade and uninstall guide (published artifacts)
+  worker-registration.md # Worker identity: tokens, first registration, restart, recovery
   lua-runtime.md         # Lua engine, sandbox and execution contract
   kanban/                # roadmap, board, issue cards, templates
 src/                     # .NET projects (Server, Shared, Worker)
