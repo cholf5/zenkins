@@ -152,7 +152,7 @@
                                 <div class="bb:min-w-0">
                                     <p class="bb:font-medium">
                                         <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", run.Number]</a>
-                                        <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
+                                        <span class="bb:ms-2 bb:font-normal bb:text-muted-foreground">
                                             <a href="/projects/@run.ProjectId">@run.ProjectName</a> · @run.GitBranch
                                         </span>
                                         @* F-028: the project's trigger brake, next to its name, so a run
@@ -206,7 +206,7 @@
                                 <div class="bb:min-w-0">
                                     <p class="bb:text-sm bb:font-medium">
                                         <a href="/projects/@failure.ProjectId/runs/@failure.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", failure.Number]</a>
-                                        <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">@failure.ProjectName · @failure.GitBranch</span>
+                                        <span class="bb:ms-2 bb:font-normal bb:text-muted-foreground">@failure.ProjectName · @failure.GitBranch</span>
                                     </p>
                                     <p class="bb:text-xs bb:text-muted-foreground">
                                         @(failure.FailureReason ?? L10n["exit code {0}", failure.ExitCode])

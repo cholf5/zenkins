@@ -255,7 +255,7 @@
                                     <span class="bb:font-medium" id="project-last-probe-outcome">@_project.LastProbeOutcome</span>
                                     @if (_project.LastProbeAt is { } probedAt)
                                     {
-                                        <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@probedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                                        <span class="bb:ms-2 bb:text-xs bb:text-muted-foreground">@probedAt.ToString("yyyy-MM-dd HH:mm") UTC</span>
                                     }
                                     @if (_project.LastProbeMessage is { } probeMessage)
                                     {
@@ -289,7 +289,7 @@
                         <div class="bb:min-w-0">
                             <p class="bb:font-medium">
                                 <a href="/projects/@run.ProjectId/runs/@run.Number" class="bb:underline bb:underline-offset-4">@L10n["Run #{0}", run.Number]</a>
-                                <span class="bb:ml-2 bb:font-normal bb:text-muted-foreground">
+                                <span class="bb:ms-2 bb:font-normal bb:text-muted-foreground">
                                     @run.GitBranch · @run.PipelinePath
                                 </span>
                             </p>
@@ -450,7 +450,7 @@
                                     @parameter.Name
                                     @if (parameter.Description is { } description)
                                     {
-                                        <span class="bb:ml-2 bb:font-normal bb:text-xs bb:text-muted-foreground">@description</span>
+                                        <span class="bb:ms-2 bb:font-normal bb:text-xs bb:text-muted-foreground">@description</span>
                                     }
                                 </label>
                                 @if (parameter.Type == ProjectParameterTypes.Boolean)

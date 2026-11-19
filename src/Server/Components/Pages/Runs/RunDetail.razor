@@ -470,15 +470,15 @@
                                                 @if (link.DownstreamRunId is { } downstreamRunId)
                                                 {
                                                     <a href="@($"/runs/{downstreamRunId}")"
-                                                       class="bb:ml-1 bb:underline bb:underline-offset-4">@(link.DownstreamRunNumber is { } downstreamNumber ? $"#{downstreamNumber}" : L10n["run"])</a>
+                                                       class="bb:ms-1 bb:underline bb:underline-offset-4">@(link.DownstreamRunNumber is { } downstreamNumber ? $"#{downstreamNumber}" : L10n["run"])</a>
                                                 }
                                                 else
                                                 {
-                                                    <span class="bb:ml-1 bb:font-mono">@link.Outcome</span>
+                                                    <span class="bb:ms-1 bb:font-mono">@link.Outcome</span>
                                                 }
                                                 @if (link.Reason is { } linkReason)
                                                 {
-                                                    <span class="bb:ml-1 bb:text-xs bb:text-muted-foreground">@linkReason</span>
+                                                    <span class="bb:ms-1 bb:text-xs bb:text-muted-foreground">@linkReason</span>
                                                 }
                                             </li>
                                         }
@@ -513,7 +513,7 @@
                                     @name
                                     @if (typed is not null)
                                     {
-                                        <span class="bb:ml-1 bb:font-normal">(@ParameterTypeLabel(typed.Type))</span>
+                                        <span class="bb:ms-1 bb:font-normal">(@ParameterTypeLabel(typed.Type))</span>
                                     }
                                 </dt>
                                 @if (typed is not null && typed.Type == ProjectParameterTypes.Password)
@@ -535,7 +535,7 @@
                                         }
                                         @if (typed.Commit is { Length: >= 7 } commit)
                                         {
-                                            <span class="bb:ml-2 bb:text-xs bb:text-muted-foreground">@commit[..7]</span>
+                                            <span class="bb:ms-2 bb:text-xs bb:text-muted-foreground">@commit[..7]</span>
                                         }
                                     </dd>
                                 }

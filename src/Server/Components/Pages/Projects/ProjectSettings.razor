@@ -712,7 +712,7 @@
                         <p class="bb:text-sm bb:font-medium">@L10n["Next runs for {0} in {1}", PreviewCron, PreviewZone]</p>
                         @if (preview.IsValid)
                         {
-                            <ul class="bb:mt-2 bb:list-disc bb:space-y-1 bb:pl-5 bb:text-sm">
+                            <ul class="bb:mt-2 bb:list-disc bb:space-y-1 bb:ps-5 bb:text-sm">
                                 @foreach (var due in preview.DueTimes)
                                 {
                                     <li>
@@ -1092,11 +1092,11 @@
                         <div class="bb:overflow-x-auto">
                             <table class="bb:w-full bb:text-sm">
                                 <thead>
-                                    <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Receiver"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Events"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["State"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Last delivery"]</th>
+                                    <tr class="bb:border-b bb:text-start bb:text-muted-foreground">
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Receiver"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Events"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["State"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Last delivery"]</th>
                                         <th class="bb:py-2 bb:font-medium">@L10n["Manage"]</th>
                                     </tr>
                                 </thead>
@@ -1104,7 +1104,7 @@
                                     @foreach (var endpoint in _notificationEndpoints)
                                     {
                                         <tr class="bb:border-b bb:align-top" data-notification-endpoint="@endpoint.Id">
-                                            <td class="bb:max-w-xs bb:py-3 bb:pr-4">
+                                            <td class="bb:max-w-xs bb:py-3 bb:pe-4">
                                                 <span class="bb:break-all">@endpoint.Url</span>
                                                 @if (endpoint.AllowInsecureHttp)
                                                 {
@@ -1113,11 +1113,11 @@
                                                     </p>
                                                 }
                                             </td>
-                                            <td class="bb:py-3 bb:pr-4" data-notification-events="@endpoint.Events">@endpoint.Events</td>
-                                            <td class="bb:py-3 bb:pr-4" data-notification-state="@(endpoint.Enabled ? "enabled" : "disabled")">
+                                            <td class="bb:py-3 bb:pe-4" data-notification-events="@endpoint.Events">@endpoint.Events</td>
+                                            <td class="bb:py-3 bb:pe-4" data-notification-state="@(endpoint.Enabled ? "enabled" : "disabled")">
                                                 @(endpoint.Enabled ? L10n["Enabled"] : L10n["Disabled"])
                                             </td>
-                                            <td class="bb:py-3 bb:pr-4" data-notification-last="@endpoint.LastOutcome">
+                                            <td class="bb:py-3 bb:pe-4" data-notification-last="@endpoint.LastOutcome">
                                                 @if (endpoint.LastDeliveryAt is { } deliveredAt)
                                                 {
                                                     <p>@deliveredAt.ToString("yyyy-MM-dd HH:mm") UTC · @(endpoint.LastOutcome ?? "-")</p>
@@ -1445,13 +1445,13 @@
                         <div class="bb:mt-6 bb:overflow-x-auto">
                             <table class="bb:w-full bb:text-sm">
                                 <thead>
-                                    <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Name"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Kind"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Created"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Rotated"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Updated"]</th>
-                                        <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Used by"]</th>
+                                    <tr class="bb:border-b bb:text-start bb:text-muted-foreground">
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Name"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Kind"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Created"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Rotated"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Updated"]</th>
+                                        <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Used by"]</th>
                                         <th class="bb:py-2 bb:font-medium">@L10n["Manage"]</th>
                                     </tr>
                                 </thead>
@@ -1459,16 +1459,16 @@
                                     @foreach (var credential in _credentials)
                                     {
                                         <tr class="bb:border-b bb:align-middle" data-credential-id="@credential.Id">
-                                            <td class="bb:py-3 bb:pr-4 bb:font-medium">@credential.Name</td>
-                                            <td class="bb:py-3 bb:pr-4">@credential.Kind</td>
-                                            <td class="bb:py-3 bb:pr-4">@credential.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
-                                            <td class="bb:py-3 bb:pr-4">
+                                            <td class="bb:py-3 bb:pe-4 bb:font-medium">@credential.Name</td>
+                                            <td class="bb:py-3 bb:pe-4">@credential.Kind</td>
+                                            <td class="bb:py-3 bb:pe-4">@credential.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                            <td class="bb:py-3 bb:pe-4">
                                                 @(credential.RotatedAt is { } rotatedAt
                                                     ? rotatedAt.ToString("yyyy-MM-dd HH:mm") + " UTC"
                                                     : L10n["Never"])
                                             </td>
-                                            <td class="bb:py-3 bb:pr-4">@credential.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
-                                            <td class="bb:py-3 bb:pr-4" data-credential-used-by="@credential.Id">
+                                            <td class="bb:py-3 bb:pe-4">@credential.UpdatedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                            <td class="bb:py-3 bb:pe-4" data-credential-used-by="@credential.Id">
                                                 @if (UsedBy(credential) is { Count: > 0 } users)
                                                 {
                                                     <span class="bb:break-all">@string.Join(", ", users.Select(project => project.Name))</span>

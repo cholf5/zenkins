@@ -25,6 +25,10 @@
     <link rel="stylesheet" href="styles/theme.css" />
     <!-- Pre-built BlazorBlueprint CSS shipped as a static web asset by the NuGet package. -->
     <link rel="stylesheet" href="_content/BlazorBlueprint.Components/blazorblueprint.css" />
+    <!-- The `bb:` utilities the app uses that the purged package sheet does not ship. Extends the
+         line above rather than the theme, so it sits next to it; UtilityCoverageTests holds the two
+         files to one list. -->
+    <link rel="stylesheet" href="styles/utilities.css" />
     <!-- The base/primary color palettes (D-007): keyed off the data-base-color / data-primary-color
          attributes ThemeService writes on <html>. Not part of blazorblueprint.css; without this
          stylesheet an accent picked in the theme switcher would never render. Unlayered with

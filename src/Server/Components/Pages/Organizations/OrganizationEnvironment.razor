@@ -120,10 +120,10 @@
                     <div class="bb:overflow-x-auto">
                         <table class="bb:w-full bb:text-sm">
                             <thead>
-                                <tr class="bb:border-b bb:text-left bb:text-muted-foreground">
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Name"]</th>
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Value"]</th>
-                                    <th class="bb:py-2 bb:pr-4 bb:font-medium">@L10n["Updated"]</th>
+                                <tr class="bb:border-b bb:text-start bb:text-muted-foreground">
+                                    <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Name"]</th>
+                                    <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Value"]</th>
+                                    <th class="bb:py-2 bb:pe-4 bb:font-medium">@L10n["Updated"]</th>
                                     @if (_canManage)
                                     {
                                         <th class="bb:py-2 bb:font-medium">@L10n["Manage"]</th>
@@ -134,10 +134,10 @@
                                 @foreach (var variable in _variables)
                                 {
                                     <tr class="bb:border-b bb:align-top">
-                                        <td class="bb:py-3 bb:pr-4 bb:font-medium bb:font-mono">@variable.Name</td>
+                                        <td class="bb:py-3 bb:pe-4 bb:font-medium bb:font-mono">@variable.Name</td>
                                         <td id="@($"environment-value-{variable.Name}")"
-                                            class="bb:py-3 bb:pr-4 bb:whitespace-pre-wrap bb:break-all bb:font-mono">@variable.Value</td>
-                                        <td class="bb:py-3 bb:pr-4">@L10n["{0} UTC", variable.UpdatedAt.ToString("yyyy-MM-dd HH:mm")]</td>
+                                            class="bb:py-3 bb:pe-4 bb:whitespace-pre-wrap bb:break-all bb:font-mono">@variable.Value</td>
+                                        <td class="bb:py-3 bb:pe-4">@L10n["{0} UTC", variable.UpdatedAt.ToString("yyyy-MM-dd HH:mm")]</td>
                                         @if (_canManage)
                                         {
                                             <td class="bb:py-3">
