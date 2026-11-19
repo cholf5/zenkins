@@ -144,10 +144,15 @@ Expected:
 ### TC-005: The race
 
 Steps:
-1. Two clients POST `/setup/owner` concurrently.
+1. Complete setup through one client, then submit the same form again (a second browser that still
+   had it open) - through the service, the way a lost race reaches it.
 
 Expected:
-- Exactly one organization and one marker; at most one client is signed in as its Owner.
+- Exactly one organization and one marker; the late submission is refused by name and writes no
+  account. The marker's primary key as the race guard is pinned by
+  `BootstrapTests.Bootstrap_guard_lets_exactly_one_of_two_concurrent_attempts_create_the_organization`
+  (Category=Auth), which was not changed by this card: an HTTP-level two-client POST race on SQLite
+  would be testing the provider's writer lock, not this feature.
 
 ## Development Log
 
