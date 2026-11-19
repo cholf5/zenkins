@@ -97,25 +97,28 @@
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Default">@L10n["Save folder"]</BbButton>
                     </form>
 
-                    <form method="post" action="@($"/folders/{FolderId}/move")" data-zenkins-antiforgery
-                          class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row bb:sm:items-end">
+                    <form method="post" action="@($"/folders/{FolderId}/move")" data-zenkins-antiforgery data-field-row
+                          class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row">
                         <div class="bb:flex-1 bb:space-y-2">
                             <label for="folder-move" class="bb:text-sm bb:font-medium">@L10n["Move under"]</label>
                             <select id="folder-move"
                                     name="ParentFolderId"
-                                    class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                                    class="bb:flex bb:h-10 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
                                 <option value="" selected="@(_listing.CurrentFolder?.ParentFolderId is null)">@L10n["Root (top level)"]</option>
                                 @foreach (var option in _options)
                                 {
                                     <option value="@option.Id" selected="@(_listing.CurrentFolder?.ParentFolderId == option.Id)">@option.Path</option>
                                 }
                             </select>
-                            <p class="bb:text-xs bb:text-muted-foreground">
-                                @L10n["A folder cannot be moved inside itself or one of its subfolders, and the whole subtree must still fit within {0} levels.", FolderValidation.MaxDepth]
-                            </p>
                         </div>
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Outline">@L10n["Move folder"]</BbButton>
                     </form>
+                    @* The constraint belongs to the form, not to the field column: inside the column
+                       it was the tallest thing in the row, so a bottom-aligned submit button lined up
+                       with this paragraph instead of with the select. *@
+                    <p class="bb:text-xs bb:text-muted-foreground">
+                        @L10n["A folder cannot be moved inside itself or one of its subfolders, and the whole subtree must still fit within {0} levels.", FolderValidation.MaxDepth]
+                    </p>
 
                     <form method="post" action="@($"/folders/{FolderId}/delete")" data-zenkins-antiforgery>
                         <BbButton Type="ButtonType.Submit" Variant="ButtonVariant.Destructive">@L10n["Delete folder"]</BbButton>

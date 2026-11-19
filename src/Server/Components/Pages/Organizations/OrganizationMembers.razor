@@ -45,14 +45,14 @@
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
-                    <form method="post" action="/organizations/members/invite" data-zenkins-antiforgery class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row bb:sm:items-end">
+                    <form method="post" action="/organizations/members/invite" data-zenkins-antiforgery data-field-row class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row">
                         <div class="bb:flex-1 bb:space-y-2">
                             <label for="invite-email" class="bb:text-sm bb:font-medium">@L10n["Email address"]</label>
                             <input id="invite-email"
                                    name="Email"
                                    type="email"
                                    required
-                                   class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                   class="bb:flex bb:h-10 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                                    autocomplete="off"
                                    placeholder="teammate@example.com" />
                         </div>

@@ -25,3 +25,17 @@ html.dark {
   font-size: 0.875rem;
   line-height: 1.25rem;
 }
+
+/* A row of labelled fields with a submit button at its end ([data-field-row]).
+   The markup used to say `bb:sm:items-end`, which looks like Tailwind but is not one of the
+   responsive utilities the package ships - it builds only the `sm:` variants its own components
+   use (flex, grid-cols-2/3, self-center, ...) - so that class was a no-op and the row ran
+   `align-items: normal`. A button with no label above it then sat 24px higher than the inputs it
+   submits: next to their labels instead of beside them.
+   These rules are layout, not theme: nothing here restates a themable value, and 40rem is the
+   breakpoint the package's own `bb:sm:*` utilities use. */
+@media (min-width: 40rem) {
+  [data-field-row] {
+    align-items: flex-end;
+  }
+}

@@ -64,7 +64,7 @@
                     </BbCardDescription>
                 </BbCardHeader>
                 <BbCardContent>
-                    <form method="post" action="/organizations/environment/create" data-zenkins-antiforgery class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row bb:sm:items-end">
+                    <form method="post" action="/organizations/environment/create" data-zenkins-antiforgery data-field-row class="bb:flex bb:flex-col bb:gap-3 bb:sm:flex-row">
                         <div class="bb:flex-1 bb:space-y-2">
                             <label for="environment-name" class="bb:text-sm bb:font-medium">@L10n["Name"]</label>
                             <input id="environment-name"
@@ -74,7 +74,7 @@
                                    maxlength="@OrganizationEnvironmentValidation.MaxNameLength"
                                    pattern="[A-Za-z_][A-Za-z0-9_]*"
                                    value="@SubmittedName"
-                                   class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                   class="bb:flex bb:h-10 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                                    autocomplete="off"
                                    spellcheck="false"
                                    placeholder="REGISTRY_HOST" />
@@ -85,7 +85,7 @@
                                    name="Value"
                                    type="text"
                                    required
-                                   class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
+                                   class="bb:flex bb:h-10 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm"
                                    autocomplete="off"
                                    spellcheck="false"
                                    placeholder="registry.internal" />

@@ -41,7 +41,7 @@
     }
 </div>
 
-<form method="get" action="@SearchPath" data-folder-search class="bb:flex bb:flex-col bb:gap-2 bb:sm:flex-row bb:sm:items-end">
+<form method="get" action="@SearchPath" data-folder-search data-field-row class="bb:flex bb:flex-col bb:gap-2 bb:sm:flex-row">
     @if (Listing.FolderId is { } currentId)
     {
         <input type="hidden" name="folder" value="@currentId" />
@@ -55,13 +55,13 @@
                autocomplete="off"
                spellcheck="false"
                placeholder="@L10n["name contains…"]"
-               class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
+               class="bb:flex bb:h-10 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm" />
     </div>
     <div class="bb:space-y-2">
         <label for="folder-search-scope" class="bb:text-sm bb:font-medium">@L10n["Scope"]</label>
         <select id="folder-search-scope"
                 name="scope"
-                class="bb:flex bb:h-9 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
+                class="bb:flex bb:h-10 bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:text-sm">
             <option value="here" selected="@(!Listing.Everywhere)">@L10n["This folder and everything under it"]</option>
             <option value="all" selected="@(Listing.Everywhere)">@L10n["Everywhere in the organization"]</option>
         </select>
