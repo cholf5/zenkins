@@ -5,7 +5,8 @@ running Zenkins deployment — install, configure, run as a service, register a 
 build, upgrade with data intact, and uninstall — on macOS, Linux and Windows.
 
 > **Verified on:** macOS 26.5 (arm64) on **2026-11-14**. Every command in §3 (macOS) was executed in
-> the order printed there against the artifacts of `scripts/publish.sh osx-arm64`, including the
+> the order printed there against the artifacts of `scripts/publish.sh osx-arm64` (that script has
+> since been rewritten as `scripts/publish.py`; the matrix it produces is unchanged), including the
 > upgrade rehearsal (§3.8) and the uninstall (§3.9); quoted outputs are what those runs produced.
 > §4 (Linux) and §5 (Windows) are **static walkthroughs of the delivered packaging only — none of
 > their commands was executed**, neither on that macOS verification machine nor on the Windows
@@ -39,7 +40,7 @@ machine that only *runs* Zenkins needs the SDK, a runtime, Docker, Node.js or a 
 | **Server** | folder (`Zenkins.Server` apphost + `wwwroot/` + libraries) | `osx-arm64`, `linux-x64`, `win-x64` | The web application. A folder by design: Blazor Server ships static web assets, so there is **no single-file Server** (and no AOT Server — [`docs/native-aot.md`](native-aot.md) §6 records that verdict). |
 | **Worker** | folder (`Zenkins.Worker` apphost + libraries) | the same three | Runs builds. |
 | **Worker (single-file)** | one executable, `Zenkins.Worker` | the same three | The build-machine drop: one file, no folder. |
-| **Worker (NativeAOT)** | one native executable | produced per OS on that OS | Optional, faster-starting variant (`--worker-aot` in `scripts/publish.sh`); `osx-arm64` is verified, win-x64/linux-x64 carry analyzer-build evidence only — see [`docs/native-aot.md`](native-aot.md) §7. |
+| **Worker (NativeAOT)** | one native executable | produced per OS on that OS | Optional, faster-starting variant (`--aot` in `scripts/publish.py`); `osx-arm64` is verified, win-x64/linux-x64 carry analyzer-build evidence only — see [`docs/native-aot.md`](native-aot.md) §7. |
 
 What does **not** exist, so no step of this guide invents it: no `zenkins` CLI, no application-level
 `--port` argument (the port is configuration, `ASPNETCORE_URLS`, set by each service template), no
@@ -47,15 +48,16 @@ service template for the Worker (the Worker runs as a plain process; §6), and n
 Server. The one application-level flag either binary understands is `--version`
 (*Finding the version* below, card P-001).
 
-**Where the artifacts come from.** A release bundle — the output of `scripts/publish.sh` produced on
+**Where the artifacts come from.** A release bundle — the output of `scripts/publish.py` produced on
 a machine that *does* have the .NET 10 SDK (the only machine in the story that needs one; for AOT it
-additionally needs that OS's native toolchain). The script is bash; §5 gives the equivalent
-`dotnet publish` commands for a Windows publishing machine. Copy the artifact folders to the target
+additionally needs that OS's native toolchain). The script is Python (standard library only, 3.9+),
+so it runs as-is on all three platforms; §5 also gives the equivalent `dotnet publish` commands
+for anyone who would rather type them. Copy the artifact folders to the target
 machine with **`tar`, not zip** — zip does not preserve the executable bit on the apphosts:
 
 ```bash
 # on the publishing machine (repo checkout with the SDK)
-scripts/publish.sh osx-arm64                       # or: linux-x64 / win-x64 / all three
+scripts/publish.py osx-arm64                       # or: linux-x64 / win-x64 / all three
 tar -C artifacts/publish -czf zenkins-osx-arm64.tar.gz osx-arm64/Server osx-arm64/WorkerSingleFile
 ```
 
@@ -886,7 +888,7 @@ quoted in that section, so a future run can compare row by row.
 
 | # | Section | Command block | Observed |
 |---|---|---|---|
-| 1 | §1 | `scripts/publish.sh osx-arm64` on the publishing Mac | `Server/`, `Worker/`, `WorkerSingleFile/` under `artifacts/publish/osx-arm64`; any warning would have failed the publish |
+| 1 | §1 | `scripts/publish.py osx-arm64` on the publishing Mac | `Server/`, `Worker/`, `WorkerSingleFile/` under `artifacts/publish/osx-arm64`; any warning would have failed the publish |
 | 2 | §1 | `tar` bundle → `tar` unpack → `mv` → `chmod +x` | Server runnable from `~/zenkins/server` |
 | 3 | §3.2 | `install-launchd.sh install ~/zenkins/server 5000` | `installed: com.zenkins.server (…, port 5000) - data lives in …/App_Data` |
 | 4 | §3.2 | `install-launchd.sh status` | `state = running`, `pid = 27897`, `program = …/Zenkins.Server` |

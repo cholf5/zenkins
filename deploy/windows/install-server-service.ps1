@@ -68,7 +68,7 @@ if (-not $InstallDir) {
 
 $Exe = Join-Path $InstallDir "Zenkins.Server.exe"
 if (-not (Test-Path $Exe)) {
-    Write-Error "error: $Exe not found - publish first (scripts/publish.sh, win-x64 row)"
+    Write-Error "error: $Exe not found - publish first (scripts/publish.py, win-x64 row)"
     exit 1
 }
 

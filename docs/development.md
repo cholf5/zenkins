@@ -274,12 +274,21 @@ Not needed, and not merely optional: the UI ships pre-built CSS in the `BlazorBl
 packages (`Directory.Packages.props`), so there is no Node/Tailwind build step, and the default
 database is a single SQLite file created on first run.
 
-One extra prerequisite exists for **one suite only**: `Category=PublishAot` (I-004) publishes the
-Worker as NativeAOT, which needs the OS's native toolchain on the publishing machine — macOS: Xcode
-Command Line Tools; Windows: the Visual Studio C++ workload; Linux: clang plus zlib development
-headers. Nothing else in this guide needs it (`dotnet build` runs the AOT analyzers without any
-native toolchain, and .NET does not cross-compile AOT for another OS — each OS publishes its own
-RID). See [`docs/native-aot.md`](native-aot.md) for the decision and its evidence.
+The repository's scripts need **Python 3.9 or newer** and nothing else: standard library only, no
+packages to install, no virtualenv. `dotnet build` and `dotnet test` by hand need no Python at all -
+it is `scripts/verify.py`, `scripts/publish.py` and `scripts/suite_duration.py` that do. macOS ships
+`python3`; Windows: `py -3` from python.org or the Microsoft Store; Linux distributions ship
+`python3`.
+
+One extra prerequisite is the OS's **native toolchain** — macOS: Xcode Command Line Tools; Windows:
+the Visual Studio C++ workload; Linux: clang plus zlib development headers. `Category=PublishAot`
+(I-004) needs it to publish the Worker as NativeAOT, and nothing else in the test suite does
+(`dotnet build` runs the AOT analyzers without any native toolchain, and .NET does not
+cross-compile AOT for another OS — each OS publishes its own RID); see
+[`docs/native-aot.md`](native-aot.md) for the decision and its evidence. On macOS it is also what
+provides the scripts' `python3` — the system `python3` shim refuses to run without the CLT — so a
+macOS machine without the CLT can still `dotnet build` and `dotnet test` by hand but cannot run
+`scripts/verify.py`.
 
 A second named prerequisite exists for **one suite only**: `Category=GitSshd` (Q-009) runs a real
 OpenSSH server as a user process to verify the SSH clone path end to end, so it needs the machine's
@@ -352,14 +361,14 @@ also excludes `Category=Load`); everything is that count plus the five slow cate
 the count, re-baseline here in the same breath rather than leaving the next reader to notice - that is what
 went wrong twice, and what the count-drift cards kept rediscovering.
 
-### Reading a run: `scripts/suite-duration.sh`
+### Reading a run: `scripts/suite_duration.py`
 
 One run is enough to tell where the time went - that is what the script is for, and it replaces eyeballing
 three logs side by side:
 
 ```bash
 dotnet test -c Release --no-build --output detailed > /tmp/fast.log
-scripts/suite-duration.sh /tmp/fast.log 10
+scripts/suite_duration.py /tmp/fast.log 10
 ```
 
 It prints the summary block, the slowest areas with their share of **summed test time** (the label says so,
@@ -368,9 +377,9 @@ slowest single tests. Per-test timings only exist under `--output detailed` - th
 Microsoft.Testing.Platform, so `--logger "console;verbosity=detailed"` is rejected with exit 5 - and if the
 log has none the script says so and exits non-zero instead of printing zeros.
 
-### Six suites: the fast one, and five acceptance harnesses
+### Seven suites: the fast one, and six acceptance harnesses
 
-The test project has five deliberately slow categories, and all of them are acceptance harnesses
+The test project has six deliberately slow categories, and all of them are acceptance harnesses
 that prove the product end to end instead of proving its parts:
 
 - **`Category=Milestone`** (Q-002) starts a real Server process, a real Worker process, a real Git
@@ -436,22 +445,28 @@ that prove the product end to end instead of proving its parts:
   be in the fast filter's exclusion list for exactly this reason: the retry is unreachable on SQLite,
   where every write serializes.
 
-None of the harnesses is part of the fast loop, so the fast filter has to exclude **six**
-categories. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix
+None of the harnesses is part of the fast loop, so the fast filter has to exclude **seven**
+categories - the six harnesses plus `Category=Load`, a single load-sensitive timing fact that would
+make the fast loop's own timings meaningless. The runner accepts the `&`-joined exclusions - verified on 2026-11-14 (I-003's fix
 round for the triple, I-004 for the quadruple), on 2026-11-15 (Q-009 for the quintuple) and on
 2026-11-16 (F-029 for the sextuple): the sextuple exclusion runs green, and dropping
 `Category!=GitSshd` alone pulls the sshd suite in (dropping `Category!=Postgres` pulls that suite
 in, where it skips without `ZENKINS_TEST_POSTGRES`).
 
-**One command for the whole gate: [`scripts/verify.sh`](../scripts/verify.sh)** (card P-001). The
+**One command for the whole gate: [`scripts/verify.py`](../scripts/verify.py)** (card P-001). The
 script runs exactly the commands below, in this order - `dotnet build -c Release`, the fast suite
-with its sextuple exclusion filter, then one filtered run per harness - and exits non-zero at the
+with its seven-clause exclusion filter, then one filtered run per harness - and exits non-zero at the
 first red suite, naming it in its output; nothing after a red suite runs. §2 stays the written gate
 (the prerequisites, what each harness needs, the counts per suite) and the script is its executable
-form: the filters below are the text the script runs, and the two change together. On Windows, run
-the script under Git Bash (Git for Windows ships one) - that is also how the CI workflow
-([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs it on every runner, so there is
-deliberately no second PowerShell transcript of the gate to drift against.
+form: the filters below are the text the script runs, and the two change together -
+`scripts/tests/test_gate.py` reads this file and fails if the filter string here and the one the
+script runs differ. It is one Python file for all three OSes, so the CI workflow
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs it on every runner with
+`python scripts/verify.py` and there is no second PowerShell or bash transcript of the gate to drift
+against; a second workflow (`.github/workflows/tooling.yml`) runs the tooling's own tests with no
+path filter, because this document's §2 and `native-aot.md` §8 are inputs of their filter check. `scripts/verify.py --list` prints the same commands without running them, which is the
+quickest way to see what the gate would do on a machine that is still missing a harness's
+prerequisite.
 
 ```bash
 dotnet build -c Release                                                                                                        # the harnesses run the built binaries
@@ -475,7 +490,7 @@ dotnet test -c Release --filter "Category=Postgres"                             
 | Postgres | `Category=Postgres` | the same as Milestone, plus a disposable PostgreSQL server named by `ZENKINS_TEST_POSTGRES` (its `public` schema is dropped and recreated); without the variable the facts skip with the recorded reason | ~20 s warm, plus the migration runs on a fresh schema (9 tests) |
 
 **The acceptance gate is the per-suite runs**: the fast suite green plus each harness green in its
-own filtered run - `scripts/verify.sh` runs them all in one command (P-001). `dotnet test` with no
+own filtered run - `scripts/verify.py` runs them all in one command (P-001). `dotnet test` with no
 filter runs **everything** (1712 on the tree that carries F-035, by the arithmetic above) but
 is *not* the gate: it executes everything in one process, and the publish smokes' self-contained
 and AOT publishes load the machine while the process-sensitive harnesses run - that combined
@@ -1060,11 +1075,14 @@ environment variables — the service templates in `deploy/` do exactly that (th
 the systemd unit pin `WorkingDirectory`; the Windows service sets a per-service environment, and
 its header documents why appsettings.json is unreliable there).
 
-The supported way to produce publish output is the I-003 matrix, `scripts/publish.sh`
+The supported way to produce publish output is the I-003 matrix, `scripts/publish.py`
 (win-x64 / linux-x64 / osx-arm64; Server as a folder, Worker as a folder plus a single-file
-variant), with install/uninstall packaging per OS under `deploy/`. The operator-facing side of that
-packaging — install as a service, configure, upgrade with data intact, uninstall, and which of those
-steps were actually executed on each OS — is [`install.md`](install.md).
+variant), with install/uninstall packaging per OS under `deploy/`. Run it with no arguments on a
+terminal and it asks what to publish - which platform(s) and architecture(s), whether the publish is
+self-contained, whether the Worker's single-file and NativeAOT variants are wanted - then prints the
+commands it would run before running them; `--dry-run` prints that plan and stops. The
+operator-facing side of that packaging — install as a service, configure, upgrade with data intact,
+uninstall, and which of those steps were actually executed on each OS — is [`install.md`](install.md).
 
 Production does not migrate on startup, so that database starts empty — and
 `dotnet ef database update --project src/Server` on its own does **not** fill it: the design-time

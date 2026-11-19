@@ -28,7 +28,7 @@ case "${1:-}" in
     home="$(cd "$home" && pwd)"
 
     [ -x "$home/Zenkins.Server" ] || {
-      echo "error: $home/Zenkins.Server is not executable - publish first (scripts/publish.sh)" >&2
+      echo "error: $home/Zenkins.Server is not executable - publish first (scripts/publish.py)" >&2
       exit 1
     }
 

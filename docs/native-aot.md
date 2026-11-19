@@ -21,7 +21,7 @@ refers to; `docs/lua-runtime.md` §8.1 carries the MoonSharp-specific findings.
 | Worker | `<PublishAot>true</PublishAot>` — in the csproj, not only on the publish command line, so the AOT/trim/single-file analyzers run on every `dotnet build` and warnings-as-errors fails at the analyzer level | `src/Worker/Zenkins.Worker.csproj` |
 | Shared | `<IsAotCompatible>true</IsAotCompatible>` — the same analyzer surface for the assembly the Worker and the Server both consume | `src/Shared/Zenkins.Shared.csproj` |
 | Server | **No AOT attempt.** Verdict recorded in §6; its packaging stays I-003's JIT self-contained publish | — |
-| JIT matrix | Unchanged behaviour: the JIT rows pass `-p:PublishAot=false` explicitly so they cannot drift with the Worker's csproj default; `scripts/publish.sh --worker-aot` adds the AOT variant per RID | `scripts/publish.sh` |
+| JIT matrix | Unchanged behaviour: the JIT rows pass `-p:PublishAot=false` explicitly so they cannot drift with the Worker's csproj default; `scripts/publish.py --aot` (or the `--worker-aot` spelling it still accepts) adds the AOT variant for the host RID | `scripts/publish.py`, `scripts/zt/dotnet.py` |
 
 The one `NoWarn` in the solution (`IL2104;IL3053`, MoonSharp's trim/AOT aggregates) lives in the
 Worker csproj with its justification written at the site; `WorkerAotGuardTests` pins it to exactly
@@ -188,11 +188,11 @@ machines — every IL2xxx/IL3050 hit is a build failure everywhere, before any p
 
 ```bash
 dotnet build -c Release                                                                          # analyzers on, 0 warnings
-dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot"  # fast suite
+dotnet test -c Release --filter "Category!=Milestone&Category!=Recovery&Category!=PublishSmoke&Category!=PublishAot&Category!=GitSshd&Category!=Postgres&Category!=Load"  # fast suite
 dotnet test -c Release --filter "Category=Milestone"                                             # acceptance harness
 dotnet test -c Release --filter "Category=Recovery"                                              # acceptance harness
 dotnet test -c Release --filter "Category=PublishSmoke"                                          # I-003 JIT packaging
 dotnet test -c Release --filter "Category=PublishAot"                                            # I-004 AOT suite (needs the native toolchain)
 dotnet publish src/Worker/Zenkins.Worker.csproj -c Release -r osx-arm64                          # the AOT artifact, 0 warnings
-scripts/publish.sh --worker-aot osx-arm64                                                        # the matrix with the AOT variant
+scripts/publish.py --aot osx-arm64                                                               # the matrix with the AOT variant
 ```

@@ -1,0 +1,50 @@
+# The tooling's own tests, on every push and pull request - no path filter.
+#
+# Why this workflow exists separately from ci.yml: ci.yml deliberately skips docs-only
+# commits (docs/**, **/*.md), and that filter is right for the gate - no markdown in this
+# repository is a build input. Two files are exceptions: scripts/tests/test_gate.py reads
+# docs/development.md (§2) and docs/native-aot.md (§8) and fails when a filter they print
+# and the one the gate runs differ, which makes both documents inputs of a test. A docs-only PR that edits §2
+# would therefore be the one PR type whose anti-drift check never ran. This workflow has
+# no path filter, so it runs in seconds for exactly those commits.
+#
+# The same tests also run inside ci.yml, before the gate, on all three runners: that run
+# is what proves the tooling is cross-platform (argv, paths, encoding), this one is what
+# proves it ran at all.
+
+name: tooling
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tooling-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    name: tooling tests (python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Pin Python for the repository tooling
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Pure functions and front-end smoke tests: no .NET SDK, no network.
+      - name: scripts/tests
+        run: python -m unittest discover -s scripts/tests -v
+
+      # The gate's own view of itself: the commands, in order, without running them. It
+      # is a second opinion on the filter/order test above, and it fails loudly if the
+      # suite table stops being buildable.
+      - name: scripts/verify.py --list
+        run: python scripts/verify.py --list

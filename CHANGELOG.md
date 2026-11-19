@@ -8,6 +8,25 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **The repository scripts are Python (no card; supersedes the bash trio).** `scripts/verify.sh`,
+  `scripts/publish.sh` and `scripts/suite-duration.sh` became `scripts/verify.py`, `scripts/publish.py`
+  and `scripts/suite_duration.py` over a small stdlib-only package (`scripts/zt/`), one module per
+  concern: the `dotnet` command builders, the gate's suite table, the publish matrix as data, the
+  interactive prompts, the test-log reader and its report. Nothing about the gate changed - same
+  commands, same order, byte-identical filter string, fail-fast on the first red suite - and nothing about the
+  matrix changed either: the Server still publishes as a folder, the Worker as a folder plus its
+  single-file drop, and the JIT rows still pass `-p:PublishAot=false` explicitly (I-004). What changed
+  is who can run it and what it can ask: the scripts run natively on Windows instead of needing Git
+  Bash, `scripts/publish.py` with no arguments asks which platform(s) and architecture(s), whether the
+  publish is self-contained, and whether the Worker's single-file and NativeAOT variants are wanted -
+  printing the exact command lines before running any of them (`--dry-run` stops there) - and
+  `scripts/verify.py --list` prints §2's commands without running them. The AOT row is refused for a
+  RID that is not this machine's, with the reason stated, instead of failing inside ILC. The tooling
+  carries its own tests (`python -m unittest discover -s scripts/tests`, 115 cases, no SDK and no
+  network), run before the gate in CI; one of them reads docs/development.md §2 and docs/native-aot.md §8
+  and fails if any filter they print differs from the one the gate runs; a second, path-filter-free
+  workflow (`.github/workflows/tooling.yml`) runs those tests for docs-only changes, which the gate's
+  own `paths-ignore` would skip.
 - **Step snippets (F-035).** An organization can keep named, reusable text snippets and insert them into a
   project's definition: a `script-step` becomes a fully formed Freestyle step row, a `lua-fragment` is
   inserted at the caret in an inline pipeline (or copied to the clipboard for a repository pipeline - the

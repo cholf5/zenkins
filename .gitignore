@@ -20,6 +20,10 @@ TestResults/
 *.coverage
 *.trx
 
+# ---- Python tooling (scripts/) ----
+__pycache__/
+*.py[cod]
+
 # ---- IDE / OS ----
 .vs/
 .vscode/

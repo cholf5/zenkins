@@ -1,4 +1,4 @@
-# P-001: CI runs the acceptance gate of docs/development.md §2 through scripts/verify.sh - the
+# P-001: CI runs the acceptance gate of docs/development.md §2 through scripts/verify.py - the
 # script is §2's gate in executable form, so the workflow runs the script rather than transcribing
 # the commands (no third copy to drift against; §2 documents the same commands it runs).
 #
@@ -26,9 +26,15 @@
 #
 # Docs-only commits (docs/**, **/*.md, LICENSE) skip the gate: the gate proves code (build +
 # suites + AOT artifacts), and no markdown in this repo is a build input - docs files are cited
-# from build-file comments only, so a docs change cannot turn the gate red. A mixed commit (docs +
-# code) still runs. Tag pushes are unaffected: path filters are not evaluated for tag pushes
-# (GitHub's documented behaviour), so a tag always runs the gate. A filtered run leaves its check
+# from build-file comments only - so a docs change cannot turn the gate red. One exception, and it
+# is why the tooling workflow exists: scripts/tests/test_gate.py reads docs/development.md (§2) and
+# docs/native-aot.md (§8) and holds every filter they print to the one the gate runs, so those two
+# documents *are* inputs of a test. This workflow
+# therefore runs the tooling tests on all three runners (cross-platform proof), and
+# .github/workflows/tooling.yml runs them with no path filter at all (so a docs-only PR still gets
+# the anti-drift check). A mixed commit (docs + code) still runs. Tag pushes are unaffected: path
+# filters are not evaluated for tag pushes (GitHub's documented behaviour), so a tag always runs
+# the gate. A filtered run leaves its check
 # "Pending"; if the gate is ever made a required status check, docs-only PRs would be blocked, and
 # the filter - not the protection rule - would be the thing to revisit.
 
@@ -99,10 +105,23 @@ jobs:
           cache: true
           cache-dependency-path: Directory.Packages.props
 
-      # The §2 gate, verbatim: scripts/verify.sh runs dotnet build -c Release, the fast suite with
-      # its quintuple exclusion filter, then the five harness filters, failing non-zero on the first
-      # red suite. Git Bash is the shell on Windows too (see the header: the Windows gate is this
-      # same script, not a second transcript).
-      - name: Acceptance gate (development.md §2 via scripts/verify.sh)
-        shell: bash
-        run: bash scripts/verify.sh
+      # The repository tooling is stdlib-only Python (scripts/zt + three front ends), so the version
+      # is the only thing to pin. setup-python also puts `python` on PATH on every OS - the gate and
+      # the checks below call it by that one name.
+      - name: Pin Python for the repository tooling
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The tooling's own tests: pure functions (the publish matrix, the gate's filters and order,
+      # the test-log reader, the prompt parsing) and front-end smoke tests. They need no SDK and no
+      # network, so they run before the gate and cost seconds - a broken filter or a drifted matrix
+      # is then named here instead of half way through a 15-minute gate.
+      - name: Tooling tests (scripts/tests)
+        run: python -m unittest discover -s scripts/tests -v
+
+      # The §2 gate, verbatim: scripts/verify.py runs dotnet build -c Release, the fast suite with
+      # its seven-clause exclusion filter (six harnesses + Load), then the six harness filters,
+      # failing non-zero on the first red suite. One script, three OSes, no second transcript to drift against.
+      - name: Acceptance gate (development.md §2 via scripts/verify.py)
+        run: python scripts/verify.py
