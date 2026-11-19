@@ -10,6 +10,7 @@ using Zenkins.Server.Folders;
 using Zenkins.Shared.LogStreaming;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Tenancy;
+using Zenkins.Tests.Auth;
 
 // The worker project's namespace is Zenkins.Worker, which shadows the entity type name inside any
 // Zenkins.* namespace; the alias keeps the entity readable here.
@@ -32,6 +33,12 @@ namespace Zenkins.Tests.Tenancy;
 /// disposable: <see cref="Dispose"/> drops the connection pools and deletes the file and its
 /// journals. Construct it per test class (<c>IClassFixture&lt;TwoOrgsFixture&gt;</c>) for read-mostly
 /// probes, or per test when a test mutates rows.
+/// </para>
+/// <para>
+/// <see cref="Seed"/> also stages the F-044 first-run marker (<see cref="BootstrapSeed"/>): the
+/// fixture's seeded accounts are only reachable through a sign-in form, and the setup gate redirects
+/// that form to <c>/setup</c> while the marker is missing. A fixture that seeds accounts directly
+/// rather than registering them needs the same one line.
 /// </para>
 /// <para>
 /// The ids are fixed constants rather than generated values so a test failure reads as prose
@@ -396,15 +403,12 @@ public sealed class TwoOrgsFixture : IDisposable
             new Organization { Id = OrgAId, Name = OrgAName },
             new Organization { Id = OrgBId, Name = OrgBName });
 
-        // F-044: the first-run gate answers /account/login with a redirect to /setup while this row
-        // is absent, and the fixture seeds exactly the state a completed bootstrap leaves behind - an
-        // Owner with an organization. Without the marker those seeded accounts could not sign in, and
-        // every page suite built on this fixture failed on a 302 it never asserted.
-        context.BootstrapMarkers.Add(new BootstrapMarker
-        {
-            OrganizationId = OrgAId,
-            UserId = OrgAOwnerUserId,
-        });
+        // F-044: the first-run gate redirects /account/login and /account/register to /setup while
+        // this row is absent, and the fixture seeds exactly the state a completed bootstrap leaves
+        // behind - an Owner with an organization. Without the marker those seeded accounts cannot
+        // sign in: page suites on this fixture fail on a 302 they never asserted. The helper is
+        // shared with any future fixture that seeds accounts instead of registering them.
+        context.AddBootstrapMarker(OrgAId, OrgAOwnerUserId);
 
         context.OrganizationMembers.AddRange(
             new OrganizationMember
