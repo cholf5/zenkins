@@ -4,7 +4,7 @@ title: First-run setup wizard — welcome, deployment facts, Owner account, orga
 type: feature
 priority: P1
 size: L
-status: todo
+status: review
 created: 2026-11-19
 updated: 2026-11-19
 blocked: none
@@ -45,55 +45,55 @@ Constraints this card inherits:
 
 ## Acceptance Criteria
 
-- [ ] With no accounts, `GET /` still redirects to sign-in, and `/account/login` and
+- [x] With no accounts, `GET /` still redirects to sign-in, and `/account/login` and
       `/account/register` redirect to `/setup` (302). `GET /setup` renders the welcome page: version,
       provider, database target, key-ring and artifact directories, the schema state, and a "Start
       setup" link.
-- [ ] A schema with pending migrations is reported as a problem with the `dotnet ef database update`
+- [x] A schema with pending migrations is reported as a problem with the `dotnet ef database update`
       remedy, and the wizard does not offer the Owner form. An unreachable database renders the
       error instead of a 500 page.
-- [ ] `GET /setup` and the welcome page create no rows.
-- [ ] `POST /setup/owner` with a name, email and password creates the account, the organization with
+- [x] `GET /setup` and the welcome page create no rows.
+- [x] `POST /setup/owner` with a name, email and password creates the account, the organization with
       **that** name, the Owner membership and the marker in one transaction, signs the browser in,
       and redirects to `/setup/worker`.
-- [ ] A blank or over-long organization name, a weak password and a duplicate email each come back
+- [x] A blank or over-long organization name, a weak password and a duplicate email each come back
       as a readable validation message on the same page, with no rows written.
-- [ ] The password policy is Identity's own (12+ chars, mixed case, digit, symbol); the wizard does
+- [x] The password policy is Identity's own (12+ chars, mixed case, digit, symbol); the wizard does
       not restate it in code.
-- [ ] After the marker exists, `/setup` and `/setup/owner` redirect (to `/` when signed in, to
+- [x] After the marker exists, `/setup` and `/setup/owner` redirect (to `/` when signed in, to
       `/account/login` when not), and `/account/register` works again for later accounts.
-- [ ] `/setup/worker` requires authentication and organization-Owner rights; a Member sees the
+- [x] `/setup/worker` requires authentication and organization-Owner rights; a Member sees the
       Owner-required notice, not a token form.
-- [ ] Minting on `/setup/worker` shows the plaintext registration token exactly once, with the
+- [x] Minting on `/setup/worker` shows the plaintext registration token exactly once, with the
       server URL and the two environment variables to start a Worker, and two ways out: skip to the
       dashboard, or finish.
-- [ ] The welcome, Owner and Worker pages are static SSR (the Owner form has to be able to set the
+- [x] The welcome, Owner and Worker pages are static SSR (the Owner form has to be able to set the
       auth cookie) and are available in English and Simplified Chinese.
-- [ ] Every new `L10n` key has a `Translations.zh-Hans.json` entry (the catalogue test proves both
+- [x] Every new `L10n` key has a `Translations.zh-Hans.json` entry (the catalogue test proves both
       directions).
-- [ ] The concurrent-setup race still produces exactly one organization and one marker.
+- [x] The concurrent-setup race still produces exactly one organization and one marker.
 
 ## Subtasks
 
-- [ ] `BootstrapService`: the organization name is an argument (`DefaultOrganizationName` remains the
+- [x] `BootstrapService`: the organization name is an argument (`DefaultOrganizationName` remains the
       fallback for the direct-registration path).
-- [ ] `RegistrationService.RegisterOwnerAsync`: the wizard's path — refuses when the marker exists,
+- [x] `RegistrationService.RegisterOwnerAsync`: the wizard's path — refuses when the marker exists,
       validates the name, and reports losing the race instead of creating an account without an
       organization.
-- [ ] `Setup/SetupReadiness.cs`: provider, database target, key-ring directory, artifact root,
+- [x] `Setup/SetupReadiness.cs`: provider, database target, key-ring directory, artifact root,
       version, and a real schema check with the pending-migration list.
-- [ ] `Setup/SetupGateMiddleware.cs`: the four redirects above, registered before authentication.
-- [ ] `SetupLayout` (wide, brand header, language switcher) and a step indicator shared by the three
+- [x] `Setup/SetupGateMiddleware.cs`: the four redirects above, registered before authentication.
+- [x] `SetupLayout` (wide, brand header, language switcher) and a step indicator shared by the three
       pages.
-- [ ] `SetupWelcome.razor` (`/setup`), `SetupOwner.razor` (`/setup/owner`), `SetupWorker.razor`
+- [x] `SetupWelcome.razor` (`/setup`), `SetupOwner.razor` (`/setup/owner`), `SetupWorker.razor`
       (`/setup/worker`).
-- [ ] `Translations.zh-Hans.json` entries.
-- [ ] Tests: the gate (four redirects), the facts page, the owner form (happy path, name/password/
+- [x] `Translations.zh-Hans.json` entries.
+- [x] Tests: the gate (four redirects), the facts page, the owner form (happy path, name/password/
       duplicate failures), the post-setup lockout, the worker step (auth, Owner-only, token shown
       once), and the HTTP-level race.
-- [ ] `AuthTestHost.RegisterAsync` seeds an Owner through the wizard, so the existing suites keep
+- [x] `AuthTestHost.RegisterAsync` seeds an Owner through the wizard, so the existing suites keep
       seeding the same state.
-- [ ] Docs: PRD §3.18, `docs/development.md` §3, `docs/install.md` first-run, `CHANGELOG.md`,
+- [x] Docs: PRD §3.18, `docs/development.md` §3, `docs/install.md` first-run, `CHANGELOG.md`,
       `README.md` status line.
 
 ## Dependencies
@@ -169,8 +169,18 @@ Expected:
   the typed name on the dashboard, the minted `zreg_…` token with both start commands, and the
   Production pending-migration warning were each observed by hand; a catalogue scan of the source
   showed no missing or orphaned keys.
-- Tests are written (`SetupWizardTests`, 8 facts) but run on a Windows machine against the pushed
-  branch, not on the macOS workstation. Results go here when they arrive.
+- Tests were run on the workstation against the categories this card touches, not the whole suite:
+  `Category=Auth` 44/44, `Category=Localization` 18/18, `Category=Theme` 14/14, `Category=Forms`
+  12/12 (`dotnet test -c Debug --no-build`), 88 facts, 0 failures, 0 skips.
+- Two test-side defects were found and fixed on the way, neither of them product behaviour: the Owner
+  seed read its antiforgery token from `/setup` (the welcome page has no form) instead of
+  `/setup/owner`, and the wizard facts compared `Location?.PathAndQuery`, which throws when
+  TestServer answers a redirect with a relative `Location` and pins the host when it answers with an
+  absolute one. `ExtractAntiforgeryToken` also accepts the shell's `request-verification-token` meta
+  now, which is what `js/antiforgery.js` copies into a form on submit - the language-switch facts
+  post the switcher's form from `/setup`, which carries no form of its own.
+- The fast-suite count in `docs/development.md` §2 was re-measured with `--list-tests` (no tests
+  executed): 1715 fast / 1748 with every category; eight of the fast cases are this card's.
 
 ## Bugs
 
@@ -183,6 +193,13 @@ Expected:
   `src/Server/Components/Layout/SetupLayout.razor`, `src/Server/Auth/BootstrapService.cs`,
   `src/Server/Auth/RegistrationService.cs`, `src/Server/Program.cs`,
   `tests/Zenkins.Tests/Setup/SetupWizardTests.cs`.
-- How to run/verify: `dotnet build Zenkins.slnx -c Debug`; `dotnet test --filter "Category=Auth"`
-  and `Category=Localization` on a Windows machine (the build is not run on the macOS workstation).
-- Results: pending the Windows run (build + the fast suite on `feat/f-044-setup-wizard`).
+- How to run/verify: `dotnet build Zenkins.slnx -c Debug`, then
+  `dotnet test -c Debug --no-build --filter "Category=Auth"` (and `Category=Localization`,
+  `Category=Theme`, `Category=Forms`). Only the touched categories were run; the rest of the suite was
+  not.
+- Results: `Build succeeded. 0 Warning(s) 0 Error(s)`; Auth 44/44, Localization 18/18, Theme 14/14,
+  Forms 12/12, no skips. Logs: `/tmp/f044-auth.log`, `/tmp/f044-Localization.log`,
+  `/tmp/f044-Theme.log`, `/tmp/f044-Forms.log`. A Windows machine ran the same four categories
+  against the pushed branch and was red for the two test-side defects above (30 facts, all traced to
+  the seeding helper and the redirect assertion); those fixes were re-verified here, and the Windows
+  legs were not re-run.

@@ -187,12 +187,26 @@ public sealed class AuthTestHost : IDisposable
         });
     }
 
+    /// <summary>
+    /// The request token a page will accept a POST with: the hidden field a server-rendered form
+    /// carries, or - for a page with no form of its own - the shell's
+    /// <c>&lt;meta name="request-verification-token"&gt;</c>, which <c>js/antiforgery.js</c> copies
+    /// into every form on submit. Both are the same token for the same request.
+    /// </summary>
     public static string ExtractAntiforgeryToken(string html)
     {
         var match = Regex.Match(
             html,
             "name=\"__RequestVerificationToken\"[^>]*value=\"(?<token>[^\"]+)\"",
             RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            match = Regex.Match(
+                html,
+                "<meta name=\"request-verification-token\" content=\"(?<token>[^\"]+)\"",
+                RegexOptions.CultureInvariant);
+        }
+
         if (!match.Success)
         {
             throw new InvalidOperationException("The page did not render an antiforgery token.");

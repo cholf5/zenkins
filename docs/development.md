@@ -377,10 +377,11 @@ Platform runner configured in `global.json`; `dotnet test` is the supported entr
 
 The first build downloads NuGet packages and takes noticeably longer than later ones.
 
-**The current baseline is counted, and it is 1687 fast / 1720 everything.** The fast figure is a counted
-run of the tree that carries Q-023, measured with `--list-tests` on the filter in the table below (which now
+**The current baseline is counted, and it is 1715 fast / 1748 everything.** The fast figure is a counted
+run of the tree that carries F-044, measured with `--list-tests` on the filter in the table below (which now
 also excludes `Category=Load`); everything is that count plus the five slow categories (23), `Category=Load`
-(1) and Postgres (9), all counted in the same pass. Every per-card note in this file quotes the counts of
+(1) and Postgres (9), all counted in the same pass. Eight of the fast cases are F-044's setup wizard and
+ten are B-010's project-form facts; the 1679 this line carried before was already behind HEAD. Every per-card note in this file quotes the counts of
 *its own* tree and they are history, not a target: F-034's "1341 -> 1366" and this file's own earlier
 "1341 / 1370" re-baseline were both accurate when written and are both behind HEAD now. When a card changes
 the count, re-baseline here in the same breath rather than leaving the next reader to notice - that is what
