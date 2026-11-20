@@ -62,10 +62,6 @@
     max-height: calc(var(--bb-spacing) * 40);
 }
 
-.bb\:max-h-96 {
-    max-height: calc(var(--bb-spacing) * 96);
-}
-
 .bb\:max-w-3xl {
     max-width: 48rem;
 }
@@ -76,10 +72,6 @@
 
 /* Text and border. `--tw-border-style` is set to `solid` by the package's universal reset, so a
    width utility only has to name the style the way its own `bb:border-b` does. */
-.bb\:font-bold {
-    font-weight: var(--bb-font-weight-bold);
-}
-
 .bb\:whitespace-pre-wrap {
     white-space: pre-wrap;
 }
