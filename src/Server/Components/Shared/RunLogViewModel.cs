@@ -424,15 +424,10 @@ public sealed class RunLogViewModel
             // Two independent bounds, two statements: retention is what the viewer keeps at all,
             // the render cap is what it draws. Both point at the download, which is complete.
             var retentionNotice = _droppedFromViewer > 0
-                ? L10n[
-                    "This viewer keeps the newest {0} lines; {1} older line(s) are not shown - download the full log.",
-                    RetainedCap,
-                    _droppedFromViewer]
+                ? L10n["This viewer keeps the newest {0} lines; {1} older line(s) are not shown - download the full log.", RetainedCap, _droppedFromViewer]
                 : null;
             var droppedWhilePausedNotice = _droppedWhilePaused > 0
-                ? L10n[
-                    "Paused - {0} line(s) were dropped by the viewer's retention while you were paused.",
-                    _droppedWhilePaused]
+                ? L10n["Paused - {0} line(s) were dropped by the viewer's retention while you were paused.", _droppedWhilePaused]
                 : null;
 
             return new RunLogPlan(

@@ -21,6 +21,8 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-015](issues/b-015-refused-save-keeps-the-draft.md) | A save the builder refuses swallows the whole draft — the PRG page renders the last saved spec, and with the collapsed rows the refused step is hard to find | P1 | M | none | F-020, F-031, F-022 |
 | [F-045](issues/f-045-parameters-editor-list-inspector.md) | The parameters editor joins the list and inspector — one line per parameter, its fields in the pane | P2 | M | none | B-014, F-021 |
 | [F-046](issues/f-046-drag-to-reorder.md) | Rows can be dragged to a new place — the frame owns the gesture, each list owns its numbering | P2 | M | none | B-014, F-045 |
+| [F-047](issues/f-047-run-console.md) | A full-page run console — block lines, follow the tail, live status and a step sidebar | P1 | L | none | F-008, D-004, F-015 |
+| [B-016](issues/b-016-worker-output-encoding.md) | Windows child output and batch files are decoded in the code page the tools actually write | P1 | M | none | F-007, F-020 |
 
 ## Done
 

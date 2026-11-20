@@ -8,6 +8,30 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **A full-page run console, with a log that reads line by line (F-047).** The run's log was a
+  384px card at the bottom of the run page, and every line was an inline span whose newline Razor
+  trimmed - one step's output rendered as one long wrapped string. The log is now its own page
+  (`/runs/{id}/console`, plus the numbered route), shaped like the useful half of Jenkins' console:
+  one block per line, leading spaces and blank lines preserved, stderr marked in colour *and* with
+  a border, optional UTC timestamps and wrapping. It follows the tail; scrolling up pauses the
+  viewport and "Jump to latest" resumes, while an explicit pause survives a scroll back to the
+  bottom. Status, step badges and elapsed time update on a 1s clock / 2s read and stop when the run
+  ends. A step sidebar and the console's step headers filter by the recorded step id, and the run
+  page, the runs list and each step's "View log" link here. The viewer keeps at most 20,000 lines
+  and renders at most 2,000; both bounds are stated and the download is still the complete record.
+  Verified: RunUi 54/54, Milestone 12/12 (Release, real binaries), Server build 0 warnings. The
+  real-browser pass (follow, mobile width, 5,000-line fixture) is still owed - this environment has
+  no browser harness.
+
+- **Windows logs decode the bytes the tools actually wrote (B-016).** The Worker decoded child
+  output with the host's console encoding and wrote batch files as UTF-8 while `cmd.exe` read them
+  in the console code page, so Chinese could be wrong on both sides. The runner now reads bytes and
+  decodes each line as strict UTF-8 with the host OEM code page as a fallback; Windows scripts are
+  written in the OEM page when the text fits and as UTF-8 with `@chcp 65001 >nul` when it does not.
+  Verified on every platform: the mixed-UTF-8/GBK, BOM, CR/LF and no-trailing-newline facts, and the
+  existing Worker suite (46 passed). The two real `cmd.exe` facts are Windows-only and are owed on
+  CI's windows-latest or a Windows Worker. Historical logs are not rewritten; only new runs change.
+
 - **Rows can be dragged to a new place (F-046).** Up and down buttons were the only way to reorder a
   step - nine presses to move the tenth step to the top - and the parameters list had no ordering at
   all. A row now moves where the pointer drops it: the gesture lives in the frame

@@ -1244,5 +1244,18 @@
   "Skip for now": "暂时跳过",
   "The account could not be identified. Sign in again and reload this page.": "无法确认当前账号，请重新登录后刷新本页。",
   "This account has no organization yet, so there is no organization to register a Worker with.": "此账号还没有组织，因此没有可以注册 Worker 的组织。",
-  "A server outside Development does not migrate on startup. Run this from the release's checkout on the server machine, with the deployment's connection string, then reload this page:": "非 Development 环境不会在启动时自动迁移数据库。请在服务器上、该版本的源码检出目录中带上本部署的连接串执行下面的命令，然后刷新本页："
+  "A server outside Development does not migrate on startup. Run this from the release's checkout on the server machine, with the deployment's connection string, then reload this page:": "非 Development 环境不会在启动时自动迁移数据库。请在服务器上、该版本的源码检出目录中带上本部署的连接串执行下面的命令，然后刷新本页：",
+  "Back to run": "返回运行",
+  "Console": "控制台",
+  "Console · Run {0}": "控制台 · 运行 {0}",
+  "Console · Run #{0}": "控制台 · 运行 #{0}",
+  "Console Output": "控制台输出",
+  "Jump to latest": "跳到最新",
+  "No steps reported yet.": "还没有步骤上报。",
+  "Run page": "运行页",
+  "Timestamps (UTC)": "时间戳（UTC）",
+  "Worker: {0}": "Worker：{0}",
+  "Wrap lines": "自动换行",
+  "This viewer keeps the newest {0} lines; {1} older line(s) are not shown - download the full log.": "查看器只保留最近 {0} 行；{1} 行更早的日志未显示——完整日志请下载。",
+  "Paused - {0} line(s) were dropped by the viewer's retention while you were paused.": "已暂停——查看器保留上限在暂停期间丢弃了 {0} 行。"
 }

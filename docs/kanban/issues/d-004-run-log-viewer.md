@@ -170,6 +170,17 @@ never appear in the file). The download endpoint (`RunEndpoints.DownloadLogAsync
   `data-enhance-nav="none"` opt-out in the rendered-page test, and recorded the two deferred P2s
   (D-004-B3 circuit-level test gap, D-004-B4 first-Next navigation quirk).
 
+### 2026-11-20
+
+- **Superseded in placement, kept in semantics (F-047).** The inline panel on the run page and the
+  same-page fragment navigation are gone: the log is a full-page console at
+  `/runs/{id}/console`, and a step's "View log" is an ordinary link with `?step=`. The control
+  semantics this card defined remain: pause freezes a viewport (never the build), search is literal
+  and narrows, the step filter keys on `StepId`, and the download is untouched. Two deliberate
+  changes: pause now has two sources (explicit and scroll-up), and the viewer retains 20,000 lines
+  with a stated 2,000-line render cap. This card's test ids and assertions were updated where the
+  placement changed; see F-047.
+
 ## Bugs
 
 | ID | Severity | Description | Status | Resolution |
