@@ -744,7 +744,7 @@
     private RunLiveRefresher? _refresher;
     private CancellationTokenSource? _pollCts;
     private Task? _pollTask;
-    private Exception? _loggedRefreshFailure;
+    private bool _refreshFailureLogged;
     private bool _artifactsRefreshedAtTerminal;
 
     /// <summary>
@@ -1006,12 +1006,19 @@
     private void LogRefreshFailureOnce()
     {
         var failure = _refresher?.LastError;
-        if (failure is null || ReferenceEquals(failure, _loggedRefreshFailure))
+        if (failure is null)
+        {
+            // A good read clears the streak, so the next failure is logged again.
+            _refreshFailureLogged = false;
+            return;
+        }
+
+        if (_refreshFailureLogged)
         {
             return;
         }
 
-        _loggedRefreshFailure = failure;
+        _refreshFailureLogged = true;
         Logger.LogWarning(
             failure,
             "Refreshing run {RunId} for the run page failed; keeping the last good state.",

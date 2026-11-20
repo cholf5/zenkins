@@ -232,11 +232,6 @@
     [Parameter]
     public Guid? RequestedStepId { get; set; }
 
-    /// <summary>Reports the panel's own filter changes back to the page, so a step the user picked in
-    /// the dropdown and a step the page pushed stay one state (picking the same step twice still applies).</summary>
-    [Parameter]
-    public EventCallback<Guid?> StepFilterChanged { get; set; }
-
     private readonly RunLogViewModel _viewModel = new();
     private HubConnection? _connection;
     private bool _connecting;
@@ -521,7 +516,7 @@
         _viewModel.SetStepFilter(stepId);
         Replan();
         StateHasChanged();
-        return StepFilterChanged.InvokeAsync(stepId);
+        return Task.CompletedTask;
     }
 
     private Task LinesChanged()
