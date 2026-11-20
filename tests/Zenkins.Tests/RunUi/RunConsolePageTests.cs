@@ -25,6 +25,9 @@ public sealed class RunConsolePageTests
         var page = await run.ReadConsolePageAsync();
         Assert.Contains("Console", page, StringComparison.Ordinal);
         Assert.Contains("id=\"run-log-controls\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-log-pause\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-log-step-filter\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-console-steps\"", page, StringComparison.Ordinal);
         Assert.Contains("id=\"run-log-download\"", page, StringComparison.Ordinal);
         Assert.Contains("id=\"run-log-timestamps\"", page, StringComparison.Ordinal);
         Assert.Contains("id=\"run-log-wrap\"", page, StringComparison.Ordinal);

@@ -18,7 +18,7 @@
    and next/previous, a per-step filter keyed on the lines' StepId (never text), and a stated render
    cap - the download link is the way to get everything. All decisions live in RunLogViewModel; this
    component renders the plan and forwards the user's intent. *@
-<div id="run-log" class="bb:space-y-3">
+<div id="run-log" class="zk-console-panel">
     <BbCard>
         <BbCardHeader>
             <div class="bb:flex bb:items-center bb:justify-between bb:gap-3">
@@ -33,7 +33,7 @@
                    href="@DownloadUrl">@L10n["Download full log"]</a>
             </div>
         </BbCardHeader>
-        <BbCardContent>
+        <BbCardContent Class="zk-console-content">
             @if (_connectionError is not null)
             {
                 <p id="run-log-error" role="alert" class="bb:text-sm bb:text-destructive">
@@ -142,34 +142,68 @@
             {
                 <p id="run-log-paused-loss" class="bb:text-xs bb:text-muted-foreground">@droppedWhilePaused</p>
             }
-            @if (Plan.TotalLines == 0)
-            {
-                <p id="run-log-empty" class="bb:text-sm bb:text-muted-foreground">
-                    @(_connecting ? L10n["Connecting to the log stream…"] : L10n["No output was captured for this run."])
-                </p>
-            }
-            else if (Plan.EmptyMessage is { } emptyMessage)
-            {
-                @* A selected step that produced no output, or a search that matched nothing: the
-                   panel says so instead of showing silence. *@
-                <p id="run-log-filter-empty" class="bb:text-sm bb:text-muted-foreground">
-                    @emptyMessage
-                </p>
-            }
-            else
-            {
-                @* One block per line (F-047): the old <pre> of inline spans rendered every step's
-                   output as one wrapped line. RunConsoleLines owns the block/stream/match markup;
-                   this panel owns the scroll container and the wrap toggle. *@
-                <div id="run-log-scroll" class="zk-console-scroll">
-                    <div id="run-log-lines" class="zk-console-body @(_wrap ? "zk-console-wrap" : null)">
-                        <RunConsoleLines Entries="Plan.Entries"
-                                         ShowTimestamps="_showTimestamps"
-                                         CurrentMatchSeq="Plan.CurrentMatchSeq"
-                                         StepClicked="FilterToStep" />
-                    </div>
+            <div class="zk-console-grid">
+                <div class="zk-console-main">
+                    @if (Plan.TotalLines == 0)
+                    {
+                        <p id="run-log-empty" class="bb:text-sm bb:text-muted-foreground">
+                            @(_connecting ? L10n["Connecting to the log stream…"] : L10n["No output was captured for this run."])
+                        </p>
+                    }
+                    else if (Plan.EmptyMessage is { } emptyMessage)
+                    {
+                        @* A selected step that produced no output, or a search that matched nothing: the
+                           panel says so instead of showing silence. *@
+                        <p id="run-log-filter-empty" class="bb:text-sm bb:text-muted-foreground">
+                            @emptyMessage
+                        </p>
+                    }
+                    else
+                    {
+                        @* One block per line (F-047): the old <pre> of inline spans rendered every step's
+                           output as one wrapped line. RunConsoleLines owns the block/stream/match markup;
+                           this panel owns the scroll container and the wrap toggle. *@
+                        <div id="run-log-scroll" class="zk-console-scroll">
+                            <div id="run-log-lines" class="zk-console-body @(_wrap ? "zk-console-wrap" : null)">
+                                <RunConsoleLines Entries="Plan.Entries"
+                                                 ShowTimestamps="_showTimestamps"
+                                                 CurrentMatchSeq="Plan.CurrentMatchSeq"
+                                                 StepClicked="FilterToStep" />
+                            </div>
+                            @if (Plan.IsPaused)
+                            {
+                                <BbButton id="run-log-jump" Class="zk-console-jump"
+                                          Variant="ButtonVariant.Default" Size="ButtonSize.Small"
+                                          OnClick="JumpToLatestAsync">@L10n["Jump to latest"]</BbButton>
+                            }
+                        </div>
+                    }
                 </div>
-            }
+
+                @* F-047's step list: the console's own view of what each step is doing, live with
+                   the page's status poll. Clicking a step filters; clicking the active step clears. *@
+                <aside id="run-console-steps" class="zk-console-aside" aria-label="@L10n["Steps"]">
+                    <h2 class="zk-console-aside-title">@L10n["Steps"]</h2>
+                    @if (Steps is { Count: > 0 } sidebarSteps)
+                    {
+                        @foreach (var step in sidebarSteps)
+                        {
+                            <button type="button" class="zk-console-step-link"
+                                    data-active="@(Plan.StepFilter == step.Id ? "true" : null)"
+                                    disabled="@(step.Id is null)"
+                                    @onclick="@(() => FilterToStepIfRecordedAsync(step))">
+                                <span class="zk-console-step-name">@step.Index. @step.Name</span>
+                                <BbBadge Variant="@RunDisplay.StepBadgeFor(step.Status)">@step.Status</BbBadge>
+                                <span class="zk-console-step-time">@RunDisplay.DurationOrElapsed(step.StartedAt, step.EndedAt, DateTimeOffset.UtcNow, L10n)</span>
+                            </button>
+                        }
+                    }
+                    else
+                    {
+                        <p class="bb:text-xs bb:text-muted-foreground">@L10n["No steps reported yet."]</p>
+                    }
+                </aside>
+            </div>
         </BbCardContent>
     </BbCard>
 </div>
@@ -522,10 +556,21 @@
         return headers;
     }
 
-    /// <summary>F-047: a step header in the console narrows the view to that step's rows.</summary>
+    /// <summary>F-047: a step header or sidebar row narrows the view to that step; the active one
+    /// clears the filter, so the same control both enters and leaves a step.</summary>
     private Task FilterToStep(Guid stepId)
     {
-        _viewModel.SetStepFilter(stepId);
+        _viewModel.SetStepFilter(_viewModel.StepFilter == stepId ? null : stepId);
+        return ReplanAsync();
+    }
+
+    private Task FilterToStepIfRecordedAsync(RunStepView step) =>
+        step.Id is { } stepId ? FilterToStep(stepId) : Task.CompletedTask;
+
+    /// <summary>F-047's "Jump to latest": resumes following and returns to the tail.</summary>
+    private Task JumpToLatestAsync()
+    {
+        _viewModel.Resume();
         return ReplanAsync();
     }
 

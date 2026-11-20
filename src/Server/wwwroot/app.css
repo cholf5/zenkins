@@ -286,3 +286,202 @@ textarea.zk-input {
     padding: 0;
   }
 }
+
+/* F-047: the run console. The log is the page's main surface: the page is a column, the header
+   stays put, and the console grid takes every remaining pixel. The classes are .zk-* because the
+   package's `bb:` utilities are prebuilt and purged - a class it did not emit is silently no CSS.
+   This layout is not a theme: colours are the existing tokens, and nothing here restates one. */
+.zk-console-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: calc(100dvh - 6rem);
+  min-height: 28rem;
+}
+
+.zk-console-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.zk-console-panel,
+.zk-console-panel > div {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.zk-console-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.zk-console-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 17rem;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.zk-console-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.zk-console-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+
+.zk-console-body {
+  padding: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+/* One block per line is the layout. The text span, not the body, gets `white-space: pre`, so the
+   Razor formatting whitespace around the element cannot become part of the message. */
+.zk-console-line {
+  display: block;
+  min-height: 1.25em;
+}
+
+.zk-console-text {
+  white-space: pre;
+}
+
+.zk-console-wrap .zk-console-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.zk-console-line--stderr {
+  color: var(--destructive);
+  border-left: 2px solid var(--destructive);
+  padding-left: 0.5rem;
+  margin-left: -0.5rem;
+}
+
+.zk-console-line--match {
+  background: var(--accent);
+}
+
+.zk-console-time {
+  color: var(--muted-foreground);
+  margin-right: 0.5rem;
+}
+
+.zk-console-step {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zk-console-step:hover {
+  color: var(--primary);
+}
+
+.zk-console-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.zk-console-aside-title {
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.zk-console-step-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0.35rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zk-console-step-link:hover,
+.zk-console-step-link[data-active="true"] {
+  background: var(--accent);
+}
+
+.zk-console-step-link:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.zk-console-step-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+
+.zk-console-step-time {
+  grid-column: 1 / -1;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.zk-console-jump {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+}
+
+/* Below 64rem the aside has no room; the toolbar's step select is the same control. The page keeps
+   a bounded console instead of forcing the whole document to scroll. */
+@media (max-width: 64rem) {
+  .zk-console-page {
+    height: auto;
+    min-height: 32rem;
+  }
+
+  .zk-console-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .zk-console-aside {
+    display: none;
+  }
+
+  .zk-console-scroll {
+    min-height: 24rem;
+    max-height: 70dvh;
+  }
+}
