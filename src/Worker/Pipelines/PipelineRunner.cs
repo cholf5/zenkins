@@ -1514,14 +1514,24 @@ public sealed class PipelineRunner
     /// Writes the resolved script text to a per-step file in the run's <c>temp/</c> (card F-020) and
     /// returns its path. The file - not a command line - is the step's payload: it sidesteps every
     /// command-line length limit and every quoting question, the way Jenkins's own batch/shell steps
-    /// do. UTF-8 without a BOM, because a BOM's characters become the first command on Windows and a
-    /// stray token on Unix.
+    /// do. On Windows the bytes go through <see cref="WindowsBatchScript"/> because cmd reads the
+    /// file in the console's code page, not UTF-8 (card B-016); on Unix UTF-8 without a BOM, because
+    /// a BOM's characters become the first command there.
     /// </summary>
     private string WriteScriptFile(int stepIndex, string script)
     {
         var extension = OperatingSystem.IsWindows() ? "cmd" : "sh";
         var path = Path.Combine(_options.Work.TempPath, $"step-{stepIndex + 1}.{extension}");
-        File.WriteAllText(path, script, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        if (OperatingSystem.IsWindows())
+        {
+            var (bytes, _) = WindowsBatchScript.Encode(script, WindowsCodePages.Oem ?? System.Text.Encoding.UTF8);
+            File.WriteAllBytes(path, bytes);
+        }
+        else
+        {
+            File.WriteAllText(path, script, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+
         return path;
     }
 
