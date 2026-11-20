@@ -350,6 +350,8 @@
   "Runs after the main list whatever happened - cleanup, artifact upload, notification. On a canceled run these steps get a bounded grace window.": "无论结果如何，都会在主列表之后运行——清理、上传产物、通知。运行被取消时，这些步骤会获得有限的宽限时间。",
   "Save parameters": "保存参数",
   "Save steps": "保存步骤",
+  "The editor below still holds what you submitted, unchanged - the marked row is the one the reason names.": "下面的编辑器里仍是您提交的内容，原样保留——被标记的行就是原因指到的那一行。",
+  "The exact reason:": "具体原因：",
   "The main list, run in order. A failure stops the list unless the step says continue on error.": "主列表，按顺序执行。失败会中止列表，除非步骤声明了“出错继续”。",
   "The parameter list was refused.": "参数列表被拒绝。",
   "The step list was refused.": "步骤列表被拒绝。",

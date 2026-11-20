@@ -69,6 +69,17 @@ html.dark {
   border-top: 1px solid var(--border);
 }
 
+/* B-015: the row a refused save names (the reason's spec path, rendered server-side as
+   data-split-error) stays visible without being selected; selection still reads on top of it.
+   An inset marker, not a border, so the row's line does not shift. */
+.zk-split-row[data-split-error] {
+  box-shadow: inset 3px 0 0 var(--destructive);
+}
+
+.zk-split-row[data-split-error] .zk-split-index {
+  color: var(--destructive);
+}
+
 .zk-split-row-head {
   display: flex;
   align-items: stretch;

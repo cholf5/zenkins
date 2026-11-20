@@ -1,5 +1,6 @@
 @using System.Globalization
 @using Zenkins.Shared.Pipelines
+@using Zenkins.Server.Projects
 @* One step's fields - and the editor's only copy of them. The saved row and the row template both render
    this component; the two hand-maintained field sets the section used to carry had already drifted (the
    template's stage and environment labels were untranslated plain English), and a field is now added in
@@ -28,7 +29,7 @@
             </label>
             <input data-freestyle-field="stage"
                    id="@Id("stage")"
-                   value="@Step?.Stage"
+                   value="@(Draft?.Stage ?? Step?.Stage)"
                    maxlength="@MaxStageLength"
                    placeholder="@L10n["Build"]"
                    autocomplete="off"
@@ -42,7 +43,7 @@
                   id="@Id("script")"
                   rows="8"
                   spellcheck="false"
-                  class="zk-input bb:font-mono bb:text-xs">@Step?.Script</textarea>
+                  class="zk-input bb:font-mono bb:text-xs">@(Draft?.Script ?? Step?.Script)</textarea>
         <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
             @L10n["Runs on the claiming worker (cmd on Windows, sh -e on Unix) in the run's workspace."] <code>${secret:NAME}</code> @L10n["and"] <code>${env:NAME}</code>
             @L10n["references are resolved just before the step starts."]
@@ -63,7 +64,7 @@
                               id="@Id("env-lines")"
                               rows="3"
                               spellcheck="false"
-                              class="zk-input bb:font-mono bb:text-xs">@EnvLinesText()</textarea>
+                              class="zk-input bb:font-mono bb:text-xs">@(Draft is not null ? Draft.EnvLines ?? string.Empty : EnvLinesText())</textarea>
                 </div>
                 <div>
                     <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("artifacts-text")">
@@ -71,7 +72,7 @@
                     </label>
                     <input data-freestyle-field="artifacts-text"
                            id="@Id("artifacts-text")"
-                           value="@ArtifactsText()"
+                           value="@(Draft?.ArtifactsText ?? ArtifactsText())"
                            autocomplete="off"
                            spellcheck="false"
                            class="zk-input" />
@@ -85,7 +86,7 @@
                            type="number"
                            min="@MinStepTimeoutSeconds"
                            max="@MaxStepTimeoutSeconds"
-                           value="@Step?.TimeoutSeconds?.ToString(CultureInfo.InvariantCulture)"
+                           value="@(Draft?.TimeoutSeconds ?? Step?.TimeoutSeconds?.ToString(CultureInfo.InvariantCulture))"
                            autocomplete="off"
                            class="zk-input" />
                 </div>
@@ -98,7 +99,7 @@
                            type="number"
                            min="@MinStepRetry"
                            max="@MaxStepRetry"
-                           value="@Step?.Retry?.ToString(CultureInfo.InvariantCulture)"
+                           value="@(Draft?.Retry ?? Step?.Retry?.ToString(CultureInfo.InvariantCulture))"
                            autocomplete="off"
                            class="zk-input" />
                 </div>
@@ -111,7 +112,7 @@
                     <input data-freestyle-field="runs-on"
                            id="@Id("runs-on")"
                            type="text"
-                           value="@Step?.RunsOn"
+                           value="@(Draft?.RunsOn ?? Step?.RunsOn)"
                            placeholder="linux && (arm64 || x64)"
                            autocomplete="off"
                            class="zk-input" />
@@ -120,7 +121,7 @@
             <label class="bb:flex bb:items-center bb:gap-2">
                 <input type="checkbox"
                        data-freestyle-field="continue-on-error"
-                       checked="@(Step?.ContinueOnError == true)" />
+                       checked="@((Draft?.ContinueOnError ?? Step?.ContinueOnError) == true)" />
                 <span class="bb:text-xs">@L10n["Continue on error: a failure here does not stop the run."]</span>
             </label>
         </div>
@@ -143,6 +144,17 @@
     /// <summary>The step being edited, or <see langword="null"/> for the row template's empty fields.</summary>
     [Parameter]
     public PipelineStep? Step { get; set; }
+
+    /// <summary>
+    /// Card B-015: the refused submission's draft, when this row renders what its author submitted
+    /// rather than a saved step. The draft's editor-shaped text passes through verbatim - an env
+    /// comment or a blank line, a non-numeric timeout - because that is exactly what the page must
+    /// show again, and none of it round-trips through the frozen <see cref="PipelineStep"/> shape
+    /// (the env dictionary skips comments, the knob fields are ints). Null for saved rows and the row
+    /// template, which render from <see cref="Step"/> as before.
+    /// </summary>
+    [Parameter]
+    public FreestyleStepDraft? Draft { get; set; }
 
     /// <summary>Whether this row offers the stage field (card F-030); a post step never does.</summary>
     [Parameter]

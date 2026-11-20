@@ -1,4 +1,7 @@
+@using System.Globalization
+@using System.Text.RegularExpressions
 @using Zenkins.Shared.Pipelines
+@using Zenkins.Server.Projects
 @* Card F-020's Freestyle steps editor, extended by card F-031 with the three post lists. A plain HTML form
    posting to the real endpoint (antiforgery like every other form): the rows below render the saved
    spec's steps, and js/freestyle-steps.js owns the dynamic row lists (add / remove / reorder) and
@@ -10,6 +13,17 @@
     {
         <div role="alert" class="bb:rounded-md bb:border bb:border-destructive/40 bb:bg-destructive/10 bb:p-3 bb:text-sm bb:text-destructive">
             <p>@(ProjectErrorCodes.MessageFor(ErrorCode, L10n) ?? L10n["The step list was refused."])</p>
+            @if (RefusalDetail is not null)
+            {
+                @* Card B-015: the builder's own sentence, verbatim - the same one a worker's
+                   definition error shows. It names the refused field by its spec path, and the list
+                   below marks the row that path belongs to. *@
+                <p>@L10n["The exact reason:"] <code>@RefusalDetail</code></p>
+            }
+            @if (RefusedDrafts is not null)
+            {
+                <p>@L10n["The editor below still holds what you submitted, unchanged - the marked row is the one the reason names."]</p>
+            }
         </div>
     }
 
@@ -48,6 +62,8 @@
                                Title="@L10n["Steps"]"
                                Description="@L10n["The main list, run in order. A failure stops the list unless the step says continue on error."]"
                                Steps="Steps"
+                               Drafts="RefusedDrafts?.Steps"
+                               ErrorRowIndex="MainErrorIndex"
                                ShowStage="true" />
 
         <FreestyleStepsSection ListKey="always"
@@ -56,6 +72,8 @@
                                Title="@L10n["Post steps: always"]"
                                Description="@L10n["Runs after the main list whatever happened - cleanup, artifact upload, notification. On a canceled run these steps get a bounded grace window."]"
                                Steps="PostAlways"
+                               Drafts="RefusedDrafts?.Always"
+                               ErrorRowIndex="PostErrorIndex(PipelinePostOutcomes.Always)"
                                StripPostPrefix="true" />
 
         <FreestyleStepsSection ListKey="success"
@@ -64,6 +82,8 @@
                                Title="@L10n["Post steps: on success"]"
                                Description="@L10n["Runs after the main list only when it succeeded, before the always steps. Never runs together with the failure set."]"
                                Steps="PostSuccess"
+                               Drafts="RefusedDrafts?.Success"
+                               ErrorRowIndex="PostErrorIndex(PipelinePostOutcomes.Success)"
                                StripPostPrefix="true" />
 
         <FreestyleStepsSection ListKey="failure"
@@ -72,6 +92,8 @@
                                Title="@L10n["Post steps: on failure"]"
                                Description="@L10n["Runs after the main list only when it failed, before the always steps. Never runs together with the success set."]"
                                Steps="PostFailure"
+                               Drafts="RefusedDrafts?.Failure"
+                               ErrorRowIndex="PostErrorIndex(PipelinePostOutcomes.Failure)"
                                StripPostPrefix="true" />
     </div>
 
@@ -112,4 +134,62 @@
     /// <summary>The stable validation code from the redirect query, if any.</summary>
     [Parameter]
     public string? ErrorCode { get; set; }
+
+    /// <summary>
+    /// Card B-015: a refused submission's four draft lists, when the page consumed the stash the
+    /// refused save left. Each section then renders its list from what was submitted - values
+    /// verbatim, valid or not - instead of from the saved spec. Null on every other visit.
+    /// </summary>
+    [Parameter]
+    public FreestyleStepsDrafts? RefusedDrafts { get; set; }
+
+    /// <summary>Card B-015: the builder's own refusal sentence, shown under the stable code.</summary>
+    [Parameter]
+    public string? RefusalDetail { get; set; }
+
+    private int? MainErrorIndex => StepPathIndex(RefusalDetail, MainStepPath);
+
+    private int? PostErrorIndex(string outcome) => PostStepPathIndex(RefusalDetail, outcome);
+
+    // The refusal reason names the refused field by its spec path, and the paths are 1-based
+    // (BuildSpecJson walks i+1): pipeline.steps[2].name is the third row. The first path mention
+    // decides; a reason without an index (the whole list was refused) marks no row.
+    private static readonly Regex MainStepPath = new(
+        @"pipeline\.steps\[(\d+)\]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex PostStepPath = new(
+        @"pipeline\.post\.(always|success|failure)\[(\d+)\]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static int? StepPathIndex(string? detail, Regex pattern)
+    {
+        if (detail is null)
+        {
+            return null;
+        }
+
+        var match = pattern.Match(detail);
+        return match.Success
+            && int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var oneBased)
+            && oneBased > 0
+                ? oneBased - 1
+                : null;
+    }
+
+    private static int? PostStepPathIndex(string? detail, string outcome)
+    {
+        if (detail is null)
+        {
+            return null;
+        }
+
+        var match = PostStepPath.Match(detail);
+        return match.Success
+            && string.Equals(match.Groups[1].Value, outcome, StringComparison.Ordinal)
+            && int.TryParse(match.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var oneBased)
+            && oneBased > 0
+                ? oneBased - 1
+                : null;
+    }
 }

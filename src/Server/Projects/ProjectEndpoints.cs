@@ -181,7 +181,8 @@ public static class ProjectEndpoints
         Guid projectId,
         [FromForm] FreestyleStepsForm form,
         HttpContext httpContext,
-        ProjectService projects)
+        ProjectService projects,
+        FreestyleDraftStash drafts)
     {
         var userId = FindUserId(httpContext);
         if (userId is null)
@@ -190,11 +191,26 @@ public static class ProjectEndpoints
         }
 
         // F-019's rule in miniature: a lost body is the page's PRG error, never a null reference.
+        var input = form?.ToInput() ?? new FreestyleStepsInput(null);
         var result = await projects.SaveFreestyleStepsAsync(
             userId,
             projectId,
-            form?.ToInput() ?? new FreestyleStepsInput(null),
+            input,
             httpContext.RequestAborted);
+
+        // Card B-015: the PRG redirect below is the only thing that survives the POST, so a refused
+        // submission is stashed once, keyed to this user and project - the page then renders the editor
+        // from what was submitted instead of from the last saved spec. A save that lands retires
+        // whatever the stash still holds: a fixed draft must not resurrect on a visit that still
+        // carries the old error code.
+        if (result.Status == ProjectMutationStatus.InvalidInput)
+        {
+            drafts.Refuse(userId, projectId, input, result.Detail, DateTimeOffset.UtcNow);
+        }
+        else if (result.Status == ProjectMutationStatus.Success)
+        {
+            drafts.Clear(userId, projectId);
+        }
 
         // The PRG target is the route that owns the editor (the Freestyle project's definition tab),
         // so a refusal lands on the page that can show the code - the overview reads neither `error`

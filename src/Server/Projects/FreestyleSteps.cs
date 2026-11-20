@@ -51,6 +51,19 @@ public sealed record FreestyleStepsInput(
     string? FailureStepsJson = null);
 
 /// <summary>
+/// A refused submission's four lists, parsed back for display (card B-015). A list the submission did
+/// not carry - or carried as JSON that does not parse - is <see langword="null"/>, and the page renders
+/// that list from the saved spec instead; the refusal reason says what was wrong either way. A parsed
+/// empty list (<c>[]</c>, which the browser's serializer posts for a cleared list) is a real submission
+/// and renders no rows.
+/// </summary>
+public sealed record FreestyleStepsDrafts(
+    IReadOnlyList<FreestyleStepDraft>? Steps,
+    IReadOnlyList<FreestyleStepDraft>? Always,
+    IReadOnlyList<FreestyleStepDraft>? Success,
+    IReadOnlyList<FreestyleStepDraft>? Failure);
+
+/// <summary>
 /// Builds and validates the Freestyle spec (card F-020). One routine, used by the save endpoint and
 /// re-run by nothing else: the drafts become <see cref="PipelineStep"/>s, the secret names their script
 /// texts and env values reference are captured here (the Server-side counterpart of the Worker's
@@ -456,6 +469,29 @@ public static class FreestyleSteps
 
         value = parsed;
         return true;
+    }
+
+    /// <summary>
+    /// The display-side reader for one refused list's JSON (card B-015). Unlike
+    /// <see cref="TryDeserialize"/> - the build path, which refuses with a reason - this never refuses:
+    /// it answers <see langword="null"/> when the list is absent or not valid JSON (the page then shows
+    /// that list from the saved spec), and otherwise the drafts exactly as submitted, valid or not.
+    /// </summary>
+    public static FreestyleStepDraft[]? ReadDrafts(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<FreestyleStepDraft[]>(json, DraftsOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static FreestyleStepDraft[]? TryDeserialize(string? json, out string? error)

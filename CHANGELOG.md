@@ -20,6 +20,18 @@ signed-in page, so a tag below can be checked against the binaries that carry it
   template, so the template cannot drift from the saved row again. The same change fixes the `runs-on`
   placeholder, which showed its `&&` escaped because the attribute was escaped a second time.
 
+- **A refused steps save gives the draft back (B-015).** When the steps editor's POST was refused -
+  an empty step name, a non-numeric timeout, a broken env line - the refusal reason went to the
+  server log only, the PRG redirect carried the stable `steps-invalid` code, and the page re-rendered
+  the editor from the last *saved* spec: every keystroke since the last successful save was gone,
+  behind one generic sentence. The refused submission is now stashed once in memory, keyed to the
+  user and project (bounded, expiring, read exactly once), and the redirected page renders the
+  editor from what was submitted - values verbatim, including text the frozen spec shape cannot hold
+  (an env comment, a non-numeric timeout). The refusal's own sentence (`pipeline.steps[2].name must
+  be a non-empty string.`) is on the page instead of only in the log, and the row it names is marked
+  and opened first. Another member of the same organization never receives someone else's draft, a
+  refresh shows the saved spec again, and a save that lands retires the stash.
+
 - **A run page renders its log panel again (B-013).** Starting a run landed the browser on the error
   boundary - **出错 / 页面渲染失败。** (*Something went wrong / The page failed to render.*) - a moment
   after the run was queued, so a fresh Freestyle project could not be used at all. The run page's log

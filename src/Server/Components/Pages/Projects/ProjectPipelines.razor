@@ -4,6 +4,7 @@
 @using Zenkins.Shared.Pipelines
 @using Zenkins.Shared.Projects
 @using Zenkins.Shared.Snippets
+@using Zenkins.Server.Projects
 @using Zenkins.Server.Probes
 @using Zenkins.Server.Snippets
 @inject UserSession UserSession
@@ -11,6 +12,7 @@
 @inject RunService RunsService
 @inject StepSnippetService SnippetsService
 @inject Zenkins.Server.Probes.DefinitionValidationService Validations
+@inject Zenkins.Server.Projects.FreestyleDraftStash DraftStash
 
 @* D-003: the definition tab, read-only by decision for a Pipeline project - it answers "what does
    this project actually run": the pipeline file from settings, and - when any run exists - the
@@ -59,6 +61,8 @@
                                       PostAlways="@(_savedPost?.Always ?? [])"
                                       PostSuccess="@(_savedPost?.Success ?? [])"
                                       PostFailure="@(_savedPost?.Failure ?? [])"
+                                      RefusedDrafts="@_refusedDrafts"
+                                      RefusalDetail="@_refusalDetail"
                                       Snippets="@ScriptStepSnippets"
                                       ErrorCode="@ErrorCode" />
             </BbCardContent>
@@ -400,6 +404,16 @@
     private PipelinePost? _savedPost;
     private DefinitionValidationView? _validation;
 
+    /// <summary>
+    /// Card B-015: the refused submission's four draft lists, when this GET consumed the stash a
+    /// refused save left - the editor renders these instead of the saved spec, exactly as submitted.
+    /// Null on every other visit.
+    /// </summary>
+    private FreestyleStepsDrafts? _refusedDrafts;
+
+    /// <summary>Card B-015: the builder's own refusal sentence that came with the stash.</summary>
+    private string? _refusalDetail;
+
     protected override async Task OnInitializedAsync()
     {
         // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
@@ -429,6 +443,25 @@
             var savedSpec = LoadSavedSpec(_project.FreestyleSpecJson);
             _savedSteps = savedSpec?.Steps ?? [];
             _savedPost = savedSpec?.Post;
+
+            // Card B-015: a refused save left this user's own submission in the one-shot stash, and
+            // the PRG redirect named its stable code. Reading it here consumes it - the draft renders
+            // once, and a refresh (with or without the error code) shows the saved spec again. The
+            // stash is keyed to the signed-in user, so another member of this organization never sees
+            // it; without a hit the editor renders the saved spec as it always has.
+            if (ErrorCode == ProjectErrorCodes.StepsInvalid && session is { } signIn)
+            {
+                var refused = DraftStash.Take(signIn.UserId, _project.Id, DateTimeOffset.UtcNow);
+                if (refused is not null)
+                {
+                    _refusedDrafts = new FreestyleStepsDrafts(
+                        FreestyleSteps.ReadDrafts(refused.Input.StepsJson),
+                        FreestyleSteps.ReadDrafts(refused.Input.AlwaysStepsJson),
+                        FreestyleSteps.ReadDrafts(refused.Input.SuccessStepsJson),
+                        FreestyleSteps.ReadDrafts(refused.Input.FailureStepsJson));
+                    _refusalDetail = refused.Reason;
+                }
+            }
         }
 
         // F-022: the last settled validation for this project, so the PRG redirect can show its step

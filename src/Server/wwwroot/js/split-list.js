@@ -252,7 +252,9 @@
 
         var selected = editor._splitSelected;
         if (!selected || !editor.contains(selected)) {
-            selected = rows[0] || null;
+            // B-015: a refused save marks its row server-side (data-split-error). The editor opens
+            // that row first, so the fields the refusal reason names are the ones already on screen.
+            selected = editor.querySelector(ROW + "[data-split-error]") || rows[0] || null;
         }
 
         if (selected) {

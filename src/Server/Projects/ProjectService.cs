@@ -202,7 +202,16 @@ public sealed record ProjectMutationResult(
     /// endpoint echoes it to the form, so the error names the project instead of only saying "taken"
     /// (TC-002) - and nothing is renamed behind the user's back.
     /// </summary>
-    string? ConflictName = null)
+    string? ConflictName = null,
+
+    /// <summary>
+    /// B-015: the builder's own refusal sentence behind a stable field code - the envelope's phrasing
+    /// (<c>pipeline.steps[2].name must be a non-empty string.</c>), the same one a worker's definition
+    /// error shows. A code alone leaves the reader a search they cannot finish; the PRG redirect must
+    /// keep carrying only the stable code, so the endpoint takes the sentence to the page through the
+    /// draft stash instead.
+    /// </summary>
+    string? Detail = null)
 {
     public static ProjectMutationResult Success(Guid projectId) => new(ProjectMutationStatus.Success, projectId);
 
@@ -213,6 +222,10 @@ public sealed record ProjectMutationResult(
 
     public static ProjectMutationResult Invalid(params ProjectFieldError[] errors) =>
         new(ProjectMutationStatus.InvalidInput, FieldErrors: errors);
+
+    /// <summary>An invalid submission that also carries the builder's own sentence (card B-015).</summary>
+    public static ProjectMutationResult Invalid(string? detail, params ProjectFieldError[] errors) =>
+        new(ProjectMutationStatus.InvalidInput, FieldErrors: errors, Detail: detail);
 }
 
 /// <summary>
@@ -729,13 +742,15 @@ public sealed class ProjectService(
         var specJson = FreestyleSteps.BuildSpecJson(project.Name, input, out var error);
         if (specJson is null)
         {
-            // The specific reason went to the log; the page's redirect carries the stable code.
+            // The specific reason goes to the log with the ids, and - card B-015 - travels with the
+            // refused submission to the page, which renders it instead of leaving the reader to guess.
             logger.LogInformation(
                 "Freestyle steps refused. OrganizationId={OrganizationId} ProjectId={ProjectId} Reason={Reason}",
                 activeOrganizationId,
                 project.Id,
                 error);
             return ProjectMutationResult.Invalid(
+                error,
                 new ProjectFieldError(ProjectFields.Steps, ProjectErrorCodes.StepsInvalid));
         }
 

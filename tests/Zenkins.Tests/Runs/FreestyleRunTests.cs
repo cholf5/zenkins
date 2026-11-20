@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Xunit;
 using Zenkins.Server.Data.Entities;
+using Zenkins.Server.Organizations;
 using Zenkins.Server.Runs;
 using Zenkins.Shared.Pipelines;
 using Zenkins.Shared.Projects;
@@ -142,6 +143,125 @@ public sealed class FreestyleRunTests
 
         var after = (await host.ReadRunAsync(await TriggerForAssertionAsync(owner, projectId))).PipelineSpecJson;
         Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task A_refused_save_renders_the_submitted_draft_back_and_marks_the_named_row()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner);
+        Assert.True(await SaveStepsAsync(owner, projectId, TwoSteps()));
+
+        var refused = await SaveStepsRawAsync(owner, projectId, ThreeStepsMiddleBad());
+        Assert.Equal((HttpStatusCode)302, refused.StatusCode);
+
+        // Card B-015: the PRG GET renders the submission, not the saved spec. The refused row (its
+        // empty name is the refusal) is on the page with its script, its neighbours too, and the
+        // builder's own sentence travels with them - verbatim, not only in the log.
+        var page = await AuthTestHost.GetStringAsync(
+            owner,
+            $"/projects/{projectId}/pipelines?error=steps-invalid");
+        Assert.Contains("echo draft-keeper", page, StringComparison.Ordinal);
+        Assert.Contains("echo first", page, StringComparison.Ordinal);
+        Assert.Contains("echo third", page, StringComparison.Ordinal);
+
+        // A comment in the environment text survives too: the draft renders verbatim, not through
+        // the frozen shape (whose env dictionary would silently drop it).
+        Assert.Contains("# a comment", page, StringComparison.Ordinal);
+        Assert.Contains("KEEP_ME=1", page, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("echo hello", page, StringComparison.Ordinal);
+        Assert.Contains("pipeline.steps[2].name must be a non-empty string.", page, StringComparison.Ordinal);
+        Assert.Contains("data-split-error=\"true\"", page, StringComparison.Ordinal);
+
+        // Read once: the same URL a second time (a refresh) answers the saved spec again.
+        var refreshed = await AuthTestHost.GetStringAsync(
+            owner,
+            $"/projects/{projectId}/pipelines?error=steps-invalid");
+        Assert.DoesNotContain("echo draft-keeper", refreshed, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-split-error", refreshed, StringComparison.Ordinal);
+        Assert.Contains("echo hello", refreshed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_refused_post_list_renders_its_own_draft_back()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner);
+        Assert.True(await SaveStepsAsync(owner, projectId, TwoSteps()));
+
+        // A valid main list plus an always-post step with no name: the refusal names the post list by
+        // its own path, and the draft that comes back keeps what was submitted there too.
+        var badAlways = JsonSerializer.Serialize(
+            new object[]
+            {
+                new { name = "", script = "echo cleanup-draft", envLines = "", continueOnError = false, artifactsText = "" },
+            });
+        var refused = await SaveStepsRawAsync(owner, projectId, TwoSteps(), alwaysJson: badAlways);
+        Assert.Equal((HttpStatusCode)302, refused.StatusCode);
+
+        var page = await AuthTestHost.GetStringAsync(
+            owner,
+            $"/projects/{projectId}/pipelines?error=steps-invalid");
+
+        // The post section renders the submitted draft (not an empty list, not the saved spec), and
+        // the reason sentence names it by the post path - the same discipline the main list has. The
+        // empty name freezes to the bare prefix, and the sentence's quotes reach the response
+        // HTML-encoded, so the assertion stops before them.
+        Assert.Contains("echo cleanup-draft", page, StringComparison.Ordinal);
+        Assert.Contains("pipeline.post.always[1].name must start with", page, StringComparison.Ordinal);
+        Assert.Contains("data-split-error=\"true\"", page, StringComparison.Ordinal);
+        Assert.Contains("echo hello", page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Another_member_never_receives_a_refused_draft()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner);
+        Assert.True(await SaveStepsAsync(owner, projectId, TwoSteps()));
+
+        var member = await CreateMemberAsync(host, "freestyle-member@example.test");
+
+        _ = await SaveStepsRawAsync(owner, projectId, ThreeStepsMiddleBad());
+
+        // The stash is keyed to the user who submitted it: another member of the same organization
+        // visiting the same editor gets the saved spec, never someone else's draft.
+        var memberPage = await AuthTestHost.GetStringAsync(
+            member,
+            $"/projects/{projectId}/pipelines?error=steps-invalid");
+        Assert.DoesNotContain("echo draft-keeper", memberPage, StringComparison.Ordinal);
+        Assert.Contains("echo hello", memberPage, StringComparison.Ordinal);
+
+        // And the owner's own visit still gets the draft - the member's visit did not consume it.
+        var ownerPage = await AuthTestHost.GetStringAsync(
+            owner,
+            $"/projects/{projectId}/pipelines?error=steps-invalid");
+        Assert.Contains("echo draft-keeper", ownerPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_successful_save_retires_the_stashed_draft()
+    {
+        using var host = await RunTestHost.CreateAsync();
+        var owner = await host.Inner.SignInOwnerAsync();
+        var projectId = await CreateFreestyleProjectAsync(owner);
+        Assert.True(await SaveStepsAsync(owner, projectId, TwoSteps()));
+
+        _ = await SaveStepsRawAsync(owner, projectId, ThreeStepsMiddleBad());
+
+        // The fixed save lands without the editor ever being re-opened, and the stale draft must not
+        // resurrect on the next visit that still carries the old error code.
+        Assert.True(await SaveStepsAsync(owner, projectId, TwoSteps()));
+
+        var page = await AuthTestHost.GetStringAsync(
+            owner,
+            $"/projects/{projectId}/pipelines?error=steps-invalid");
+        Assert.DoesNotContain("echo draft-keeper", page, StringComparison.Ordinal);
+        Assert.Contains("echo hello", page, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -483,6 +603,43 @@ public sealed class FreestyleRunTests
         {
             new { name = stepName, script = "echo rewritten", envLines = "", continueOnError = false, artifactsText = "" },
         });
+
+    /// <summary>
+    /// Card B-015's refused payload: three steps whose middle one has no name, so the builder refuses
+    /// with <c>pipeline.steps[2].name must be a non-empty string.</c> and the rest of the list - the
+    /// neighbours and one step's env comment - is exactly what the page must render back.
+    /// </summary>
+    private static string ThreeStepsMiddleBad() => JsonSerializer.Serialize(
+        new object[]
+        {
+            new { name = "First", script = "echo first", envLines = "# a comment\nKEEP_ME=1", continueOnError = false, artifactsText = "" },
+            new { name = "", script = "echo draft-keeper", envLines = "", continueOnError = false, artifactsText = "" },
+            new { name = "Third", script = "echo third", envLines = "", continueOnError = false, artifactsText = "" },
+        });
+
+    /// <summary>An ordinary Member of the Owner's organization (the second reader B-015's isolation needs).</summary>
+    private static async Task<HttpClient> CreateMemberAsync(RunTestHost host, string email)
+    {
+        var memberClient = host.Host.CreateClient();
+        using (var registration = await AuthTestHost.RegisterAsync(memberClient, email))
+        {
+            Assert.True(
+                (int)registration.StatusCode is 302 or 303,
+                $"registering the Member failed with {(int)registration.StatusCode}.");
+        }
+
+        using var ownerClient = await host.Inner.SignInOwnerAsync();
+        using var invite = await OrganizationTestHost.PostFormAsync(
+            ownerClient,
+            OrganizationEndpoints.MembersPath,
+            "/organizations/members/invite",
+            new Dictionary<string, string> { ["Email"] = email });
+        Assert.True((int)invite.StatusCode is 302 or 303, $"inviting the Member failed with {(int)invite.StatusCode}.");
+
+        // Resolve the Member's session once so the owner's organization becomes its persisted selection.
+        _ = await AuthTestHost.GetStringAsync(memberClient, "/");
+        return memberClient;
+    }
 
     private static async Task<bool> SaveStepsAsync(HttpClient owner, Guid projectId, string stepsJson) =>
         (await SaveStepsRawAsync(owner, projectId, stepsJson)).StatusCode is HttpStatusCode.Found or HttpStatusCode.RedirectKeepVerb;

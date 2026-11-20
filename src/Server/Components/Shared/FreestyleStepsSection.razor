@@ -1,5 +1,6 @@
 @using System.Globalization
 @using Zenkins.Shared.Pipelines
+@using Zenkins.Server.Projects
 @* One list of Freestyle step rows (card F-030's main list, cards F-031's three post lists). The markup is
    the same for every list on purpose: a post step is a step. The list's key is what keeps element ids and
    the serialized JSON field distinct, so four lists can share one form and one script.
@@ -19,9 +20,12 @@
         <ol data-freestyle-steps-list="@ListKey" class="zk-split-list">
             @for (var stepIndex = 0; stepIndex < RowCount; stepIndex++)
             {
-                var step = Steps[stepIndex];
-                var displayName = DisplayName(step);
-                <li data-freestyle-step data-split-step class="zk-split-row">
+                var step = Drafts is null ? Steps[stepIndex] : null;
+                var draft = Drafts is null ? null : Drafts[stepIndex];
+                var displayName = draft is not null ? draft.Name ?? string.Empty : DisplayName(step!);
+                <li data-freestyle-step data-split-step
+                    class="zk-split-row"
+                    data-split-error="@(stepIndex == ErrorRowIndex ? "true" : null)">
                     <div class="zk-split-row-head">
                         @* The whole line is the button that selects the step: one target, and the row
                            itself stays the place the move/remove actions live. *@
@@ -49,6 +53,7 @@
                         <FreestyleStepFields IdPrefix="@($"{ListKey}-step-{stepIndex}")"
                                              Name="@displayName"
                                              Step="step"
+                                             Draft="draft"
                                              ShowStage="ShowStage" />
                     </div>
                 </li>
@@ -129,6 +134,24 @@
     [Parameter]
     public IReadOnlyList<PipelineStep> Steps { get; set; } = [];
 
+    /// <summary>
+    /// Card B-015: a refused submission's drafts for this list, when the page renders what was
+    /// submitted instead of the saved spec. Each row then shows its author's own values verbatim
+    /// (<see cref="FreestyleStepFields.Draft"/>), so a value the builder refused - an env comment, a
+    /// non-numeric timeout - is still on the page for the next save, and a list the submission did
+    /// not carry is null here and renders <see cref="Steps"/> as before. An empty list is a real
+    /// submission (the browser posts <c>[]</c> for a cleared list) and renders no rows.
+    /// </summary>
+    [Parameter]
+    public IReadOnlyList<FreestyleStepDraft>? Drafts { get; set; }
+
+    /// <summary>
+    /// Card B-015: the (0-based) row the refusal reason names, marked <c>data-split-error</c> so the
+    /// row is visible before selection and js/split-list.js opens it first. Null marks nothing.
+    /// </summary>
+    [Parameter]
+    public int? ErrorRowIndex { get; set; }
+
     /// <summary>Whether the rows offer the stage field (card F-030). Post steps render in the post section,
     /// never a stage, so their lists hide it.</summary>
     [Parameter]
@@ -142,8 +165,8 @@
     /// <summary>The inspector pane's id, so a row's aria-controls has a target that exists.</summary>
     private string PaneId => $"{ListKey}-step-pane";
 
-    /// <summary>One row per saved step.</summary>
-    private int RowCount => Steps.Count;
+    /// <summary>One row per draft when the page renders a refused submission, else one per saved step.</summary>
+    private int RowCount => Drafts?.Count ?? Steps.Count;
 
     private string DisplayName(PipelineStep step) =>
         StripPostPrefix && step.Name.StartsWith(PipelineSpecSchema.PostNamePrefix, StringComparison.Ordinal)
