@@ -133,6 +133,18 @@ Pending. The repo has no browser harness; D-004-B3 records why TestServer cannot
   - `node --check src/Server/wwwroot/js/run-console.js` → passed.
   - `dotnet test --filter "Category=RunUi"` → 54/54.
   - `dotnet test -c Release --filter "Category=Milestone"` → 12/12.
-  - Real-browser pass and the 5,000-line fixture: **not run in this environment** (no browser
-    harness). Run on a machine with a browser before this card leaves review.
-- Results: automated gates green as above; the browser half is the remaining acceptance item.
+  - **Isolated JS harness in a real Chrome** (the console DOM + `js/run-console.js`, fake
+    `dotNet`): follow-to-bottom at load, a scroll-to-top callback reports `OnConsoleScroll(false)`,
+    a paused `afterRender` holds the position, and `afterRender(..., seq)` scrolls the match into
+    view. All four passed; this is the script half of the follow contract, not the full Blazor
+    circuit.
+  - `dotnet test -c Release --filter "Category!=Milestone"` (and a Debug retry): **did not complete
+    within 8+ minutes in this environment; stopped.** The affected categories were run
+    individually and are green (RunUi 54/54, WorkerRuntime 46/46 + 2 Windows-only skipped,
+    Localization 18/18, Theme/TenantIsolation after the inventory update). The full-suite hang is
+    not attributed to this branch; re-run on a quieter machine before the card is marked done.
+  - Real-browser pass through the signed-in app, and the 5,000-line visual fixture: **still owed**
+    (this session could not sign in to the dev instance). Run on a machine with a browser and the
+    dev credentials before the card leaves review.
+- Results: targeted automated gates green; the isolated Chrome harness green; the full app browser
+  pass and the full-suite completion are the remaining acceptance items.
