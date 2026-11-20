@@ -19,8 +19,14 @@
         return Array.prototype.slice.call(list.querySelectorAll(ROW_SELECTOR));
     }
 
+    function fieldScope(row) {
+        // The fields may have been moved into the inspector pane by js/split-list.js, which leaves the row a
+        // pointer to them. When it has not run, they are still the row's own children.
+        return row._splitDetail || row;
+    }
+
     function fieldValue(row, name) {
-        var field = row.querySelector('[data-freestyle-field="' + name + '"]');
+        var field = fieldScope(row).querySelector('[data-freestyle-field="' + name + '"]');
         if (!field) {
             return "";
         }
@@ -60,6 +66,105 @@
         }
     }
 
+    // F-030's step line: what a collapsed row shows instead of its whole form - the name (or the script's
+    // first line, so an unnamed step still says what it does) plus the settings that are not the default.
+    // The words come from the list's data-split-labels, so this file holds none of either language.
+    function stepSummary(row, ctx) {
+        var name = (ctx.field("name") || "").trim();
+        var title = name || firstScriptLine(ctx.field("script")) || ctx.label("unnamed");
+        var chips = [];
+
+        var stage = (ctx.field("stage") || "").trim();
+        if (stage) {
+            chips.push(stage);
+        }
+
+        var env = countLines(ctx.field("env-lines"));
+        if (env > 0) {
+            chips.push(ctx.format("env", env));
+        }
+
+        var artifacts = countList(ctx.field("artifacts-text"));
+        if (artifacts > 0) {
+            chips.push(ctx.format("artifacts", artifacts));
+        }
+
+        var timeout = (ctx.field("timeout-seconds") || "").trim();
+        if (timeout) {
+            chips.push(ctx.format("timeout", timeout));
+        }
+
+        var attempts = (ctx.field("retry") || "").trim();
+        if (attempts && attempts !== "1") {
+            chips.push(ctx.format("attempts", attempts));
+        }
+
+        var runsOn = (ctx.field("runs-on") || "").trim();
+        if (runsOn) {
+            chips.push(ctx.format("runsOn", runsOn));
+        }
+
+        if (ctx.field("continue-on-error") === "true") {
+            chips.push(ctx.label("continueOnError"));
+        }
+
+        return { title: title, chips: chips };
+    }
+
+    function firstScriptLine(script) {
+        var lines = (script || "").split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (line.length > 0) {
+                return line;
+            }
+        }
+
+        return "";
+    }
+
+    function countLines(text) {
+        var lines = (text || "").split("\n");
+        var count = 0;
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].trim().length > 0) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    function countList(text) {
+        var items = (text || "").split(",");
+        var count = 0;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].trim().length > 0) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    function splitList() {
+        return window.zenkinsSplit || null;
+    }
+
+    // The four stems of this editor share one summary; the editor's own key names the words to use.
+    var listKeys = ["steps", "always", "success", "failure"];
+
+    function installSummaries() {
+        var api = splitList();
+        if (!api) {
+            return;
+        }
+
+        for (var i = 0; i < listKeys.length; i++) {
+            api.summarize(listKeys[i], stepSummary);
+        }
+    }
+
     function renumber(list) {
         var all = rows(list);
         for (var i = 0; i < all.length; i++) {
@@ -93,6 +198,7 @@
 
         list.appendChild(source.cloneNode(true));
         renumber(list);
+        afterMutation(section, list);
     }
 
     // F-035: append a fully formed row from a `script-step` snippet. The text comes from the page's
@@ -131,6 +237,7 @@
 
         list.appendChild(row);
         renumber(list);
+        afterMutation(section, list);
     }
 
     function snippetData() {
@@ -159,6 +266,22 @@
         var reference = offset < 0 ? all[index - 1] : all[index + 1].nextSibling;
         row.parentNode.insertBefore(row, reference);
         renumber(list);
+    }
+
+    // A row list changed: the inspector has to see the new row (its block is still in the row, not in the
+    // pane) and open it, which is what makes "add" land the reader in the fields they just created.
+    function afterMutation(section, list) {
+        var api = splitList();
+        if (!api) {
+            return;
+        }
+
+        api.register(section);
+
+        var all = rows(list);
+        if (all.length > 0) {
+            api.select(all[all.length - 1]);
+        }
     }
 
     // B-010: both handlers live on `document`. This file is a plain <script> in App.razor, loaded once
@@ -198,6 +321,10 @@
                 if (row && list) {
                     row.parentNode.removeChild(row);
                     renumber(list);
+                    var api = splitList();
+                    if (api && section) {
+                        api.register(section);
+                    }
                 }
                 break;
             case "move-up":
@@ -214,4 +341,14 @@
 
         event.preventDefault();
     });
+
+    installSummaries();
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", installSummaries);
+    }
+
+    // Load order between this file and js/split-list.js must not matter, and a re-rendered page must get
+    // its lines back: summarizing is idempotent, so both hooks are safe to repeat.
+    document.addEventListener("enhancedload", installSummaries);
 })();

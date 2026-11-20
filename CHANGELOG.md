@@ -8,6 +8,18 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **The steps editor is a list and an inspector (B-014).** Ten steps used to be ten fully expanded
+  cards, so one pipeline was ten screens of fields and the shape of the run was somewhere in the
+  middle of it. The editor is now one line per step on the left - its number, its name (or the script's
+  first line, so an unnamed step still says what it does) and a chip per setting that is not the
+  default - with the selected step's fields in the pane on the right, the shape Unity's Inspector and
+  Jenkins' build-step list both use. The fields of every step stay in the DOM and are *moved* into the
+  pane, never re-rendered: `js/freestyle-steps.js` serializes the nodes, so a re-created `<textarea>`
+  would save empty and say nothing. Below 60rem the pane is gone and the same markup is an accordion.
+  A step's fields now live in `FreestyleStepFields.razor` and render for both the saved row and the row
+  template, so the template cannot drift from the saved row again. The same change fixes the `runs-on`
+  placeholder, which showed its `&&` escaped because the attribute was escaped a second time.
+
 - **A run page renders its log panel again (B-013).** Starting a run landed the browser on the error
   boundary - **出错 / 页面渲染失败。** (*Something went wrong / The page failed to render.*) - a moment
   after the run was queued, so a fresh Freestyle project could not be used at all. The run page's log

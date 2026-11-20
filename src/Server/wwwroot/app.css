@@ -39,3 +39,202 @@ html.dark {
     align-items: flex-end;
   }
 }
+
+/* The list + inspector editor ([data-split-editor]), shared by the Freestyle steps editor and (next) the
+   parameter rows: one line per item on the left, the selected item's fields on the right. Jenkins' freestyle
+   config collapses a build step to one line and opens its body on demand; this is the same idea with the
+   detail pane kept in view, so a list of steps and the step being edited never fight for the same column.
+
+   The fields are rendered once, inside their row, and js/split-list.js moves that block
+   ([data-split-detail]) into the pane. Nothing here may hide them by removing nodes: the row editors
+   serialize the DOM, so a field that is not there saves as empty.
+
+   Below 60rem there is no room for two columns and the same markup is an accordion - the selected row
+   shows its block in place. 60rem is this layout's breakpoint; the package's `bb:sm:` utilities stop at
+   40rem, where an inspector column would be too narrow to read. */
+.zk-split {
+  display: block;
+}
+
+.zk-split-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.zk-split-row + .zk-split-row {
+  border-top: 1px solid var(--border);
+}
+
+.zk-split-row-head {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.zk-split-summary {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.zk-split-summary:hover,
+.zk-split-row[data-selected] .zk-split-summary {
+  background: var(--accent);
+}
+
+.zk-split-summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.zk-split-index {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.zk-split-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.zk-split-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.zk-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.zk-split-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline-end: 0.5rem;
+}
+
+.zk-row-action {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.zk-row-action:hover {
+  background: var(--accent);
+}
+
+.zk-row-action-danger {
+  border-color: color-mix(in oklch, var(--destructive) 40%, var(--border));
+  color: var(--destructive);
+}
+
+/* The fields of a row are open only where the layout puts them: in the row itself on a narrow screen, in
+   the pane otherwise. Both are the same node; only its parent and this rule change. */
+.zk-split-slot [data-split-detail] {
+  display: none;
+}
+
+.zk-split-row[data-selected] .zk-split-slot [data-split-detail] {
+  display: block;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.zk-split-pane {
+  display: none;
+}
+
+.zk-split-empty {
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+
+.zk-advanced {
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.zk-advanced > summary {
+  cursor: pointer;
+  padding: 0.25rem 0;
+}
+
+.zk-advanced-body {
+  padding-top: 0.5rem;
+}
+
+.zk-input {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0.25rem 0.75rem;
+}
+
+textarea.zk-input {
+  padding: 0.5rem 0.75rem;
+  resize: vertical;
+}
+
+@media (min-width: 60rem) {
+  .zk-split {
+    display: grid;
+    grid-template-columns: minmax(13rem, 20rem) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .zk-split-pane {
+    display: block;
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+  }
+
+  /* In the pane the block is the pane's content; the row keeps only its line. */
+  .zk-split-pane [data-split-detail],
+  .zk-split-row[data-selected] .zk-split-slot [data-split-detail] {
+    display: block;
+    padding: 0;
+  }
+}

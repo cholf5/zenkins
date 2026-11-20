@@ -2,255 +2,93 @@
 @using Zenkins.Shared.Pipelines
 @* One list of Freestyle step rows (card F-030's main list, cards F-031's three post lists). The markup is
    the same for every list on purpose: a post step is a step. The list's key is what keeps element ids and
-   the serialized JSON field distinct, so four lists can share one form and one script. *@
+   the serialized JSON field distinct, so four lists can share one form and one script.
+
+   The layout is a list + inspector ([data-split-editor], js/split-list.js): the left column is one line per
+   step, the right one is the selected step's fields, so ten steps read as ten lines instead of ten forms.
+   The fields of every step stay in the DOM - inside its row until selected, moved into the pane after that -
+   because js/freestyle-steps.js serializes the nodes, not a model. Below the pane's breakpoint the same
+   markup is an accordion, and app.css is the only thing that knows the difference. *@
 <section data-freestyle-list-section data-freestyle-list="@ListKey" class="bb:space-y-3">
     <div>
         <h3 class="bb:text-sm bb:font-medium">@Title</h3>
         <p class="bb:text-xs bb:text-muted-foreground">@Description</p>
     </div>
 
-    <ol data-freestyle-steps-list="@ListKey" class="bb:space-y-4">
-        @for (var stepIndex = 0; stepIndex < Steps.Count; stepIndex++)
-        {
-            var step = Steps[stepIndex];
-            <li data-freestyle-step class="bb:rounded-md bb:border bb:border-input bb:p-4">
-                <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
-                    <span class="bb:text-sm bb:font-medium">
-                        Step <span data-freestyle-step-index>@(stepIndex + 1)</span>
-                    </span>
-                    <div class="bb:flex bb:items-center bb:gap-1">
-                        <button type="button" data-freestyle-action="move-up"
-                                class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                                aria-label="@L10n["Move step {0} up", stepIndex + 1]">↑</button>
-                        <button type="button" data-freestyle-action="move-down"
-                                class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
-                                aria-label="@L10n["Move step {0} down", stepIndex + 1]">↓</button>
-                        <button type="button" data-freestyle-action="remove"
-                                class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                                aria-label="@L10n["Remove step {0}", stepIndex + 1]">@L10n["Remove"]</button>
-                    </div>
-                </div>
-                <div class="bb:space-y-3 bb:text-sm">
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-name-{stepIndex}")">@L10n["Name"]</label>
-                        <input data-freestyle-field="name"
-                               id="@($"{ListKey}-step-name-{stepIndex}")"
-                               value="@DisplayName(step)"
-                               maxlength="200"
-                               autocomplete="off"
-                               spellcheck="false"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    @if (ShowStage)
-                    {
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-stage-{stepIndex}")">
-                                @L10n["Stage (blank = outside any stage)"]
-                            </label>
-                            <input data-freestyle-field="stage"
-                                   id="@($"{ListKey}-step-stage-{stepIndex}")"
-                                   value="@step.Stage"
-                                   maxlength="@MaxStageLength"
-                                   placeholder="@L10n["Build"]"
-                                   autocomplete="off"
-                                   spellcheck="false"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
-                    }
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-script-{stepIndex}")">
-                            @L10n["Script"]
-                        </label>
-                        <textarea data-freestyle-field="script"
-                                  id="@($"{ListKey}-step-script-{stepIndex}")"
-                                  rows="6"
-                                  spellcheck="false"
-                                  class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs">@step.Script</textarea>
-                        <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
-                            @L10n["Runs on the claiming worker (cmd on Windows, sh -e on Unix) in the run's workspace."] <code>${secret:NAME}</code> @L10n["and"] <code>${env:NAME}</code>
-                            @L10n["references are resolved just before the step starts."]
-                        </p>
-                    </div>
-                    <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-env-{stepIndex}")">
-                                @L10n["Environment (one NAME=value per line)"]
-                            </label>
-                            <textarea data-freestyle-field="env-lines"
-                                      id="@($"{ListKey}-step-env-{stepIndex}")"
-                                      rows="3"
-                                      spellcheck="false"
-                                      class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs">@EnvLinesText(step)</textarea>
-                        </div>
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-artifacts-{stepIndex}")">
-                                @L10n["Artifacts (comma-separated paths)"]
-                            </label>
-                            <input data-freestyle-field="artifacts-text"
-                                   id="@($"{ListKey}-step-artifacts-{stepIndex}")"
-                                   value="@string.Join(", ", step.ArtifactPaths)"
-                                   autocomplete="off"
-                                   spellcheck="false"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
+    <div data-split-editor="@ListKey" data-split-labels="@LabelsJson()" class="zk-split">
+        <ol data-freestyle-steps-list="@ListKey" class="zk-split-list">
+            @for (var stepIndex = 0; stepIndex < RowCount; stepIndex++)
+            {
+                var step = Steps[stepIndex];
+                var displayName = DisplayName(step);
+                <li data-freestyle-step data-split-step class="zk-split-row">
+                    <div class="zk-split-row-head">
+                        @* The whole line is the button that selects the step: one target, and the row
+                           itself stays the place the move/remove actions live. *@
+                        <button type="button" data-split-select
+                                aria-expanded="false"
+                                aria-controls="@PaneId"
+                                class="zk-split-summary">
+                            <span data-freestyle-step-index class="zk-split-index">@(stepIndex + 1)</span>
+                            <span data-split-title class="zk-split-title">@displayName</span>
+                            <span data-split-chips class="zk-split-chips"></span>
+                        </button>
+                        <div class="zk-split-actions">
+                            <button type="button" data-freestyle-action="move-up"
+                                    class="zk-row-action"
+                                    aria-label="@L10n["Move step {0} up", stepIndex + 1]">↑</button>
+                            <button type="button" data-freestyle-action="move-down"
+                                    class="zk-row-action"
+                                    aria-label="@L10n["Move step {0} down", stepIndex + 1]">↓</button>
+                            <button type="button" data-freestyle-action="remove"
+                                    class="zk-row-action zk-row-action-danger"
+                                    aria-label="@L10n["Remove step {0}", stepIndex + 1]">@L10n["Remove"]</button>
                         </div>
                     </div>
-                    <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-timeout-{stepIndex}")">
-                                @L10n["Timeout (seconds, blank = no limit)"]
-                            </label>
-                            <input data-freestyle-field="timeout-seconds"
-                                   id="@($"{ListKey}-step-timeout-{stepIndex}")"
-                                   type="number"
-                                   min="@MinStepTimeoutSeconds"
-                                   max="@MaxStepTimeoutSeconds"
-                                   value="@(step.TimeoutSeconds?.ToString(CultureInfo.InvariantCulture))"
-                                   autocomplete="off"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-runs-on-{stepIndex}")">
-                                @L10n["Needs a Worker with (blank = any)"]
-                            </label>
-                            <input data-freestyle-field="runs-on"
-                                   id="@($"{ListKey}-step-runs-on-{stepIndex}")"
-                                   type="text"
-                                   value="@step.RunsOn"
-                                   placeholder="linux &amp;&amp; (arm64 || x64)"
-                                   autocomplete="off"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
-                        <div>
-                            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@($"{ListKey}-step-retry-{stepIndex}")">
-                                @L10n["Attempts (blank = 1)"]
-                            </label>
-                            <input data-freestyle-field="retry"
-                                   id="@($"{ListKey}-step-retry-{stepIndex}")"
-                                   type="number"
-                                   min="@MinStepRetry"
-                                   max="@MaxStepRetry"
-                                   value="@(step.Retry?.ToString(CultureInfo.InvariantCulture))"
-                                   autocomplete="off"
-                                   class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                        </div>
+                    <div data-split-detail-slot class="zk-split-slot">
+                        <FreestyleStepFields IdPrefix="@($"{ListKey}-step-{stepIndex}")"
+                                             Name="@displayName"
+                                             Step="step"
+                                             ShowStage="ShowStage" />
                     </div>
-                    <label class="bb:flex bb:items-center bb:gap-2">
-                        <input type="checkbox"
-                               data-freestyle-field="continue-on-error"
-                               checked="@(step.ContinueOnError)" />
-                        <span class="bb:text-xs">@L10n["Continue on error: a failure here does not stop the run."]</span>
-                    </label>
-                </div>
-            </li>
-        }
-    </ol>
+                </li>
+            }
+        </ol>
 
+        <div data-split-pane id="@PaneId" class="zk-split-pane" aria-label="@Title">
+            <p data-split-empty class="zk-split-empty">@L10n["No steps in this list yet. Add one below."]</p>
+        </div>
+    </div>
+
+    @* The row "Add step" clones. The element order matters: the <li> is the template's first child, which
+       is where B-011 found the browser's parse and Blazor's appendChild disagree - js/freestyle-steps.js
+       reads it from either place, and ProjectUiRowTemplateTests pins that. The fields come from the one
+       component both halves use, so the template cannot lose a field the saved row has. *@
     <template id="@TemplateId">
-        <li data-freestyle-step class="bb:rounded-md bb:border bb:border-input bb:p-4">
-            <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
-                <span class="bb:text-sm bb:font-medium">
-                    @L10n["Step"] <span data-freestyle-step-index></span>
-                </span>
-                <div class="bb:flex bb:items-center bb:gap-1">
+        <li data-freestyle-step data-split-step class="zk-split-row">
+            <div class="zk-split-row-head">
+                <button type="button" data-split-select
+                        aria-expanded="false"
+                        aria-controls="@PaneId"
+                        class="zk-split-summary">
+                    <span data-freestyle-step-index class="zk-split-index"></span>
+                    <span data-split-title class="zk-split-title">@L10n["New step"]</span>
+                    <span data-split-chips class="zk-split-chips"></span>
+                </button>
+                <div class="zk-split-actions">
                     <button type="button" data-freestyle-action="move-up"
-                            class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
+                            class="zk-row-action"
                             aria-label="@L10n["Move step up"]">↑</button>
                     <button type="button" data-freestyle-action="move-down"
-                            class="bb:rounded-md bb:border bb:border-input bb:px-2 bb:py-1 bb:text-xs"
+                            class="zk-row-action"
                             aria-label="@L10n["Move step down"]">↓</button>
                     <button type="button" data-freestyle-action="remove"
-                            class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
+                            class="zk-row-action zk-row-action-danger"
                             aria-label="@L10n["Remove step"]">@L10n["Remove"]</button>
                 </div>
             </div>
-            <div class="bb:space-y-3 bb:text-sm">
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="name">@L10n["Name"]</label>
-                    <input data-freestyle-field="name"
-                           maxlength="200"
-                           autocomplete="off"
-                           spellcheck="false"
-                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                </div>
-                @if (ShowStage)
-                {
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="stage">
-                            Stage (blank = outside any stage)
-                        </label>
-                        <input data-freestyle-field="stage"
-                               maxlength="@MaxStageLength"
-                               placeholder="@L10n["Build"]"
-                               autocomplete="off"
-                               spellcheck="false"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                }
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="script">@L10n["Script"]</label>
-                    <textarea data-freestyle-field="script"
-                              rows="6"
-                              spellcheck="false"
-                              class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs"></textarea>
-                </div>
-                <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="env-lines">
-                            Environment (one NAME=value per line)
-                        </label>
-                        <textarea data-freestyle-field="env-lines"
-                                  rows="3"
-                                  spellcheck="false"
-                                  class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-2 bb:font-mono bb:text-xs"></textarea>
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="artifacts-text">
-                            Artifacts (comma-separated paths)
-                        </label>
-                        <input data-freestyle-field="artifacts-text"
-                               autocomplete="off"
-                               spellcheck="false"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                </div>
-                <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="timeout-seconds">
-                            Timeout (seconds, blank = no limit)
-                        </label>
-                        <input data-freestyle-field="timeout-seconds"
-                               type="number"
-                               min="@MinStepTimeoutSeconds"
-                               max="@MaxStepTimeoutSeconds"
-                               autocomplete="off"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="runs-on">
-                            Needs a Worker with (blank = any)
-                        </label>
-                        <input data-freestyle-field="runs-on"
-                               type="text"
-                               placeholder="linux &amp;&amp; (arm64 || x64)"
-                               autocomplete="off"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-freestyle-for="retry">
-                            Attempts (blank = 1)
-                        </label>
-                        <input data-freestyle-field="retry"
-                               type="number"
-                               min="@MinStepRetry"
-                               max="@MaxStepRetry"
-                               autocomplete="off"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                </div>
-                <label class="bb:flex bb:items-center bb:gap-2">
-                    <input type="checkbox" data-freestyle-field="continue-on-error" />
-                    <span class="bb:text-xs">@L10n["Continue on error: a failure here does not stop the run."]</span>
-                </label>
+            <div data-split-detail-slot class="zk-split-slot">
+                <FreestyleStepFields ShowStage="ShowStage" />
             </div>
         </li>
     </template>
@@ -268,7 +106,8 @@
 
 @code {
     /// <summary>The list's key (<c>steps</c>, <c>always</c>, <c>success</c>, <c>failure</c>): element ids and
-    /// the hidden field's target are derived from it, so four lists never collide.</summary>
+    /// the hidden field's target are derived from it, so four lists never collide. It is also the key
+    /// js/split-list.js summarizes this list's rows under.</summary>
     [Parameter, EditorRequired]
     public string ListKey { get; set; } = string.Empty;
 
@@ -300,23 +139,31 @@
     [Parameter]
     public bool StripPostPrefix { get; set; }
 
-    private const int MinStepTimeoutSeconds = PipelineSpecSchema.MinStepTimeoutSeconds;
+    /// <summary>The inspector pane's id, so a row's aria-controls has a target that exists.</summary>
+    private string PaneId => $"{ListKey}-step-pane";
 
-    private const int MaxStepTimeoutSeconds = PipelineSpecSchema.MaxStepTimeoutSeconds;
-
-    private const int MinStepRetry = PipelineSpecSchema.MinStepRetry;
-
-    private const int MaxStepRetry = PipelineSpecSchema.MaxStepRetry;
-
-    private const int MaxStageLength = PipelineSpecSchema.MaxStageLength;
+    /// <summary>One row per saved step.</summary>
+    private int RowCount => Steps.Count;
 
     private string DisplayName(PipelineStep step) =>
         StripPostPrefix && step.Name.StartsWith(PipelineSpecSchema.PostNamePrefix, StringComparison.Ordinal)
             ? step.Name[PipelineSpecSchema.PostNamePrefix.Length..]
             : step.Name;
 
-    private static string EnvLinesText(PipelineStep step) =>
-        step.Env is { } env
-            ? string.Join("\n", env.Select(row => $"{row.Key}={row.Value}"))
-            : string.Empty;
+    /// <summary>
+    /// The words js/split-list.js puts on a row's chips. They travel as data (the same way the snippet
+    /// picker's text does) so the summary a browser draws for an edited row is the one this list would have
+    /// rendered, in the reader's language - and so no Chinese or English string lives in a .js file.
+    /// </summary>
+    private string LabelsJson() => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
+    {
+        ["stage"] = L10n["Stage"],
+        ["env"] = L10n["Environment {0}"],
+        ["artifacts"] = L10n["Artifacts {0}"],
+        ["timeout"] = L10n["Timeout {0}s"],
+        ["attempts"] = L10n["Attempts {0}"],
+        ["runsOn"] = L10n["Needs {0}"],
+        ["continueOnError"] = L10n["Continue on error"],
+        ["unnamed"] = L10n["Unnamed step"],
+    });
 }

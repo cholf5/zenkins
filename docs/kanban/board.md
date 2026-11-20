@@ -17,6 +17,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-011](issues/b-011-row-template-content-empty.md) | "Add step" and "Add parameter" do nothing — both row editors clone from `template.content`, which is empty once the circuit is interactive | P1 | S | none | B-010, F-020, F-021 |
 | [B-012](issues/b-012-worker-identity-recovery.md) | A restarted Worker whose credential the Server refuses stays dead behind a 401 loop — even with a registration token in the environment | P1 | M | none | F-004, F-005 |
 | [B-013](issues/b-013-run-page-render-crash.md) | A run page shows "The page failed to render." — the log panel renders once before its plan exists | P1 | S | none | F-008, D-004, F-043 |
+| [B-014](issues/b-014-steps-editor-list-inspector.md) | The steps editor is a list and an inspector — one line per step on the left, the selected step's fields on the right | P1 | M | none | F-020, F-031 |
 
 ## Done
 

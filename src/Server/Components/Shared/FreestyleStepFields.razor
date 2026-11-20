@@ -1,0 +1,167 @@
+@using System.Globalization
+@using Zenkins.Shared.Pipelines
+@* One step's fields - and the editor's only copy of them. The saved row and the row template both render
+   this component; the two hand-maintained field sets the section used to carry had already drifted (the
+   template's stage and environment labels were untranslated plain English), and a field is now added in
+   one place instead of two.
+
+   data-split-detail marks the block js/split-list.js moves between the row and the inspector pane. It has
+   to stay one node holding every field: js/freestyle-steps.js serializes the DOM, so a field that is not
+   in here is a field that saves as empty without saying so. For the same reason nothing here may be
+   hidden by dropping nodes - a collapsed group is a <details>, which keeps them. *@
+<div data-split-detail class="zk-split-fields bb:space-y-3 bb:text-sm">
+    <div>
+        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("name")">@L10n["Name"]</label>
+        <input data-freestyle-field="name"
+               id="@Id("name")"
+               value="@Name"
+               maxlength="200"
+               autocomplete="off"
+               spellcheck="false"
+               class="zk-input" />
+    </div>
+    @if (ShowStage)
+    {
+        <div>
+            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("stage")">
+                @L10n["Stage (blank = outside any stage)"]
+            </label>
+            <input data-freestyle-field="stage"
+                   id="@Id("stage")"
+                   value="@Step?.Stage"
+                   maxlength="@MaxStageLength"
+                   placeholder="@L10n["Build"]"
+                   autocomplete="off"
+                   spellcheck="false"
+                   class="zk-input" />
+        </div>
+    }
+    <div>
+        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("script")">@L10n["Script"]</label>
+        <textarea data-freestyle-field="script"
+                  id="@Id("script")"
+                  rows="8"
+                  spellcheck="false"
+                  class="zk-input bb:font-mono bb:text-xs">@Step?.Script</textarea>
+        <p class="bb:mt-1 bb:text-xs bb:text-muted-foreground">
+            @L10n["Runs on the claiming worker (cmd on Windows, sh -e on Unix) in the run's workspace."] <code>${secret:NAME}</code> @L10n["and"] <code>${env:NAME}</code>
+            @L10n["references are resolved just before the step starts."]
+        </p>
+    </div>
+    @* The fields a step needs less often than its script. Jenkins hides the same set behind one
+       "Advanced" toggle; a <details> is that toggle without a script, and it keeps the inputs in the DOM
+       for the serializer. *@
+    <details class="zk-advanced">
+        <summary class="bb:text-xs bb:font-medium">@L10n["Advanced"]</summary>
+        <div class="zk-advanced-body bb:space-y-3">
+            <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("env-lines")">
+                        @L10n["Environment (one NAME=value per line)"]
+                    </label>
+                    <textarea data-freestyle-field="env-lines"
+                              id="@Id("env-lines")"
+                              rows="3"
+                              spellcheck="false"
+                              class="zk-input bb:font-mono bb:text-xs">@EnvLinesText()</textarea>
+                </div>
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("artifacts-text")">
+                        @L10n["Artifacts (comma-separated paths)"]
+                    </label>
+                    <input data-freestyle-field="artifacts-text"
+                           id="@Id("artifacts-text")"
+                           value="@ArtifactsText()"
+                           autocomplete="off"
+                           spellcheck="false"
+                           class="zk-input" />
+                </div>
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("timeout-seconds")">
+                        @L10n["Timeout (seconds, blank = no limit)"]
+                    </label>
+                    <input data-freestyle-field="timeout-seconds"
+                           id="@Id("timeout-seconds")"
+                           type="number"
+                           min="@MinStepTimeoutSeconds"
+                           max="@MaxStepTimeoutSeconds"
+                           value="@Step?.TimeoutSeconds?.ToString(CultureInfo.InvariantCulture)"
+                           autocomplete="off"
+                           class="zk-input" />
+                </div>
+                <div>
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("retry")">
+                        @L10n["Attempts (blank = 1)"]
+                    </label>
+                    <input data-freestyle-field="retry"
+                           id="@Id("retry")"
+                           type="number"
+                           min="@MinStepRetry"
+                           max="@MaxStepRetry"
+                           value="@Step?.Retry?.ToString(CultureInfo.InvariantCulture)"
+                           autocomplete="off"
+                           class="zk-input" />
+                </div>
+                <div class="bb:sm:col-span-2">
+                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("runs-on")">
+                        @L10n["Needs a Worker with (blank = any)"]
+                    </label>
+                    <input data-freestyle-field="runs-on"
+                           id="@Id("runs-on")"
+                           type="text"
+                           value="@Step?.RunsOn"
+                           placeholder="linux &amp;&amp; (arm64 || x64)"
+                           autocomplete="off"
+                           class="zk-input" />
+                </div>
+            </div>
+            <label class="bb:flex bb:items-center bb:gap-2">
+                <input type="checkbox"
+                       data-freestyle-field="continue-on-error"
+                       checked="@(Step?.ContinueOnError == true)" />
+                <span class="bb:text-xs">@L10n["Continue on error: a failure here does not stop the run."]</span>
+            </label>
+        </div>
+    </details>
+</div>
+
+@code {
+    /// <summary>
+    /// The id stem for this block's labels, or <see langword="null"/> for the row template - a cloned row
+    /// would repeat an id the browser (and a label's <c>for</c>) resolves to the first match, so the
+    /// template's fields carry none, exactly as before.
+    /// </summary>
+    [Parameter]
+    public string? IdPrefix { get; set; }
+
+    /// <summary>The authored name as the editor shows it (a post step's frozen <c>post/</c> is stripped).</summary>
+    [Parameter]
+    public string? Name { get; set; }
+
+    /// <summary>The step being edited, or <see langword="null"/> for the row template's empty fields.</summary>
+    [Parameter]
+    public PipelineStep? Step { get; set; }
+
+    /// <summary>Whether this row offers the stage field (card F-030); a post step never does.</summary>
+    [Parameter]
+    public bool ShowStage { get; set; }
+
+    private const int MinStepTimeoutSeconds = PipelineSpecSchema.MinStepTimeoutSeconds;
+
+    private const int MaxStepTimeoutSeconds = PipelineSpecSchema.MaxStepTimeoutSeconds;
+
+    private const int MinStepRetry = PipelineSpecSchema.MinStepRetry;
+
+    private const int MaxStepRetry = PipelineSpecSchema.MaxStepRetry;
+
+    private const int MaxStageLength = PipelineSpecSchema.MaxStageLength;
+
+    private string? Id(string field) => IdPrefix is null ? null : $"{IdPrefix}-{field}";
+
+    private string EnvLinesText() =>
+        Step?.Env is { } env
+            ? string.Join("\n", env.Select(row => $"{row.Key}={row.Value}"))
+            : string.Empty;
+
+    private string ArtifactsText() => Step is null ? string.Empty : string.Join(", ", Step.ArtifactPaths);
+}
