@@ -30,17 +30,16 @@
             {
                 <span class="bb:text-xs bb:text-muted-foreground">@RunDisplay.StepReasonText(reason, L10n)</span>
             }
-            @* D-004: selecting a step jumps to the log filtered to that step. The fragment brings the panel
-               into view; the handler pushes the step row's id down into the panel's filter (StepId, never
-               text). data-enhance-nav="none" keeps the jump a native same-document fragment scroll -
-               enhanced navigation would re-initialize the page and throw away the panel's pause/search
-               state. A step without a recorded row has no id to filter on, so it offers no link. *@
+            @* F-047: selecting a step opens the console already filtered to that step's rows (the
+               step row's id is the StepId the worker stamped, never a text match). It is an ordinary
+               navigation now: the console is its own route, so there is no same-page fragment to
+               opt out of enhanced navigation for. A step without a recorded row has no id to filter
+               on, so it offers no link. *@
             @if (step.Id is { } stepRowId)
             {
-                <a id="@($"run-step-log-{step.Name}")" href="#run-log"
-                   data-enhance-nav="none"
-                   class="bb:text-xs bb:font-medium bb:text-primary bb:hover:underline"
-                   @onclick="@(() => StepSelected.InvokeAsync(stepRowId))">@L10n["View log"]</a>
+                <a id="@($"run-step-log-{step.Name}")"
+                   href="@($"/runs/{RunId}/console?step={stepRowId}")"
+                   class="bb:text-xs bb:font-medium bb:text-primary bb:hover:underline">@L10n["View log"]</a>
             }
         </div>
         @if (step.Argv is { Length: > 0 } argv)
@@ -62,7 +61,7 @@
     [Parameter]
     public int? FirstFailedStepIndex { get; set; }
 
-    /// <summary>D-004: the row's id pushed into the log panel's filter.</summary>
-    [Parameter]
-    public EventCallback<Guid> StepSelected { get; set; }
+    /// <summary>The run whose console the "View log" links open (card F-047).</summary>
+    [Parameter, EditorRequired]
+    public Guid RunId { get; set; }
 }

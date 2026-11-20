@@ -1,0 +1,121 @@
+@page "/runs/{RunId:guid}/console"
+@page "/projects/{ProjectId:guid}/runs/{Number:int}/console"
+@attribute [Authorize]
+@inject UserSession UserSession
+@inject RunService RunsService
+@inject RunLogAccess RunLogAccess
+
+@* Card F-047: the run's log as a page, not a card under everything else. The run page keeps the
+   summary and links here; this page owns the header, the console body and (from Task 6) the live
+   status poll. Two routes resolve the same run, exactly like the run page, so a permalink and a
+   guid bookmark both work. *@
+<PageTitle>@Heading · Zenkins</PageTitle>
+
+<div id="run-console-page" class="zk-console-page">
+    @if (_run is null)
+    {
+        <NotFoundPage />
+    }
+    else
+    {
+        <div class="zk-console-header">
+            <div class="bb:min-w-0">
+                <p class="bb:text-sm">
+                    <a href="@RunPageUrl" class="bb:underline bb:underline-offset-4">@L10n["Back to run"]</a>
+                </p>
+                <div class="bb:mt-1 bb:flex bb:flex-wrap bb:items-center bb:gap-3">
+                    <BbCardTitle As="h1" tabindex="-1">@Heading</BbCardTitle>
+                    <RunStatusBadge Status="@_run.Status" />
+                </div>
+                <p class="bb:mt-1 bb:flex bb:flex-wrap bb:items-center bb:gap-3 bb:text-xs bb:text-muted-foreground">
+                    @if (_run.WorkerName is { } workerName)
+                    {
+                        <span>@L10n["Worker: {0}", workerName]</span>
+                    }
+                    <span>@RunDisplay.DurationOrElapsed(_run.StartedAt, _run.EndedAt, DateTimeOffset.UtcNow, L10n)</span>
+                    @if (_run.Number is { } number)
+                    {
+                        <span>@L10n["Run #{0}", number]</span>
+                    }
+                </p>
+            </div>
+            <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-2">
+                <BbButton Href="@RunPageUrl" Variant="ButtonVariant.Outline">@L10n["Run page"]</BbButton>
+                <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">@L10n["All runs"]</BbButton>
+            </div>
+        </div>
+
+        <RunLogPanel RunId="_run.Id"
+                     Ticket="_ticket"
+                     Steps="_run.StepList"
+                     RequestedStepId="StepId" />
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid RunId { get; set; }
+
+    [Parameter]
+    public Guid? ProjectId { get; set; }
+
+    [Parameter]
+    public int? Number { get; set; }
+
+    /// <summary>The step the console opens filtered to (the run page's "View log" links).</summary>
+    [SupplyParameterFromQuery(Name = "step")]
+    public Guid? StepId { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private RunView? _run;
+    private string? _ticket;
+
+    private string Heading => _run is null
+        ? L10n["Console"]
+        : _run.Number is { } number
+            ? L10n["Console · Run #{0}", number]
+            : L10n["Console · Run {0}", _run.Id.ToString("N")[..8]];
+
+    private string RunPageUrl => _run is null
+        ? "#"
+        : _run.Number is { } number
+            ? $"/projects/{_run.ProjectId}/runs/{number}"
+            : $"/runs/{_run.Id}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        // F-003 hazard: resolving the session selects the circuit's tenant before any tenant-owned
+        // row is read. Never rely on the layout having done it first.
+        var session = await UserSession.GetAsync();
+        if (session?.HasOrganization != true)
+        {
+            return;
+        }
+
+        _run = Number is { } number && ProjectId is { } projectId
+            ? await RunsService.GetRunByNumberAsync(projectId, number)
+            : await RunsService.GetRunAsync(RunId);
+
+        if (_run is null && HttpContext is not null)
+        {
+            // A real 404 for a foreign or missing id; the /not-found re-execute is disabled for
+            // this request (F-003 bug B1: "RemoteNavigationManager already initialized").
+            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            if (HttpContext.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+            {
+                statusCodePages.Enabled = false;
+            }
+
+            return;
+        }
+
+        // A readable run of the active organization: mint the panel's subscription ticket for this
+        // session. The hub re-validates membership at join time, so a stale ticket buys nothing.
+        if (_run is not null && session.Organization is { } organization)
+        {
+            _ticket = RunLogAccess.MintTicket(session.UserId, organization.OrganizationId);
+        }
+    }
+}

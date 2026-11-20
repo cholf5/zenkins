@@ -58,8 +58,9 @@ public sealed class RunDetailFailureSummaryTests
         // attribute must reach the rendered page, not just the source.
         Assert.Contains("id=\"run-step-log-Build\"", page, StringComparison.Ordinal);
         Assert.Contains("id=\"run-step-log-Test\"", page, StringComparison.Ordinal);
-        Assert.Contains("href=\"#run-log\"", page, StringComparison.Ordinal);
-        Assert.Contains("data-enhance-nav=\"none\"", page, StringComparison.Ordinal);
+        Assert.Contains($"/runs/{run.RunId}/console?step=", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("href=\"#run-log\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-enhance-nav=\"none\"", page, StringComparison.Ordinal);
     }
 
     [Fact(Timeout = 2 * 60 * 1000)]
@@ -76,8 +77,8 @@ public sealed class RunDetailFailureSummaryTests
         // The step list and the panel shell are still there (the prerendered page mints no ticket,
         // so the panel's interactive controls belong to the circuit, not to this HTML).
         Assert.Contains("id=\"run-steps\"", page, StringComparison.Ordinal);
-        Assert.Contains("id=\"run-log\"", page, StringComparison.Ordinal);
-        Assert.Contains("id=\"run-log-download\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-console\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("id=\"run-log\"", page, StringComparison.Ordinal);
     }
 
     [Fact(Timeout = 2 * 60 * 1000)]

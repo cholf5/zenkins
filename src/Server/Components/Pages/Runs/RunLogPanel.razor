@@ -224,6 +224,9 @@
     /// <summary>The search box's text, live-bound; the view model commits it on every keystroke.</summary>
     private string _search = string.Empty;
 
+    /// <summary>Whether the console page's initial <c>?step=</c> filter has been applied.</summary>
+    private bool _requestedStepApplied;
+
     /// <summary>Whether each line carries its UTC time of day (F-047's optional column).</summary>
     private bool _showTimestamps;
 
@@ -234,11 +237,16 @@
 
     protected override void OnParametersSet()
     {
-        // The page's step selection wins over whatever the dropdown held: applying a different value
-        // than the view model's is the "selecting a step jumps to the log" rule (D-004).
-        if (RequestedStepId != _viewModel.StepFilter)
+        // The console page's `?step=` is an initial filter, applied once. Re-applying it on every
+        // parameter set would reset a filter the user changed as soon as the page's status poll
+        // re-rendered the parent (F-047).
+        if (!_requestedStepApplied)
         {
-            _viewModel.SetStepFilter(RequestedStepId);
+            _requestedStepApplied = true;
+            if (RequestedStepId is { } requested)
+            {
+                _viewModel.SetStepFilter(requested);
+            }
         }
 
         Replan();

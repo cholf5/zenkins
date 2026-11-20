@@ -125,7 +125,7 @@ public sealed class MilestoneHappyPathTests
 
         // ----- The run page renders the three steps, in declaration order (the product's own view). -----
         var page = await host.GetPageAsync($"/runs/{runId}");
-        Assert.Contains("id=\"run-log-download\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"run-console\"", page, StringComparison.Ordinal);
         var restoreOnPage = page.IndexOf("run-step-Restore", StringComparison.Ordinal);
         var buildOnPage = page.IndexOf("run-step-Build", StringComparison.Ordinal);
         var publishOnPage = page.IndexOf("run-step-Publish", StringComparison.Ordinal);

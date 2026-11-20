@@ -176,6 +176,9 @@ internal sealed class RunUiRun
     /// <summary>The run page's HTML, through the real authenticated page.</summary>
     public Task<string> ReadRunPageAsync() => AuthTestHost.GetStringAsync(Owner, $"/runs/{RunId}");
 
+    /// <summary>The console page's HTML (card F-047), through the real authenticated page.</summary>
+    public Task<string> ReadConsolePageAsync() => AuthTestHost.GetStringAsync(Owner, $"/runs/{RunId}/console");
+
     /// <summary>The full-log download, through the real endpoint (the bytes the pin is about).</summary>
     public async Task<byte[]> DownloadLogAsync()
     {

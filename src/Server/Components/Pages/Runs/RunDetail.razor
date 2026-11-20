@@ -8,7 +8,6 @@
 @using Zenkins.Server.Runs
 @inject UserSession UserSession
 @inject RunService RunsService
-@inject RunLogAccess RunLogAccess
 @inject ArtifactService ArtifactsService
 
 @* Card F-036: one page, two shapes. `/runs/{guid}` stays exactly as it was (every bookmark, every log
@@ -93,6 +92,7 @@
                         @L10n["Replay"]
                     </button>
                 }
+                <BbButton id="run-console" Href="@($"/runs/{_run.Id}/console")" Variant="ButtonVariant.Default">@L10n["Console Output"]</BbButton>
                 <BbButton Href="@($"/projects/{_run.ProjectId}/runs")" Variant="ButtonVariant.Outline">@L10n["All runs"]</BbButton>
             </div>
         </div>
@@ -341,7 +341,7 @@
                                         <ol id="@($"run-stage-steps-{section.Name}")" class="bb:mt-2 bb:space-y-3">
                                             <RunStepList Steps="@section.Steps"
                                                          FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
-                                                         StepSelected="FilterLogToStep" />
+                                                         RunId="@_run.Id" />
                                         </ol>
                                     </details>
                                 </li>
@@ -350,7 +350,7 @@
                             {
                                 <RunStepList Steps="@section.Steps"
                                              FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
-                                             StepSelected="FilterLogToStep" />
+                                             RunId="@_run.Id" />
                             }
                         }
                     </ol>
@@ -372,7 +372,7 @@
                             <ol id="run-post-steps" class="bb:mt-2 bb:space-y-3 bb:text-sm">
                                 <RunStepList Steps="@_run.PostSteps"
                                              FirstFailedStepIndex="@_run.FirstFailedStep?.Index"
-                                             StepSelected="FilterLogToStep" />
+                                             RunId="@_run.Id" />
                             </ol>
                             @if (_run.PostFailureNote is { } postNote)
                             {
@@ -691,13 +691,6 @@
             </BbCardContent>
         </BbCard>
 
-        @* The run's log (F-008): live while the run executes, full history once it is finished.
-           The ticket below is minted for this session and lets the panel's server-side
-           HubConnection authenticate to the browser hub (a circuit cannot replay the cookie).
-           D-004: the step list and the panel share the filter state - this page holds it, the
-           step list writes it, the panel reads it and reports its own changes back. *@
-        <RunLogPanel RunId="@_run.Id" Ticket="@_accessTicket" Steps="@_run.StepList"
-                     RequestedStepId="@_logStepFilter" StepFilterChanged="OnLogStepFilterChanged" />
     }
 </div>
 
@@ -766,20 +759,8 @@
     /// </summary>
     private string PermalinkText => _run?.Number is { } number ? $"#{number}" : Permalink;
 
-    /// <summary>The subscription ticket the log panel presents to the browser hub. Only minted for
-    /// a member session after the run itself was readable - the page is the only minter.</summary>
-    private string? _accessTicket;
-
     /// <summary>What the run published (card F-016): every artifact row, with only Ready ones downloadable.</summary>
     private IReadOnlyList<ArtifactView> _artifacts = [];
-
-    /// <summary>
-    /// The step the log panel is narrowed to (card D-004): written by the step list's "View log"
-    /// links and by the panel's own dropdown (through <see cref="OnLogStepFilterChanged"/>, so
-    /// picking the same step twice still applies). The value is the step row's id - the same
-    /// StepId the worker stamps on the log lines - never a text match.
-    /// </summary>
-    private Guid? _logStepFilter;
 
     [SupplyParameterFromQuery(Name = "notice")]
     private string? NoticeCode { get; set; }
@@ -891,11 +872,9 @@
             }
         }
 
-        // A readable run of the active organization: mint the panel's subscription ticket for this
-        // session. The hub re-validates membership at join time, so a stale ticket buys nothing.
-        if (_run is not null && session.Organization is { } organization)
+        // A readable run: what it published. The log itself lives on the Console page (F-047).
+        if (_run is not null)
         {
-            _accessTicket = RunLogAccess.MintTicket(session.UserId, organization.OrganizationId);
             _artifacts = await ArtifactsService.GetRunArtifactsAsync(_run.Id);
         }
     }
@@ -924,17 +903,6 @@
     private string FormatTimeout(int? timeoutSeconds) => timeoutSeconds is { } seconds
         ? L10n["{0} min (per-run override)", seconds / 60]
         : L10n["default"];
-
-    /// <summary>D-004: the step list's "View log" link pushes the step row's id into the panel's filter.</summary>
-    private void FilterLogToStep(Guid stepId) => _logStepFilter = stepId;
-
-    /// <summary>D-004: the panel reports its own dropdown's changes back, so the page's copy of the
-    /// filter and the panel's stay one state (and re-selecting the same step still applies).</summary>
-    private Task OnLogStepFilterChanged(Guid? stepId)
-    {
-        _logStepFilter = stepId;
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// D-004's failure surface: the failing step by name (with its exit code), or the honest
