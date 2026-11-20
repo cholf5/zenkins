@@ -17,6 +17,11 @@ public static class LogsServiceCollectionExtensions
         // re-selects the scoped tenant for its join check).
         services.AddScoped<RunLogAccess>();
 
+        // B-017: the address the run console's own hub connection dials. Resolved from the server's
+        // bound listeners, never from the browser's URL - a forwarded port or an authenticating
+        // reverse proxy answers 401 to a plain request from this process.
+        services.AddSingleton<RunLogSelfEndpoint>();
+
         // The ingest is process-wide: one bounded per-run buffer set, one statistics counter set.
         services.AddSingleton<RunLogIngest>();
 

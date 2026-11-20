@@ -704,6 +704,15 @@ HTTPS) and keeps the raw HTTP hop on one machine. Do **not** simply rebind
 `ASPNETCORE_URLS=http://0.0.0.0:5000`: that exposes plaintext HTTP sign-in and nothing else in the
 packaging accounts for it.
 
+The proxy only ever serves the **browser** hop. The run console's live log is a SignalR connection
+made by the Server process itself, so it dials the address that process is listening on
+(`src/Server/LogStreaming/RunLogSelfEndpoint.cs`) and never travels back out through the browser's
+URL — a proxy or forwarded port that authenticates its clients would answer the Server's own plain
+request with 401 and the panel would report the log stream as unreachable while the hub was healthy
+(bug B-017). Nothing has to be configured for that: the console recognises a wildcard bind
+(`0.0.0.0`, `[::]`) as loopback. If you bind the Server to one specific address, that address is the
+one used, so keep it one the machine can reach locally.
+
 A proxy on a *different host* must be trusted explicitly, or its forwarded headers are ignored:
 loopback proxies are trusted by default; others go into configuration (bound in
 `src/Server/Program.cs`, covered by `tests/Zenkins.Tests/Auth/HostConfigurationTests.cs`):

@@ -2,6 +2,7 @@
 @inject NavigationManager Navigation
 @inject ILogger<RunLogPanel> Logger
 @inject IJSRuntime JS
+@inject RunLogSelfEndpoint SelfEndpoint
 @using Microsoft.AspNetCore.SignalR.Client
 @using Microsoft.Extensions.Logging
 @using Microsoft.JSInterop
@@ -275,6 +276,16 @@
 
     private string DownloadUrl => $"/runs/{RunId}/log/download";
 
+    /// <summary>
+    /// The hub address this panel dials (bug B-017). The connection is a server-side client in this
+    /// process, so it goes to a listener this server owns - never to the browser's base URI, which may
+    /// be a forwarded port or an authenticating reverse proxy that answers 401 to a plain request from
+    /// here. The browser's base URI stays the fallback for a host that reports no address of its own
+    /// (see <see cref="RunLogSelfEndpoint"/>).
+    /// </summary>
+    private Uri HubUrl => SelfEndpoint.RunLogHubUrl
+        ?? Navigation.ToAbsoluteUri(RunLogSelfEndpoint.RunLogHubPath);
+
     protected override void OnParametersSet()
     {
         // The console page's `?step=` is an initial filter, applied once. Re-applying it on every
@@ -371,7 +382,7 @@
 
         _connecting = true;
         _connection = new HubConnectionBuilder()
-            .WithUrl(Navigation.ToAbsoluteUri("hubs/run-logs"), options =>
+            .WithUrl(HubUrl, options =>
             {
                 options.AccessTokenProvider = () => Task.FromResult<string?>(Ticket);
             })
@@ -401,6 +412,11 @@
         {
             _connectionClosed = true;
             _connectionError = L10n["The log stream could not be reached ({0}).", failure.Message];
+
+            // The address goes in the log line (never the ticket): "401" on its own cannot tell an
+            // operator whether the hub refused the connection or some hop in front of it did.
+            Logger.LogWarning(
+                failure, "The log stream of run {RunId} could not be reached at {HubUrl}.", RunId, HubUrl);
         }
         finally
         {
@@ -468,6 +484,8 @@
         {
             _connectionClosed = true;
             _connectionError = L10n["The log stream could not be reached ({0}).", failure.Message];
+            Logger.LogWarning(
+                failure, "Reconnecting the log stream of run {RunId} to {HubUrl} failed.", RunId, HubUrl);
         }
         finally
         {

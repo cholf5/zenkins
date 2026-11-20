@@ -8,6 +8,19 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **The run console's log survives a forwarded port or an authenticating proxy (B-017).** The panel's
+  hub connection is made by the Server process, but it dialled the *browser's* address — so behind a
+  forwarded port (a remote-desktop tunnel, an SSH `-L`, a proxy in front of the loopback bind that
+  `install.md` §7 recommends) the request left the Server, came back through that hop, and was
+  answered **401** by the hop instead of the hub: "无法连接日志流 (401)" with no lines, while the run
+  was streaming. The console now resolves its own listener from the server's bound addresses
+  (wildcard → loopback on the same port, plain HTTP preferred, a host that reports none keeps the old
+  fallback) and dials that; a failure logs the address it tried, never the ticket. No change to the
+  ticket scheme, the join authorization or the panel's behaviour on a direct `localhost` install.
+  Verified: `RunLogSelfEndpointTests` 9/9 (including a real Kestrel wildcard-bind fact whose resolved
+  URL answers 200), LogStreaming + RunUi 88/88, 0 build warnings. The re-check on the forwarded-port
+  deployment is still owed - that network is not reachable from here.
+
 - **A full-page run console, with a log that reads line by line (F-047).** The run's log was a
   384px card at the bottom of the run page, and every line was an inline span whose newline Razor
   trimmed - one step's output rendered as one long wrapped string. The log is now its own page
