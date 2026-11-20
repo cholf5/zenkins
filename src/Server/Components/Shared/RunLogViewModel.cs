@@ -28,6 +28,14 @@ public sealed class RunLogViewModel
     /// </summary>
     public const int RenderCap = 2000;
 
+    /// <summary>
+    /// How many lines one viewer keeps at all (card F-047). The DOM bound above is not a memory
+    /// bound: a circuit that held every line of a long run would keep the whole log on the server.
+    /// Past this bound the oldest retained line is dropped and counted; the download still has
+    /// every row, and the panel says so.
+    /// </summary>
+    public const int RetainedCap = 20_000;
+
     private readonly object _gate = new();
     private readonly SortedDictionary<long, LogLineMessage> _lines = new();
 
@@ -36,6 +44,18 @@ public sealed class RunLogViewModel
 
     /// <summary>True while the viewport is frozen (card D-004's pause).</summary>
     private bool _paused;
+
+    /// <summary>True when the pause came from scrolling up rather than the explicit control.</summary>
+    private bool _pausedByScroll;
+
+    /// <summary>Distinct lines this viewer has ever merged, including ones retention dropped.</summary>
+    private int _received;
+
+    /// <summary>Lines evicted by <see cref="RetainedCap"/> since the viewer opened.</summary>
+    private int _droppedFromViewer;
+
+    /// <summary>Evicted lines the paused viewer was still showing at the pause instant.</summary>
+    private int _droppedWhilePaused;
 
     /// <summary>The search term, trimmed; empty means no search is active.</summary>
     private string _searchText = string.Empty;
@@ -70,6 +90,54 @@ public sealed class RunLogViewModel
         }
     }
 
+    /// <summary>Whether the freeze came from scrolling up rather than the explicit control.</summary>
+    public bool IsPausedByScroll
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _pausedByScroll;
+            }
+        }
+    }
+
+    /// <summary>Distinct lines this viewer has ever merged (including lines retention dropped).</summary>
+    public int ReceivedLines
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _received;
+            }
+        }
+    }
+
+    /// <summary>Lines evicted by <see cref="RetainedCap"/> since this viewer opened.</summary>
+    public int DroppedFromViewer
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _droppedFromViewer;
+            }
+        }
+    }
+
+    /// <summary>Evicted lines the paused viewer was still showing when it paused.</summary>
+    public int DroppedWhilePaused
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _droppedWhilePaused;
+            }
+        }
+    }
+
     /// <summary>The active search term (trimmed), or the empty string when no search is active.</summary>
     public string SearchText
     {
@@ -96,7 +164,9 @@ public sealed class RunLogViewModel
 
     /// <summary>Merges one batch (history chunk or live flush) into the store, deduplicating by Seq.
     /// Pausing never stops the arrivals: the stream keeps feeding the store while the viewport is
-    /// frozen, and resuming picks the new lines up at the tail.</summary>
+    /// frozen, and resuming picks the new lines up at the tail. The store is bounded by
+    /// <see cref="RetainedCap"/>; the oldest retained line is evicted and counted, so a long run
+    /// cannot pin the whole log in the circuit's memory.</summary>
     public void Add(IEnumerable<LogLineMessage> lines)
     {
         ArgumentNullException.ThrowIfNull(lines);
@@ -105,7 +175,25 @@ public sealed class RunLogViewModel
         {
             foreach (var line in lines)
             {
+                if (_lines.ContainsKey(line.Seq))
+                {
+                    // A reconnect replays history; the same Seq is one line, not a second arrival.
+                    _lines[line.Seq] = line;
+                    continue;
+                }
+
                 _lines[line.Seq] = line;
+                _received++;
+                while (_lines.Count > RetainedCap)
+                {
+                    var oldest = _lines.Keys.First();
+                    _lines.Remove(oldest);
+                    _droppedFromViewer++;
+                    if (_paused && oldest <= _frozenUpperSeq)
+                    {
+                        _droppedWhilePaused++;
+                    }
+                }
             }
         }
     }
@@ -123,14 +211,26 @@ public sealed class RunLogViewModel
     /// Freezes the viewport (card D-004): from here on the plan keeps showing the lines that were
     /// newest at this instant, while new lines keep arriving in the store (and stay persisted
     /// server-side - pause is a viewer control, never a build control). The panel's indicator says
-    /// paused, and <see cref="RunLogPlan.NewWhilePaused"/> counts what is waiting.
+    /// paused, and <see cref="RunLogPlan.NewWhilePaused"/> counts what is waiting. The explicit
+    /// control also clears any earlier scroll pause: the new state is the user's, not the scroll's.
     /// </summary>
     public void Pause()
     {
         lock (_gate)
         {
-            _paused = true;
-            _frozenUpperSeq = _lines.Count == 0 ? 0 : _lines.Keys.Max();
+            PauseLocked(byScroll: false);
+        }
+    }
+
+    /// <summary>
+    /// Pauses because the reader scrolled up (card F-047). Same freeze as <see cref="Pause"/>, but
+    /// marked so scrolling back to the bottom can undo it; an explicit pause survives that scroll.
+    /// </summary>
+    public void PauseFromScroll()
+    {
+        lock (_gate)
+        {
+            PauseLocked(byScroll: true);
         }
     }
 
@@ -142,10 +242,40 @@ public sealed class RunLogViewModel
     {
         lock (_gate)
         {
-            _paused = false;
-            _frozenUpperSeq = 0;
-            _currentMatchIndex = 0;
+            ResumeLocked();
         }
+    }
+
+    /// <summary>
+    /// Undoes only a pause caused by scrolling up. A pause the user asked for explicitly is left
+    /// alone: returning to the bottom of the console must not silently resume following.
+    /// </summary>
+    public void ResumeFromScroll()
+    {
+        lock (_gate)
+        {
+            if (_pausedByScroll)
+            {
+                ResumeLocked();
+            }
+        }
+    }
+
+    private void PauseLocked(bool byScroll)
+    {
+        _paused = true;
+        _pausedByScroll = byScroll;
+        _frozenUpperSeq = _lines.Count == 0 ? 0 : _lines.Keys.Max();
+        _droppedWhilePaused = 0;
+    }
+
+    private void ResumeLocked()
+    {
+        _paused = false;
+        _pausedByScroll = false;
+        _frozenUpperSeq = 0;
+        _currentMatchIndex = 0;
+        _droppedWhilePaused = 0;
     }
 
     /// <summary>Sets the search term (literal, case-insensitive; D-004's decision - no regex).
@@ -240,7 +370,11 @@ public sealed class RunLogViewModel
             // everything below reads the snapshot.
             var all = new List<LogLineMessage>(_lines.Values);
             var (viewport, filtered, matches) = ComputeLocked(all);
-            var waiting = all.Count - viewport.Count;
+
+            // Waiting is about sequence, not list position: retention may have evicted the oldest
+            // lines while paused, so `all.Count - viewport.Count` would over-count or drift. A line
+            // newer than the pause instant is waiting; an evicted old line was already shown.
+            var waiting = _paused ? all.Count(line => line.Seq > _frozenUpperSeq) : 0;
 
             // Per-step line counts over everything the store holds (what the step list's rows
             // produced), so the dropdown's counts agree with the step list. Every declared step is
@@ -287,9 +421,29 @@ public sealed class RunLogViewModel
             var entries = Segment(window, stepHeaders);
             var isCapped = view.Count > RenderCap;
 
+            // Two independent bounds, two statements: retention is what the viewer keeps at all,
+            // the render cap is what it draws. Both point at the download, which is complete.
+            var retentionNotice = _droppedFromViewer > 0
+                ? L10n[
+                    "This viewer keeps the newest {0} lines; {1} older line(s) are not shown - download the full log.",
+                    RetainedCap,
+                    _droppedFromViewer]
+                : null;
+            var droppedWhilePausedNotice = _droppedWhilePaused > 0
+                ? L10n[
+                    "Paused - {0} line(s) were dropped by the viewer's retention while you were paused.",
+                    _droppedWhilePaused]
+                : null;
+
             return new RunLogPlan(
                 Entries: entries,
                 TotalLines: all.Count,
+                ReceivedLines: _received,
+                RetainedLines: all.Count,
+                DroppedFromViewer: _droppedFromViewer,
+                DroppedWhilePaused: _droppedWhilePaused,
+                RetentionNotice: retentionNotice,
+                DroppedWhilePausedNotice: droppedWhilePausedNotice,
                 FilteredLines: view.Count,
                 IsCapped: isCapped,
                 CapNotice: isCapped
@@ -469,7 +623,17 @@ public sealed record RunLogEntry(string? Header, LogLineMessage Line);
 /// </summary>
 /// <param name="Entries">The lines to render, in Seq order, with their step headers. At most
 /// <see cref="RunLogViewModel.RenderCap"/> of them.</param>
-/// <param name="TotalLines">All distinct lines the store holds (the run's log so far).</param>
+/// <param name="TotalLines">All distinct lines the store holds (the run's log so far, after
+/// retention; same value as <paramref name="RetainedLines"/>).</param>
+/// <param name="ReceivedLines">Every distinct line the viewer ever merged, including lines retention
+/// dropped. The download is the complete record.</param>
+/// <param name="RetainedLines">The lines the viewer currently keeps (bounded by
+/// <see cref="RunLogViewModel.RetainedCap"/>).</param>
+/// <param name="DroppedFromViewer">Lines retention evicted since the viewer opened.</param>
+/// <param name="DroppedWhilePaused">Evicted lines that were visible in the frozen viewport.</param>
+/// <param name="RetentionNotice">The exact retention statement, or null when nothing was evicted.</param>
+/// <param name="DroppedWhilePausedNotice">The exact pause-loss statement when eviction hit the frozen
+/// viewport, or null.</param>
 /// <param name="FilteredLines">The lines the view narrows to: the search matches while a search is
 /// active, the step-filtered lines otherwise.</param>
 /// <param name="IsCapped">Whether the render was truncated by the cap.</param>
@@ -492,6 +656,12 @@ public sealed record RunLogEntry(string? Header, LogLineMessage Line);
 public sealed record RunLogPlan(
     IReadOnlyList<RunLogEntry> Entries,
     int TotalLines,
+    int ReceivedLines,
+    int RetainedLines,
+    int DroppedFromViewer,
+    int DroppedWhilePaused,
+    string? RetentionNotice,
+    string? DroppedWhilePausedNotice,
     int FilteredLines,
     bool IsCapped,
     string? CapNotice,

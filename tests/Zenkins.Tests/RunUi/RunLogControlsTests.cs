@@ -366,4 +366,85 @@ public sealed class RunLogControlsTests
         // view never shows anonymous lines.
         Assert.Equal("1. Long", plan.Entries[0].Header);
     }
+
+    // ------------------------------------------------------------------
+    // F-047: the viewer's own retention bound and the two pause sources
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void A_viewer_keeps_only_the_newest_twenty_thousand_lines()
+    {
+        var viewModel = new RunLogViewModel();
+        viewModel.Add(Enumerable.Range(1, 100_005).Select(seq => Line(seq, $"line-{seq}")));
+
+        var plan = viewModel.Plan(Headers, TestText.English);
+
+        Assert.Equal(RunLogViewModel.RetainedCap, viewModel.Count);
+        Assert.Equal(100_005, plan.ReceivedLines);
+        Assert.Equal(RunLogViewModel.RetainedCap, plan.RetainedLines);
+        Assert.Equal(100_005 - RunLogViewModel.RetainedCap, plan.DroppedFromViewer);
+        Assert.Equal(100_005 - RunLogViewModel.RetainedCap + 1, viewModel.Snapshot()[0].Seq);
+        Assert.Equal(
+            $"This viewer keeps the newest {RunLogViewModel.RetainedCap} lines; {plan.DroppedFromViewer} older line(s) are not shown - download the full log.",
+            plan.RetentionNotice);
+    }
+
+    [Fact]
+    public void Duplicate_sequences_do_not_count_as_received_twice()
+    {
+        var viewModel = new RunLogViewModel();
+        viewModel.Add([Line(1, "first")]);
+        viewModel.Add([Line(1, "first again")]);
+
+        var plan = viewModel.Plan(Headers, TestText.English);
+
+        Assert.Equal(1, viewModel.Count);
+        Assert.Equal(1, plan.ReceivedLines);
+        Assert.Equal(0, plan.DroppedFromViewer);
+        Assert.Null(plan.RetentionNotice);
+    }
+
+    [Fact]
+    public void Scroll_pause_is_cleared_by_returning_to_the_bottom_but_explicit_pause_is_not()
+    {
+        var viewModel = new RunLogViewModel();
+        viewModel.Add(Enumerable.Range(1, 10).Select(seq => Line(seq, $"line-{seq}")));
+
+        viewModel.PauseFromScroll();
+        Assert.True(viewModel.IsPaused);
+        Assert.True(viewModel.IsPausedByScroll);
+
+        viewModel.ResumeFromScroll();
+        Assert.False(viewModel.IsPaused);
+        Assert.False(viewModel.IsPausedByScroll);
+
+        viewModel.Pause();
+        viewModel.ResumeFromScroll();
+        Assert.True(viewModel.IsPaused);
+        Assert.False(viewModel.IsPausedByScroll);
+
+        viewModel.Resume();
+        Assert.False(viewModel.IsPaused);
+    }
+
+    [Fact]
+    public void New_while_paused_counts_by_sequence_when_old_lines_are_evicted()
+    {
+        var viewModel = new RunLogViewModel();
+        viewModel.Add(Enumerable.Range(1, RunLogViewModel.RetainedCap).Select(seq => Line(seq, $"line-{seq}")));
+        viewModel.Pause();
+        viewModel.Add(Enumerable.Range(RunLogViewModel.RetainedCap + 1, 5).Select(seq => Line(seq, $"line-{seq}")));
+
+        var plan = viewModel.Plan(Headers, TestText.English);
+
+        // Five lines arrived after the pause; five of the oldest retained lines (seq 1..5) were
+        // evicted by the retention bound. The waiting count is still about the new lines, and the
+        // loss is stated separately.
+        Assert.Equal(5, plan.NewWhilePaused);
+        Assert.Equal(5, plan.DroppedFromViewer);
+        Assert.Equal(5, plan.DroppedWhilePaused);
+        Assert.Equal(
+            "Paused - 5 line(s) were dropped by the viewer's retention while you were paused.",
+            plan.DroppedWhilePausedNotice);
+    }
 }
