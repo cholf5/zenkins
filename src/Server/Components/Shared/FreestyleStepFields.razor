@@ -106,11 +106,13 @@
                     <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("runs-on")">
                         @L10n["Needs a Worker with (blank = any)"]
                     </label>
+                    @* `&&` and not `&amp;&amp;`: this attribute's value is a C# string that Razor encodes
+                       again, so the escaped spelling reached the browser as the literal "&amp;&amp;". *@
                     <input data-freestyle-field="runs-on"
                            id="@Id("runs-on")"
                            type="text"
                            value="@Step?.RunsOn"
-                           placeholder="linux &amp;&amp; (arm64 || x64)"
+                           placeholder="linux && (arm64 || x64)"
                            autocomplete="off"
                            class="zk-input" />
                 </div>
