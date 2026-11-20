@@ -1,9 +1,12 @@
 @page "/runs/{RunId:guid}/console"
 @page "/projects/{ProjectId:guid}/runs/{Number:int}/console"
 @attribute [Authorize]
+@implements IAsyncDisposable
+@using Microsoft.Extensions.Logging
 @inject UserSession UserSession
 @inject RunService RunsService
 @inject RunLogAccess RunLogAccess
+@inject ILogger<RunConsole> Logger
 
 @* Card F-047: the run's log as a page, not a card under everything else. The run page keeps the
    summary and links here; this page owns the header, the console body and (from Task 6) the live
@@ -71,6 +74,10 @@
 
     private RunView? _run;
     private string? _ticket;
+    private RunLiveRefresher? _refresher;
+    private CancellationTokenSource? _pollCts;
+    private Task? _pollTask;
+    private Exception? _loggedRefreshFailure;
 
     private string Heading => _run is null
         ? L10n["Console"]
@@ -116,6 +123,97 @@
         if (_run is not null && session.Organization is { } organization)
         {
             _ticket = RunLogAccess.MintTicket(session.UserId, organization.OrganizationId);
+            _refresher = new RunLiveRefresher(ct => RunsService.GetRunAsync(_run!.Id, ct));
+            _refresher.Apply(_run);
         }
+    }
+
+    /// <summary>
+    /// Starts the 1s clock after the first interactive render. The clock re-renders the header's
+    /// elapsed time every second and reads the run every second tick (2s), stopping at a terminal
+    /// state; the log connection keeps delivering late lines independently.
+    /// </summary>
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender
+            && RendererInfo.IsInteractive
+            && _run is { IsTerminal: false }
+            && _refresher is not null
+            && _pollTask is null)
+        {
+            _pollCts = new CancellationTokenSource();
+            _pollTask = PollAsync(_pollCts.Token);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        var tick = 0;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                tick++;
+                if (tick % 2 == 0)
+                {
+                    var keep = await _refresher!.TryRefreshAsync(cancellationToken);
+                    if (_refresher.LastGood is { } run)
+                    {
+                        _run = run;
+                    }
+
+                    LogRefreshFailureOnce();
+                    await InvokeAsync(StateHasChanged);
+                    if (!keep)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The page is going away.
+        }
+    }
+
+    private void LogRefreshFailureOnce()
+    {
+        var failure = _refresher?.LastError;
+        if (failure is null || ReferenceEquals(failure, _loggedRefreshFailure))
+        {
+            return;
+        }
+
+        _loggedRefreshFailure = failure;
+        Logger.LogWarning(
+            failure,
+            "Refreshing run {RunId} for the console failed; keeping the last good state.",
+            _run?.Id);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _pollCts?.Cancel();
+        if (_pollTask is not null)
+        {
+            try
+            {
+                await _pollTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected while the circuit goes away.
+            }
+        }
+
+        _pollCts?.Dispose();
     }
 }
