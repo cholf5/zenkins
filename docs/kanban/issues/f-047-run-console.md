@@ -157,5 +157,7 @@ Pending. The repo has no browser harness; D-004-B3 records why TestServer cannot
   - Real-browser pass through the signed-in app, and the 5,000-line visual fixture: **still owed**
     (this session could not sign in to the dev instance). Run on a machine with a browser and the
     dev credentials before the card leaves review.
-- Results: targeted automated gates green; the isolated Chrome harness green; the full app browser
-  pass and the full-suite completion are the remaining acceptance items.
+- Results: final Release run after the review fixes - build 0 warnings, RunUi 56/56, Pipeline
+  209/209, TenantIsolation 178/178, WorkerRuntime 46/46 + 2 Windows-only skipped, Localization
+  18/18, Milestone 12/12; the isolated Chrome harness green (including the scroll-race check). The
+  full app browser pass and the full-suite completion remain the acceptance items.
