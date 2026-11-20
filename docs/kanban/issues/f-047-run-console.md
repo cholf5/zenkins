@@ -93,7 +93,8 @@ pins the run page's entry in the real-binary path.
 ### TC-005: Retention and render bounds
 
 `RunLogControlsTests`: 100,005 received lines leave 20,000 retained and 80,005 dropped, with the
-exact retention sentence; duplicates do not count twice; the 5,000-line render cap is unchanged.
+exact retention sentence; duplicates and a full reconnect replay do not count twice; the 2,000-line
+render cap is unchanged (the 5,000-line fixture exercises it).
 
 ### TC-006: Real browser
 
