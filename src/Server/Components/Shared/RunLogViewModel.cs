@@ -597,24 +597,28 @@ public sealed class RunLogViewModel
         foreach (var line in lines)
         {
             string? header = null;
+            Guid? headerStepId = null;
             if (line.StepId != current)
             {
                 current = line.StepId;
                 if (line.StepId is { } stepId && stepHeaders.TryGetValue(stepId, out var name))
                 {
                     header = name;
+                    headerStepId = stepId;
                 }
             }
 
-            entries.Add(new RunLogEntry(header, line));
+            entries.Add(new RunLogEntry(header, line, headerStepId));
         }
 
         return entries;
     }
 }
 
-/// <summary>One rendered log line plus the step header it introduces, if it introduces one (card F-015).</summary>
-public sealed record RunLogEntry(string? Header, LogLineMessage Line);
+/// <summary>One rendered log line plus the step header it introduces, if it introduces one (card F-015).
+/// <see cref="HeaderStepId"/> is the step row's id, so the console can filter on the header the user
+/// clicked instead of matching the header text back to a row (card F-047).</summary>
+public sealed record RunLogEntry(string? Header, LogLineMessage Line, Guid? HeaderStepId = null);
 
 /// <summary>
 /// Everything the log panel renders for one instant (card D-004): the bounded window of entries, the

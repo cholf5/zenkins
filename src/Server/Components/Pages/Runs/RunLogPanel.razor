@@ -111,12 +111,34 @@
                         }
                     }
                 </select>
+                <BbButton id="run-log-timestamps"
+                          Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
+                          OnClick="ToggleTimestampsAsync"
+                          aria-pressed="@(_showTimestamps ? "true" : "false")">
+                    @L10n["Timestamps (UTC)"]
+                </BbButton>
+                <BbButton id="run-log-wrap"
+                          Variant="ButtonVariant.Outline" Size="ButtonSize.Small"
+                          OnClick="ToggleWrapAsync"
+                          aria-pressed="@(_wrap ? "true" : "false")">
+                    @L10n["Wrap lines"]
+                </BbButton>
             </div>
             @if (Plan.IsCapped)
             {
                 @* D-004's stated bound: the cap is said out loud, and the download is named as the
                    way to get everything. *@
                 <p id="run-log-cap" class="bb:text-xs bb:text-muted-foreground">@Plan.CapNotice</p>
+            }
+            @if (Plan.RetentionNotice is { } retentionNotice)
+            {
+                @* F-047's second, independent bound: what the viewer keeps at all. The download is
+                   still the complete record. *@
+                <p id="run-log-retention" class="bb:text-xs bb:text-muted-foreground">@retentionNotice</p>
+            }
+            @if (Plan.DroppedWhilePausedNotice is { } droppedWhilePaused)
+            {
+                <p id="run-log-paused-loss" class="bb:text-xs bb:text-muted-foreground">@droppedWhilePaused</p>
             }
             @if (Plan.TotalLines == 0)
             {
@@ -134,18 +156,17 @@
             }
             else
             {
-                @* One header per step segment (F-015): a line carries the step it was emitted in, so the log
-                   reads as "what each step printed" instead of one undifferentiated stream. The current
-                   search match (D-004's navigation) is highlighted. *@
-                <pre id="run-log-lines" class="bb:max-h-96 bb:overflow-auto bb:rounded-md bb:bg-muted bb:p-3 bb:text-xs bb:leading-relaxed"><code>@foreach (var entry in Plan.Entries)
-{
-    @if (entry.Header is { } header)
-    {
-        <span class="bb:block bb:mt-1 bb:font-medium bb:text-foreground">@header</span>
-    }
-    <span @key="entry.Line.Seq" class="@LineClass(entry.Line)">@entry.Line.Message
-</span>
-}</code></pre>
+                @* One block per line (F-047): the old <pre> of inline spans rendered every step's
+                   output as one wrapped line. RunConsoleLines owns the block/stream/match markup;
+                   this panel owns the scroll container and the wrap toggle. *@
+                <div id="run-log-scroll" class="zk-console-scroll">
+                    <div id="run-log-lines" class="zk-console-body @(_wrap ? "zk-console-wrap" : null)">
+                        <RunConsoleLines Entries="Plan.Entries"
+                                         ShowTimestamps="_showTimestamps"
+                                         CurrentMatchSeq="Plan.CurrentMatchSeq"
+                                         StepClicked="FilterToStep" />
+                    </div>
+                </div>
             }
         </BbCardContent>
     </BbCard>
@@ -202,6 +223,12 @@
 
     /// <summary>The search box's text, live-bound; the view model commits it on every keystroke.</summary>
     private string _search = string.Empty;
+
+    /// <summary>Whether each line carries its UTC time of day (F-047's optional column).</summary>
+    private bool _showTimestamps;
+
+    /// <summary>Whether long lines wrap instead of scrolling horizontally (F-047's toggle).</summary>
+    private bool _wrap;
 
     private string DownloadUrl => $"/runs/{RunId}/log/download";
 
@@ -424,17 +451,25 @@
         return headers;
     }
 
-    /// <summary>A line's classes: stderr in red (F-008), the current search match highlighted.</summary>
-    private string LineClass(LogLineMessage line)
+    /// <summary>F-047: a step header in the console narrows the view to that step's rows.</summary>
+    private Task FilterToStep(Guid stepId)
     {
-        if (Plan.CurrentMatchSeq is { } matchSeq && line.Seq == matchSeq)
-        {
-            return "bb:font-bold bb:text-primary";
-        }
+        _viewModel.SetStepFilter(stepId);
+        return ReplanAsync();
+    }
 
-        return string.Equals(line.Stream, LogStream.StdErr, StringComparison.Ordinal)
-            ? "bb:text-red-500"
-            : string.Empty;
+    private Task ToggleTimestampsAsync()
+    {
+        _showTimestamps = !_showTimestamps;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task ToggleWrapAsync()
+    {
+        _wrap = !_wrap;
+        StateHasChanged();
+        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()

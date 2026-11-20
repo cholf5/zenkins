@@ -1,0 +1,56 @@
+@using Zenkins.Shared.LogStreaming
+
+@* One block per line. The 2026-11-20 browser pass showed why this is not cosmetic: the old panel
+   put every line in an inline <span> and relied on a newline Razor trimmed, so a whole step's output
+   became one wrapped string. A block element per line is the boundary; the message lives in
+   .zk-console-text so `white-space: pre` preserves leading spaces and blank lines without catching
+   the Razor formatting whitespace around the element. (Card F-047.) *@
+@foreach (var entry in Entries)
+{
+    if (entry.Header is { } header && entry.HeaderStepId is { } headerId)
+    {
+        <button type="button" class="zk-console-step" data-step="@headerId"
+                @onclick="@(() => StepClicked.InvokeAsync(headerId))">@header</button>
+    }
+
+    <div @key="entry.Line.Seq" class="zk-console-line @LineClass(entry.Line)"
+         data-seq="@entry.Line.Seq"
+         data-current-match="@(CurrentMatchSeq == entry.Line.Seq ? "true" : null)">
+        @if (ShowTimestamps)
+        {
+            <time class="zk-console-time" datetime="@entry.Line.Timestamp.ToString("O")">@entry.Line.Timestamp.ToString("HH:mm:ss")</time>
+        }
+        <span class="zk-console-text">@entry.Line.Message</span>
+    </div>
+}
+
+@code {
+    /// <summary>The lines to render, in Seq order, with their step headers.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<RunLogEntry> Entries { get; set; } = [];
+
+    /// <summary>Whether each line carries its UTC time of day.</summary>
+    [Parameter]
+    public bool ShowTimestamps { get; set; }
+
+    /// <summary>The search match to mark, or null when not navigating.</summary>
+    [Parameter]
+    public long? CurrentMatchSeq { get; set; }
+
+    /// <summary>Raises the step whose header was clicked; the panel turns it into a filter.</summary>
+    [Parameter]
+    public EventCallback<Guid> StepClicked { get; set; }
+
+    private string LineClass(LogLineMessage line)
+    {
+        var classes = string.Equals(line.Stream, LogStream.StdErr, StringComparison.Ordinal)
+            ? "zk-console-line--stderr"
+            : string.Empty;
+        if (CurrentMatchSeq == line.Seq)
+        {
+            classes += " zk-console-line--match";
+        }
+
+        return classes;
+    }
+}
