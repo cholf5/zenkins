@@ -20,6 +20,9 @@ namespace Zenkins.Tests.TestAssets.ArgvEcho;
 /// <item><c>write-slow &lt;ms&gt; &lt;text&gt;</c> — prints <c>stream-first</c> to stdout, sleeps
 /// ms, prints text to stderr, sleeps ms again, prints <c>stream-second</c> to stdout, exits 0.
 /// The streaming-before-exit probe (stdout and stderr, ordered per stream).</item>
+/// <item><c>bytes &lt;out|err&gt; &lt;hex&gt;</c> — writes the given bytes verbatim to stdout or
+/// stderr. The encoding probe (card B-016): the bytes never pass through the console's own encoder,
+/// so a test can hand the runner UTF-8, GBK, a BOM, CR-only lines or a line with no terminator.</item>
 /// <item><c>stream &lt;ms&gt;</c> — prints <c>stream-first</c>, sleeps ms, prints
 /// <c>stream-second</c>, exits 0. A long-lived but well-behaved child.</item>
 /// <item><c>spawn &lt;ms&gt;</c> — starts a grandchild (<c>stream &lt;ms&gt;</c> of this same
@@ -123,6 +126,30 @@ internal static class Program
                 Console.Out.Flush();
                 Thread.Sleep(streamDelay);
                 Console.Out.WriteLine("stream-second");
+                return 0;
+
+            case "bytes":
+                if (args.Length != 3 || (args[1] != "out" && args[1] != "err"))
+                {
+                    return Usage("bytes <out|err> <hex>");
+                }
+
+                byte[] payload;
+                try
+                {
+                    payload = Convert.FromHexString(args[2]);
+                }
+                catch (FormatException)
+                {
+                    return Usage("bytes <out|err> <hex> (hex must be a whole number of bytes)");
+                }
+
+                using (var target = args[1] == "out" ? Console.OpenStandardOutput() : Console.OpenStandardError())
+                {
+                    target.Write(payload);
+                    target.Flush();
+                }
+
                 return 0;
 
             case "spawn":
