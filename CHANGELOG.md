@@ -8,6 +8,16 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **The parameters editor joins the list and inspector (F-045).** A project's build parameters were
+  rendered the way the steps were: one fully expanded card each, so ten parameters were ten blocks of
+  five fields. They are now one line per parameter - its number, its name (or *unnamed*, for one that
+  has none yet) and its type as a chip - with the selected parameter's fields in the pane, using the
+  frame B-014 built for the steps list and needing no new layout CSS. The same rule holds here: the
+  block of fields is moved into the pane, never re-rendered, because `js/parameter-rows.js` serializes
+  the nodes and a re-created input would save empty. A parameter's fields live in
+  `ProjectParameterFields.razor` and render for both the saved row and the row template. The stored
+  JSON keeps its field names, its order and its shape.
+
 - **The steps editor is a list and an inspector (B-014).** Ten steps used to be ten fully expanded
   cards, so one pipeline was ten screens of fields and the shape of the run was somewhere in the
   middle of it. The editor is now one line per step on the left - its number, its name (or the script's

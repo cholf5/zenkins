@@ -19,6 +19,7 @@ card move to Done with `status: done`. A FAIL sends the card back to the same de
 | [B-013](issues/b-013-run-page-render-crash.md) | A run page shows "The page failed to render." — the log panel renders once before its plan exists | P1 | S | none | F-008, D-004, F-043 |
 | [B-014](issues/b-014-steps-editor-list-inspector.md) | The steps editor is a list and an inspector — one line per step on the left, the selected step's fields on the right | P1 | M | none | F-020, F-031 |
 | [B-015](issues/b-015-refused-save-keeps-the-draft.md) | A save the builder refuses swallows the whole draft — the PRG page renders the last saved spec, and with the collapsed rows the refused step is hard to find | P1 | M | none | F-020, F-031, F-022 |
+| [F-045](issues/f-045-parameters-editor-list-inspector.md) | The parameters editor joins the list and inspector — one line per parameter, its fields in the pane | P2 | M | none | B-014, F-021 |
 
 ## Done
 

@@ -1,0 +1,86 @@
+@using Zenkins.Shared.Projects
+@* One parameter's fields - and the editor's only copy of them. The saved row and the row template both
+   render this component, so a field the template loses is no longer possible one by one (B-011's trap,
+   one level up: the template is exactly what "Add parameter" produces).
+
+   data-split-detail marks the block js/split-list.js moves between the row and the inspector pane, and it
+   has to hold every field: js/parameter-rows.js serializes what is in the DOM, so a field outside this node
+   is a field that saves as empty without saying so. *@
+<div data-split-detail class="zk-split-fields bb:space-y-3 bb:text-sm">
+    <div class="bb:grid bb:gap-3 bb:sm:grid-cols-2">
+        <div>
+            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("name")">@L10n["Name (env variable)"]</label>
+            <input data-parameter-field="name"
+                   id="@Id("name")"
+                   value="@Parameter?.Name"
+                   maxlength="64"
+                   autocomplete="off"
+                   spellcheck="false"
+                   placeholder="NUGET_TOKEN"
+                   class="zk-input bb:font-mono" />
+        </div>
+        <div>
+            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("type")">@L10n["Type"]</label>
+            <select data-parameter-field="type"
+                    id="@Id("type")"
+                    class="zk-input">
+                @foreach (var type in ProjectParameterTypes.All)
+                {
+                    <option value="@type" selected="@(Parameter?.Type == type)">@type</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("default")">
+                @L10n["Default (blank = the type's neutral default)"]
+            </label>
+            <input data-parameter-field="default"
+                   id="@Id("default")"
+                   value="@Parameter?.DefaultValue"
+                   autocomplete="off"
+                   spellcheck="false"
+                   class="zk-input" />
+        </div>
+        <div>
+            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("choices")">
+                @L10n["Choices (comma-separated; choice parameters only)"]
+            </label>
+            <input data-parameter-field="choices"
+                   id="@Id("choices")"
+                   value="@ChoicesText()"
+                   autocomplete="off"
+                   spellcheck="false"
+                   placeholder="debug, release"
+                   class="zk-input" />
+        </div>
+        <div class="bb:sm:col-span-2">
+            <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="@Id("description")">
+                @L10n["Description (shown on the trigger form)"]
+            </label>
+            <input data-parameter-field="description"
+                   id="@Id("description")"
+                   value="@Parameter?.Description"
+                   maxlength="200"
+                   autocomplete="off"
+                   class="zk-input" />
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>
+    /// The id stem for this block's labels, or <see langword="null"/> for the row template - a cloned row
+    /// would repeat an id the browser (and a label's <c>for</c>) resolves to the first match, so the
+    /// template's fields carry none.
+    /// </summary>
+    [Parameter]
+    public string? IdPrefix { get; set; }
+
+    /// <summary>The parameter being edited, or <see langword="null"/> for the row template's empty fields.</summary>
+    [Parameter]
+    public ProjectParameter? Parameter { get; set; }
+
+    private string? Id(string field) => IdPrefix is null ? null : $"{IdPrefix}-{field}";
+
+    private string ChoicesText() => string.Join(", ", Parameter?.Choices ?? []);
+}

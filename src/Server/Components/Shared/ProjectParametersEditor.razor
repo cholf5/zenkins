@@ -1,8 +1,16 @@
 @using Zenkins.Shared.Projects
-@* Card F-021's parameters editor. The same pattern as the Freestyle steps editor: a plain HTML form
-   posting the drafts as one JSON field to the real endpoint (antiforgery, no circuit needed), with
-   js/parameter-rows.js owning the dynamic rows. The server - never the browser - validates every
-   rule (names, types, choices, bounds) and stores the definitions the trigger form renders. *@
+@* Card F-021's parameters editor, in the list + inspector shape card F-045 gave it: one line per parameter
+   on the left (its number, its name, its type), the selected parameter's fields in the pane on the right.
+   The frame is js/split-list.js - the same one the steps editor uses - and js/parameter-rows.js owns the
+   dynamic rows (add / remove) and serializes them into the one hidden ParametersJson field.
+
+   The fields of a row stay in the DOM and are MOVED into the pane, never re-rendered: the serializer reads
+   the nodes, so a re-created input would save empty and say nothing. Below the pane's breakpoint the same
+   markup is an accordion.
+
+   The form is plain HTML posting to the real endpoint (antiforgery, no circuit needed), and the server -
+   never the browser - validates every rule (names, types, choices, bounds) and stores the definitions the
+   trigger form renders. *@
 <form method="post" action="@Action" data-zenkins-antiforgery data-parameter-rows-form>
     <input type="hidden" name="ParametersJson" id="parameters-json" />
 
@@ -13,142 +21,64 @@
         </div>
     }
 
-    <ol data-parameter-rows-list class="bb:space-y-4">
-        @for (var parameterIndex = 0; parameterIndex < Parameters.Count; parameterIndex++)
-        {
-            var parameter = Parameters[parameterIndex];
-            <li data-parameter-row class="bb:rounded-md bb:border bb:border-input bb:p-4">
-                <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
-                    <span class="bb:text-sm bb:font-medium">
-                        @L10n["Parameter {0}", parameterIndex + 1]
-                    </span>
-                    <button type="button" data-parameter-action="remove"
-                            class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
-                            aria-label="@L10n["Remove parameter {0}", parameterIndex + 1]">@L10n["Remove"]</button>
-                </div>
-                <div class="bb:grid bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-name-@(parameterIndex)">@L10n["Name (env variable)"]</label>
-                        <input data-parameter-field="name"
-                               id="param-name-@(parameterIndex)"
-                               value="@parameter.Name"
-                               maxlength="64"
-                               autocomplete="off"
-                               spellcheck="false"
-                               placeholder="NUGET_TOKEN"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:font-mono" />
+    <div data-split-editor="parameters" data-split-labels="@LabelsJson()" class="zk-split">
+        <ol data-parameter-rows-list class="zk-split-list">
+            @for (var parameterIndex = 0; parameterIndex < Parameters.Count; parameterIndex++)
+            {
+                var parameter = Parameters[parameterIndex];
+                <li data-parameter-row data-split-step class="zk-split-row">
+                    <div class="zk-split-row-head">
+                        @* The whole line selects the parameter; the row stays where the remove action lives. *@
+                        <button type="button" data-split-select
+                                aria-expanded="false"
+                                aria-controls="@PaneId"
+                                class="zk-split-summary">
+                            <span data-parameter-row-index class="zk-split-index">@(parameterIndex + 1)</span>
+                            <span data-split-title class="zk-split-title">@Title(parameter)</span>
+                            <span data-split-chips class="zk-split-chips"></span>
+                        </button>
+                        <div class="zk-split-actions">
+                            <button type="button" data-parameter-action="remove"
+                                    class="zk-row-action zk-row-action-danger"
+                                    aria-label="@L10n["Remove parameter {0}", parameterIndex + 1]">@L10n["Remove"]</button>
+                        </div>
                     </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-type-@(parameterIndex)">@L10n["Type"]</label>
-                        <select data-parameter-field="type"
-                                id="param-type-@(parameterIndex)"
-                                class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
-                            @foreach (var type in ProjectParameterTypes.All)
-                            {
-                                <option value="@type" selected="@(parameter.Type == type)">@type</option>
-                            }
-                        </select>
+                    <div data-split-detail-slot class="zk-split-slot">
+                        <ProjectParameterFields IdPrefix="@($"param-{parameterIndex}")" Parameter="@parameter" />
                     </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-default-@(parameterIndex)">
-                            @L10n["Default (blank = the type's neutral default)"]
-                        </label>
-                        <input data-parameter-field="default"
-                               id="param-default-@(parameterIndex)"
-                               value="@parameter.DefaultValue"
-                               autocomplete="off"
-                               spellcheck="false"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div>
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-choices-@(parameterIndex)">
-                            @L10n["Choices (comma-separated; choice parameters only)"]
-                        </label>
-                        <input data-parameter-field="choices"
-                               id="param-choices-@(parameterIndex)"
-                               value="@string.Join(", ", parameter.Choices ?? [])"
-                               autocomplete="off"
-                               spellcheck="false"
-                               placeholder="debug, release"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                    <div class="bb:sm:col-span-2">
-                        <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" for="param-description-@(parameterIndex)">
-                            @L10n["Description (shown on the trigger form)"]
-                        </label>
-                        <input data-parameter-field="description"
-                               id="param-description-@(parameterIndex)"
-                               value="@parameter.Description"
-                               maxlength="200"
-                               autocomplete="off"
-                               class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                    </div>
-                </div>
-            </li>
-        }
-    </ol>
+                </li>
+            }
+        </ol>
 
-    <template id="parameter-row-template">
-        <li data-parameter-row class="bb:rounded-md bb:border bb:border-input bb:p-4">
-            <div class="bb:mb-3 bb:flex bb:items-center bb:justify-between bb:gap-3">
-                <span class="bb:text-sm bb:font-medium">
-                    @L10n["Parameter {0}", ""]<span data-parameter-row-index></span>
-                </span>
+        <div data-split-pane id="@PaneId" class="zk-split-pane" aria-label="@L10n["Parameters"]">
+            <p data-split-empty class="zk-split-empty">@L10n["No parameters yet. Add one below."]</p>
+        </div>
+    </div>
+
+    @* The row "Add parameter" clones. The element order matters: the <li> is the template's first child,
+       which is where B-011 found the browser's parse and Blazor's appendChild disagree - the script reads it
+       from either place, and ProjectUiRowTemplateTests pins that. The fields come from the one component both
+       halves use, so the template cannot lose a field the saved row has. *@
+    <template id="parameter-row-template"><li data-parameter-row data-split-step class="zk-split-row">
+        <div class="zk-split-row-head">
+            <button type="button" data-split-select
+                    aria-expanded="false"
+                    aria-controls="@PaneId"
+                    class="zk-split-summary">
+                <span data-parameter-row-index class="zk-split-index"></span>
+                <span data-split-title class="zk-split-title">@L10n["Unnamed parameter"]</span>
+                <span data-split-chips class="zk-split-chips"></span>
+            </button>
+            <div class="zk-split-actions">
                 <button type="button" data-parameter-action="remove"
-                        class="bb:rounded-md bb:border bb:border-destructive/40 bb:px-2 bb:py-1 bb:text-xs bb:text-destructive"
+                        class="zk-row-action zk-row-action-danger"
                         aria-label="@L10n["Remove parameter"]">@L10n["Remove"]</button>
             </div>
-            <div class="bb:grid bb:gap-3 bb:text-sm bb:sm:grid-cols-2">
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="name">@L10n["Name (env variable)"]</label>
-                    <input data-parameter-field="name"
-                           maxlength="64"
-                           autocomplete="off"
-                           spellcheck="false"
-                           placeholder="NUGET_TOKEN"
-                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1 bb:font-mono" />
-                </div>
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="type">@L10n["Type"]</label>
-                    <select data-parameter-field="type"
-                            class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1">
-                        @foreach (var type in ProjectParameterTypes.All)
-                        {
-                            <option value="@type">@type</option>
-                        }
-                    </select>
-                </div>
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="default">
-                        @L10n["Default (blank = the type's neutral default)"]
-                    </label>
-                    <input data-parameter-field="default"
-                           autocomplete="off"
-                           spellcheck="false"
-                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                </div>
-                <div>
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="choices">
-                        @L10n["Choices (comma-separated; choice parameters only)"]
-                    </label>
-                    <input data-parameter-field="choices"
-                           autocomplete="off"
-                           spellcheck="false"
-                           placeholder="debug, release"
-                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                </div>
-                <div class="bb:sm:col-span-2">
-                    <label class="bb:mb-1 bb:block bb:text-xs bb:font-medium" data-parameter-label="description">
-                        @L10n["Description (shown on the trigger form)"]
-                    </label>
-                    <input data-parameter-field="description"
-                           maxlength="200"
-                           autocomplete="off"
-                           class="bb:w-full bb:rounded-md bb:border bb:border-input bb:bg-transparent bb:px-3 bb:py-1" />
-                </div>
-            </div>
-        </li>
-    </template>
+        </div>
+        <div data-split-detail-slot class="zk-split-slot">
+            <ProjectParameterFields />
+        </div>
+    </li></template>
 
     <div class="bb:flex bb:flex-wrap bb:items-center bb:gap-3">
         <button type="button" data-parameter-action="add"
@@ -171,4 +101,21 @@
     /// <summary>The stable validation code from the redirect query, if any.</summary>
     [Parameter]
     public string? ErrorCode { get; set; }
+
+    /// <summary>The inspector pane's id, so a row's aria-controls has a target that exists.</summary>
+    private string PaneId => "parameters-pane";
+
+    /// <summary>The line's own text: the name, or the list's word for a parameter that has none yet.</summary>
+    private string Title(ProjectParameter parameter) =>
+        string.IsNullOrWhiteSpace(parameter.Name) ? L10n["Unnamed parameter"] : parameter.Name;
+
+    /// <summary>
+    /// The words js/split-list.js puts on a row's line. They travel as data (the same way the steps editor's
+    /// do) so the summary a browser draws for an edited row is the one this list would have rendered, in the
+    /// reader's language - and so no Chinese or English string lives in a .js file.
+    /// </summary>
+    private string LabelsJson() => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
+    {
+        ["unnamed"] = L10n["Unnamed parameter"],
+    });
 }

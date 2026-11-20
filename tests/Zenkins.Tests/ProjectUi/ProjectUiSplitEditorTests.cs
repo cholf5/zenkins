@@ -1,6 +1,10 @@
+using System.Text.Json;
 using Xunit;
+using Zenkins.Server.Projects;
+using Zenkins.Shared.Projects;
 using Zenkins.Tests.Auth;
 using Zenkins.Tests.Milestone;
+using Zenkins.Tests.Organizations;
 using Zenkins.Tests.Snippets;
 
 namespace Zenkins.Tests.ProjectUi;
@@ -80,5 +84,86 @@ public sealed class ProjectUiSplitEditorTests
         Assert.Contains("appendChild(detail)", frame, StringComparison.Ordinal);
         Assert.DoesNotContain("cloneNode", frame, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", frame, StringComparison.Ordinal);
+    }
+
+    [Fact(Timeout = 2 * 60 * 1000)]
+    public async Task The_parameters_editor_uses_the_same_frame_and_its_serializer_reads_through_it()
+    {
+        Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
+        using var host = await SnippetTestHost.CreateAsync();
+        var owner = await host.SignInOwnerAsync();
+        var projectId = await host.CreateFreestyleProjectAsync(owner, "split-params");
+
+        // Two saved parameters, posted the way the editor's own form posts them.
+        var drafts = JsonSerializer.Serialize(
+            new[]
+            {
+                new ProjectParameterDraft("NUGET_TOKEN", ProjectParameterTypes.String, "t0ken", null, "publishes the package"),
+                new ProjectParameterDraft("CHANNEL", ProjectParameterTypes.Choice, "release", "debug, release", null),
+            },
+            ProjectParameters.DraftsOptions);
+        using var saved = await OrganizationTestHost.PostFormAsync(
+            owner,
+            $"/projects/{projectId}",
+            $"/projects/{projectId}/parameters",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["ParametersJson"] = drafts });
+        Assert.True(
+            (int)saved.StatusCode is 302 or 303,
+            $"saving the parameters answered {(int)saved.StatusCode}: {saved.Headers.Location}.");
+
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/parameters");
+
+        // The same frame the steps list uses: one editor, one pane, the summary words as data, an empty state.
+        Assert.Contains("data-split-editor=\"parameters\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"parameters-pane\"", page, StringComparison.Ordinal);
+        Assert.Contains("data-split-labels=", page, StringComparison.Ordinal);
+        Assert.Contains("data-split-empty", page, StringComparison.Ordinal);
+
+        // One line per saved parameter, each carrying its own block of fields - the frame moves the block, so
+        // the fields of an unselected row have to be inside that row already.
+        var listStart = page.IndexOf("data-parameter-rows-list", StringComparison.Ordinal);
+        Assert.True(listStart > 0, "the parameters editor's row list is not on the page.");
+        var list = page[listStart..];
+        var listEnd = list.IndexOf("</ol>", StringComparison.Ordinal);
+        Assert.True(listEnd > 0, "the row list is not closed.");
+        list = list[..listEnd];
+        Assert.Equal(2, CountOf(list, "data-parameter-row data-split-step"));
+        Assert.Equal(2, CountOf(list, "data-split-detail-slot"));
+        Assert.Contains(">NUGET_TOKEN<", list, StringComparison.Ordinal);
+
+        // The row template holds the same block, so a row added in the browser has real fields to serialize.
+        var templateStart = page.IndexOf("id=\"parameter-row-template\"", StringComparison.Ordinal);
+        Assert.True(templateStart > 0, "the parameters editor's row template is not on the page.");
+        var template = page[templateStart..];
+        var templateEnd = template.IndexOf("</template>", StringComparison.Ordinal);
+        Assert.True(templateEnd > 0, "the row template is not closed.");
+        template = template[..templateEnd];
+        Assert.Contains("data-split-detail", template, StringComparison.Ordinal);
+        Assert.Contains("data-parameter-field=\"name\"", template, StringComparison.Ordinal);
+        Assert.Contains("data-parameter-field=\"choices\"", template, StringComparison.Ordinal);
+
+        // The script reads a row's fields through the pointer and installs the row's summary; without both the
+        // selected parameter saves empty and every line stays blank.
+        var script = await AuthTestHost.GetStringAsync(owner, "/js/parameter-rows.js");
+        Assert.Contains("row._splitDetail || row", script, StringComparison.Ordinal);
+        Assert.Contains("summarize(EDITOR_KEY, parameterSummary)", script, StringComparison.Ordinal);
+        Assert.Contains("template.content.firstElementChild || template.firstElementChild", script, StringComparison.Ordinal);
+
+        var frameAt = page.IndexOf("js/split-list.js", StringComparison.Ordinal);
+        var rowsAt = page.IndexOf("js/parameter-rows.js", StringComparison.Ordinal);
+        Assert.True(frameAt > 0 && rowsAt > frameAt, "js/split-list.js must load before js/parameter-rows.js.");
+    }
+
+    private static int CountOf(string source, string needle)
+    {
+        var count = 0;
+        var index = source.IndexOf(needle, StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            count++;
+            index = source.IndexOf(needle, index + needle.Length, StringComparison.Ordinal);
+        }
+
+        return count;
     }
 }

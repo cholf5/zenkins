@@ -40,7 +40,7 @@ html.dark {
   }
 }
 
-/* The list + inspector editor ([data-split-editor]), shared by the Freestyle steps editor and (next) the
+/* The list + inspector editor ([data-split-editor]), shared by the Freestyle steps editor and the
    parameter rows: one line per item on the left, the selected item's fields on the right. Jenkins' freestyle
    config collapses a build step to one line and opens its body on demand; this is the same idea with the
    detail pane kept in view, so a list of steps and the step being edited never fight for the same column.
