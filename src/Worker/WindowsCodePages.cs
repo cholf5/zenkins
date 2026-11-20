@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Zenkins.Worker;
@@ -38,9 +39,31 @@ public static class WindowsCodePages
             }
 
             Register();
+
+            // The System/OEM code page, not the display language's: a host whose Windows UI is
+            // English but whose System locale is Chinese still has cmd and localized tools writing
+            // GBK. GetOEMCP answers the machine's OEM page; the culture value is only a fallback
+            // for a call the platform refuses.
+            var codePage = 0;
             try
             {
-                return Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+                codePage = (int)GetOEMCP();
+            }
+            catch (DllNotFoundException)
+            {
+            }
+            catch (EntryPointNotFoundException)
+            {
+            }
+
+            if (codePage <= 0)
+            {
+                codePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+            }
+
+            try
+            {
+                return Encoding.GetEncoding(codePage);
             }
             catch (ArgumentException)
             {
@@ -75,4 +98,8 @@ public static class WindowsCodePages
             Volatile.Write(ref _registered, true);
         }
     }
+
+    /// <summary>The machine's OEM code page (the System locale, not the display language).</summary>
+    [DllImport("kernel32.dll")]
+    private static extern uint GetOEMCP();
 }

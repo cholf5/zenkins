@@ -64,6 +64,27 @@ public sealed class RunConsolePageTests
             run.Owner, $"/runs/{run.RunId}/console?step={stepId}");
 
         Assert.Contains("id=\"run-console-page\"", page, StringComparison.Ordinal);
+        // The query is the initial filter, not decoration: the step select carries the id.
+        Assert.Contains($"id=\"run-log-step-filter\"", page, StringComparison.Ordinal);
+        Assert.Contains($"value=\"{stepId}\"", page, StringComparison.Ordinal);
+    }
+
+    [Fact(Timeout = 2 * 60 * 1000)]
+    public async Task An_unknown_step_query_shows_all_steps()
+    {
+        Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
+        using var host = await RunUiHost.CreateAsync();
+        var run = await host.CreateRunAsync("Build", "Test");
+        var unknown = Guid.NewGuid();
+
+        var page = await Zenkins.Tests.Auth.AuthTestHost.GetStringAsync(
+            run.Owner, $"/runs/{run.RunId}/console?step={unknown}");
+
+        var selectStart = page.IndexOf("id=\"run-log-step-filter\"", StringComparison.Ordinal);
+        Assert.True(selectStart >= 0, "the step filter select is missing.");
+        var valueStart = page.IndexOf("value=\"", selectStart, StringComparison.Ordinal);
+        Assert.True(valueStart > selectStart, "the step filter select has no value attribute.");
+        Assert.StartsWith("value=\"\"", page[valueStart..], StringComparison.Ordinal);
     }
 
     [Fact(Timeout = 2 * 60 * 1000)]

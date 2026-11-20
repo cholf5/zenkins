@@ -34,6 +34,7 @@ public sealed class RunConsoleFollowTests
         Assert.Contains("zenkinsConsole.init", panel, StringComparison.Ordinal);
         Assert.Contains("zenkinsConsole.afterRender", panel, StringComparison.Ordinal);
         Assert.Contains("zenkinsConsole.dispose", panel, StringComparison.Ordinal);
+        Assert.Contains("zenkinsConsole.follow", panel, StringComparison.Ordinal);
         Assert.Contains("OnConsoleScroll", panel, StringComparison.Ordinal);
     }
 
@@ -45,6 +46,7 @@ public sealed class RunConsoleFollowTests
         Assert.Contains("init", script, StringComparison.Ordinal);
         Assert.Contains("afterRender", script, StringComparison.Ordinal);
         Assert.Contains("dispose", script, StringComparison.Ordinal);
+        Assert.Contains("follow", script, StringComparison.Ordinal);
         Assert.Contains("scrollTop = ", script, StringComparison.Ordinal);
         Assert.Contains("suppress", script, StringComparison.Ordinal);
         Assert.Contains("OnConsoleScroll", script, StringComparison.Ordinal);

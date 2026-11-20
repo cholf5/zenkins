@@ -694,7 +694,7 @@ public sealed class PipelineRunnerTests
     // ------------------------------------------------------------------
 
     [Fact]
-    public async Task A_script_step_lands_in_temp_as_step_N_as_utf8_without_a_bom()
+    public async Task A_script_step_lands_in_temp_as_step_N_in_the_platform_encoding()
     {
         // Two script steps, so the name is pinned by position and not by "there is one file".
         var spec = ScriptSpec("echo café", "echo second");
@@ -714,16 +714,25 @@ public sealed class PipelineRunnerTests
         Assert.True(File.Exists(second), $"the second script step's file is missing: {second}");
         Assert.Empty(Directory.GetFiles(run.Work.TempPath, $"step-*.{otherPlatform}"));
 
-        // UTF-8 without a BOM, byte for byte: a BOM's characters would become the first command on
-        // Windows and a stray token on Unix, which is why the encoding is written explicitly.
+        // The bytes are the platform's contract (card B-016): Unix gets UTF-8 without a BOM; Windows
+        // gets the code page cmd.exe reads, through the same encoder the runner uses.
         var written = File.ReadAllBytes(first);
-        Assert.Equal(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes("echo café"), written);
-        Assert.False(
-            written.Length >= 3 && written[0] == 0xEF && written[1] == 0xBB && written[2] == 0xBF,
-            "the script file starts with a UTF-8 BOM");
+        var expectedFirst = OperatingSystem.IsWindows()
+            ? WindowsBatchScript.Encode("echo café", WindowsCodePages.Oem!).Bytes
+            : new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes("echo café");
+        Assert.Equal(expectedFirst, written);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.False(
+                written.Length >= 3 && written[0] == 0xEF && written[1] == 0xBB && written[2] == 0xBF,
+                "the script file starts with a UTF-8 BOM");
+        }
 
         // And the file is what actually ran: the non-ASCII text came back through the child's stdout.
-        Assert.Equal(new UTF8Encoding(false).GetBytes("echo second"), File.ReadAllBytes(second));
+        var expectedSecond = OperatingSystem.IsWindows()
+            ? WindowsBatchScript.Encode("echo second", WindowsCodePages.Oem!).Bytes
+            : new UTF8Encoding(false).GetBytes("echo second");
+        Assert.Equal(expectedSecond, File.ReadAllBytes(second));
         Assert.Contains("café", run.OutputLines);
         Assert.Contains("second", run.OutputLines);
     }

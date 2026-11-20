@@ -13,7 +13,7 @@
   function stateFor(id) {
     let state = consoles.get(id);
     if (!state) {
-      state = { el: null, dotNet: null, handler: null, suppress: false, scheduled: false };
+      state = { el: null, dotNet: null, handler: null, suppress: false, scheduled: false, away: false };
       consoles.set(id, state);
     }
     return state;
@@ -29,6 +29,12 @@
       return;
     }
 
+    // Capture the position at event time. A log batch's afterRender may scroll to the bottom before
+    // the animation frame runs; recomputing there would turn a real scroll-up into "at bottom" and
+    // silently keep following. `away` is also set here, synchronously, so an afterRender that lands
+    // in the same frame honours the reader's intent.
+    const bottom = atBottom(state.el);
+    state.away = !bottom;
     state.scheduled = true;
     requestAnimationFrame(() => {
       state.scheduled = false;
@@ -36,7 +42,7 @@
         return;
       }
 
-      state.dotNet.invokeMethodAsync("OnConsoleScroll", atBottom(state.el)).catch(() => {
+      state.dotNet.invokeMethodAsync("OnConsoleScroll", bottom).catch(() => {
         // A circuit that went away while the wheel was still moving is not an error worth logging.
       });
     });
@@ -94,9 +100,20 @@
       return;
     }
 
-    if (!paused) {
+    if (!paused && !state.away) {
       scrollToBottom(state);
     }
+  }
+
+  /// The page's explicit resume/jump: forget the scroll-away and pin the tail again.
+  function follow(id) {
+    const state = consoles.get(id);
+    if (!state || !state.el) {
+      return;
+    }
+
+    state.away = false;
+    scrollToBottom(state);
   }
 
   function dispose(id) {
@@ -112,5 +129,5 @@
     consoles.delete(id);
   }
 
-  window.zenkinsConsole = { init, afterRender, dispose };
+  window.zenkinsConsole = { init, afterRender, follow, dispose };
 })();

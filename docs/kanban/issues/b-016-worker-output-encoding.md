@@ -76,6 +76,10 @@ emoji `.cmd` prints through the `chcp` path. These run on CI's windows-latest.
 - Batch scripts choose the OEM page first because that is the common, chcp-free path for a Chinese
   build script; UTF-8 + `chcp` remains for characters the page cannot represent.
 - Historical logs are not rewritten. New runs are correct; old rows stay as they were recorded.
+- Review pass: the OEM fallback now comes from `GetOEMCP` (the machine's System code page), not the
+  display language's culture - an English UI on a Chinese System locale is the common case that
+  broke the culture lookup. The existing `PipelineRunnerTests` byte assertion is platform-branched:
+  Unix pins UTF-8, Windows pins the encoder's bytes.
 
 ## Bugs
 
@@ -92,6 +96,7 @@ emoji `.cmd` prints through the `chcp` path. These run on CI's windows-latest.
 - How to run/verify:
   - `dotnet test --filter "Category=WorkerRuntime"` → 46 passed, 2 skipped (the Windows facts on
     macOS).
+  - `dotnet test --filter "Category=Pipeline"` → 209/209 (the script-file byte facts).
   - `dotnet test --filter "FullyQualifiedName~ProcessRunnerEncodingTests"` → 7/7.
   - `dotnet build src/Worker/Zenkins.Worker.csproj -c Release` → 0 warnings (AOT analyzers run on
     every build).

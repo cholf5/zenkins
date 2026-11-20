@@ -57,6 +57,10 @@ public sealed class RunLogViewModel
     /// <summary>Evicted lines the paused viewer was still showing at the pause instant.</summary>
     private int _droppedWhilePaused;
 
+    /// <summary>The highest Seq retention has dropped. A reconnect replays history; a line at or
+    /// below this was already merged and shown, so replaying it must not be counted (or evicted) again.</summary>
+    private long _evictedThrough;
+
     /// <summary>The search term, trimmed; empty means no search is active.</summary>
     private string _searchText = string.Empty;
 
@@ -182,12 +186,19 @@ public sealed class RunLogViewModel
                     continue;
                 }
 
+                if (line.Seq <= _evictedThrough)
+                {
+                    // Retention already dropped this line; the replay is old news, not a new arrival.
+                    continue;
+                }
+
                 _lines[line.Seq] = line;
                 _received++;
                 while (_lines.Count > RetainedCap)
                 {
                     var oldest = _lines.Keys.First();
                     _lines.Remove(oldest);
+                    _evictedThrough = Math.Max(_evictedThrough, oldest);
                     _droppedFromViewer++;
                     if (_paused && oldest <= _frozenUpperSeq)
                     {

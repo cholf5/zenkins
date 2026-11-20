@@ -390,6 +390,24 @@ public sealed class RunLogControlsTests
     }
 
     [Fact]
+    public void Replaying_evicted_history_does_not_inflate_the_retention_counts()
+    {
+        var viewModel = new RunLogViewModel();
+        viewModel.Add(Enumerable.Range(1, 100_005).Select(seq => Line(seq, $"line-{seq}")));
+        var before = viewModel.Plan(Headers, TestText.English);
+
+        // A reconnect replays the whole history. Sequences retention already dropped are old news:
+        // they must not be merged, counted, or evicted again.
+        viewModel.Add(Enumerable.Range(1, 100_005).Select(seq => Line(seq, $"line-{seq}")));
+        var after = viewModel.Plan(Headers, TestText.English);
+
+        Assert.Equal(before.ReceivedLines, after.ReceivedLines);
+        Assert.Equal(before.DroppedFromViewer, after.DroppedFromViewer);
+        Assert.Equal(before.RetainedLines, after.RetainedLines);
+        Assert.Equal(before.RetentionNotice, after.RetentionNotice);
+    }
+
+    [Fact]
     public void Duplicate_sequences_do_not_count_as_received_twice()
     {
         var viewModel = new RunLogViewModel();

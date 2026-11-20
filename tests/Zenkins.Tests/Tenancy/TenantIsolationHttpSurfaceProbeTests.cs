@@ -110,6 +110,7 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
                      $"/projects/{TwoOrgsFixture.ProjectBId}/edit",
                      $"/projects/{TwoOrgsFixture.ProjectBId}/delete/confirm",
                      $"/runs/{TwoOrgsFixture.BuildRunBId}",
+                     $"/runs/{TwoOrgsFixture.BuildRunBId}/console",
                      $"/workers/{TwoOrgsFixture.WorkerBId}",
 
                      // F-042: another organization's folder id is the same bare 404 as a missing one.
@@ -201,17 +202,28 @@ public sealed class TenantIsolationHttpSurfaceProbeTests
         using var host = new TenantProbeHostFixture();
         using var client = await TenantIsolationAuditProbes.SignInAsync(host, TenantIsolationProbeAssertions.OrgAOwnerEmail);
 
-        using var foreign = await client.GetAsync($"/projects/{TwoOrgsFixture.ProjectBId}/runs/1", CancellationToken);
-        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        foreach (var route in new[]
+                 {
+                     $"/projects/{TwoOrgsFixture.ProjectBId}/runs/1",
+                     $"/projects/{TwoOrgsFixture.ProjectBId}/runs/1/console",
+                 })
+        {
+            using var foreign = await client.GetAsync(route, CancellationToken);
+            Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
 
-        var body = await foreign.Content.ReadAsStringAsync(CancellationToken);
-        Assert.DoesNotContain(TwoOrgsFixture.ProjectBName, body, StringComparison.Ordinal);
-        Assert.DoesNotContain(TwoOrgsFixture.ProjectBRepositoryUrl, body, StringComparison.Ordinal);
+            var body = await foreign.Content.ReadAsStringAsync(CancellationToken);
+            Assert.DoesNotContain(TwoOrgsFixture.ProjectBName, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(TwoOrgsFixture.ProjectBRepositoryUrl, body, StringComparison.Ordinal);
+        }
 
-        // The positive control: org A's own #1 renders through the same route.
+        // The positive control: org A's own #1 renders through the same two routes.
         var own = await AuthTestHost.GetStringAsync(
             client, $"/projects/{TwoOrgsFixture.ProjectAId}/runs/1");
         Assert.Contains("Run #1", own, StringComparison.Ordinal);
+
+        var ownConsole = await AuthTestHost.GetStringAsync(
+            client, $"/projects/{TwoOrgsFixture.ProjectAId}/runs/1/console");
+        Assert.Contains("id=\"run-console-page\"", ownConsole, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -264,6 +264,9 @@
     /// <summary>The JS callback target for "the reader scrolled"; disposed with the panel.</summary>
     private DotNetObjectReference<RunLogPanel>? _selfRef;
 
+    /// <summary>Set on an explicit resume; the next render asks the JS controller to pin the tail.</summary>
+    private bool _followRequested;
+
     /// <summary>Whether each line carries its UTC time of day (F-047's optional column).</summary>
     private bool _showTimestamps;
 
@@ -280,10 +283,13 @@
         if (!_requestedStepApplied)
         {
             _requestedStepApplied = true;
-            if (RequestedStepId is { } requested)
-            {
-                _viewModel.SetStepFilter(requested);
-            }
+
+            // An id no step row owns is ignored, not applied: a stale link or a hand-edited query
+            // shows all steps instead of an empty view that claims a step produced nothing.
+            _viewModel.SetStepFilter(
+                RequestedStepId is { } requested && (Steps?.Any(step => step.Id == requested) ?? false)
+                    ? requested
+                    : null);
         }
 
         Replan();
@@ -309,6 +315,11 @@
             ConsoleScrollElementId,
             Plan.IsPaused,
             Plan.CurrentMatchSeq);
+        if (_followRequested)
+        {
+            _followRequested = false;
+            await JS.InvokeVoidAsync("zenkinsConsole.follow", ConsoleScrollElementId);
+        }
     }
 
     /// <summary>
@@ -476,6 +487,7 @@
         if (Plan.IsPaused)
         {
             _viewModel.Resume();
+            _followRequested = true;
         }
         else
         {
@@ -566,6 +578,7 @@
     private Task JumpToLatestAsync()
     {
         _viewModel.Resume();
+        _followRequested = true;
         return ReplanAsync();
     }
 

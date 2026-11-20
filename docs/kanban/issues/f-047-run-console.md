@@ -115,6 +115,12 @@ Pending. The repo has no browser harness; D-004-B3 records why TestServer cannot
   - `?step=` is applied once on the panel, not on every parameter set: the 2s status poll re-renders
     the parent, and re-applying the query would silently reset a filter the user changed.
   - The sidebar and console headers both filter on the step row id, never on the header text.
+- Review pass (same day): a reconnect replays history, and sequences retention already dropped were
+  re-merged, inflating `ReceivedLines`/`DroppedFromViewer`; an evicted-through horizon now skips them
+  without counting. An unknown `?step=` is ignored (decision 11) instead of showing an empty view.
+  Both console routes joined the tenant probes (foreign 404 + positive control). The follow race -
+  a scroll event and a log batch's `afterRender` in one frame - is closed by capturing position at
+  event time, a sticky `away`, and an explicit `follow` on resume; the real-Chrome harness pins it.
 
 ## Bugs
 
@@ -131,13 +137,17 @@ Pending. The repo has no browser harness; D-004-B3 records why TestServer cannot
 - How to run/verify:
   - `dotnet build src/Server/Zenkins.Server.csproj -v q --nologo` → passed, 0 warnings.
   - `node --check src/Server/wwwroot/js/run-console.js` → passed.
-  - `dotnet test --filter "Category=RunUi"` → 54/54.
+  - `dotnet test --filter "Category=RunUi"` → 56/56 (after the review fixes).
+  - `dotnet test --filter "Category=Pipeline"` → 209/209 (the Windows byte assertion is now
+    platform-branched; the Windows half runs on CI).
+  - `dotnet test --filter "Category=TenantIsolation"` → 178/178.
+  - `dotnet test --filter "Category=WorkerRuntime"` → 46/46 + 2 Windows-only skipped.
   - `dotnet test -c Release --filter "Category=Milestone"` → 12/12.
   - **Isolated JS harness in a real Chrome** (the console DOM + `js/run-console.js`, fake
     `dotNet`): follow-to-bottom at load, a scroll-to-top callback reports `OnConsoleScroll(false)`,
-    a paused `afterRender` holds the position, and `afterRender(..., seq)` scrolls the match into
-    view. All four passed; this is the script half of the follow contract, not the full Blazor
-    circuit.
+    a paused `afterRender` holds the position, `afterRender(..., seq)` scrolls the match into view,
+    and the scroll-up-vs-render race holds the position before an explicit `follow` pins it again.
+    All five passed; this is the script half of the follow contract, not the full Blazor circuit.
   - `dotnet test -c Release --filter "Category!=Milestone"` (and a Debug retry): **did not complete
     within 8+ minutes in this environment; stopped.** The affected categories were run
     individually and are green (RunUi 54/54, WorkerRuntime 46/46 + 2 Windows-only skipped,
