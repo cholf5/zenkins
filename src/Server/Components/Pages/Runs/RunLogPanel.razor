@@ -1,8 +1,10 @@
 @implements IAsyncDisposable
 @inject NavigationManager Navigation
 @inject ILogger<RunLogPanel> Logger
+@inject IJSRuntime JS
 @using Microsoft.AspNetCore.SignalR.Client
 @using Microsoft.Extensions.Logging
+@using Microsoft.JSInterop
 @using Zenkins.Server.LogStreaming
 @using Zenkins.Server.Runs
 @using Zenkins.Shared.LogStreaming
@@ -227,6 +229,12 @@
     /// <summary>Whether the console page's initial <c>?step=</c> filter has been applied.</summary>
     private bool _requestedStepApplied;
 
+    /// <summary>The scroll container the follow controller watches (card F-047).</summary>
+    private const string ConsoleScrollElementId = "run-log-scroll";
+
+    /// <summary>The JS callback target for "the reader scrolled"; disposed with the panel.</summary>
+    private DotNetObjectReference<RunLogPanel>? _selfRef;
+
     /// <summary>Whether each line carries its UTC time of day (F-047's optional column).</summary>
     private bool _showTimestamps;
 
@@ -250,6 +258,61 @@
         }
 
         Replan();
+    }
+
+    /// <summary>
+    /// Hands the scroll position to the page's follow controller after every render (card F-047).
+    /// init is idempotent and is called on every render because the scroll element only exists once
+    /// the first line has arrived; afterRender then either pins the tail or moves to the current
+    /// search match. Both calls no-op when the element is absent (the empty/error states).
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!RendererInfo.IsInteractive)
+        {
+            return;
+        }
+
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("zenkinsConsole.init", ConsoleScrollElementId, _selfRef);
+        await JS.InvokeVoidAsync(
+            "zenkinsConsole.afterRender",
+            ConsoleScrollElementId,
+            Plan.IsPaused,
+            Plan.CurrentMatchSeq);
+    }
+
+    /// <summary>
+    /// The reader moved the scroll container. Scrolling up pauses the viewport (the explicit pause
+    /// and the scroll pause share the freeze but not the resume rule); returning to the bottom only
+    /// clears a scroll-induced pause, never one the user asked for.
+    /// </summary>
+    [JSInvokable]
+    public Task OnConsoleScroll(bool atBottom)
+    {
+        if (!RendererInfo.IsInteractive)
+        {
+            return Task.CompletedTask;
+        }
+
+        return InvokeAsync(() =>
+        {
+            if (atBottom)
+            {
+                if (_viewModel.IsPausedByScroll)
+                {
+                    _viewModel.ResumeFromScroll();
+                    Replan();
+                    StateHasChanged();
+                }
+            }
+            else if (!Plan.IsPaused)
+            {
+                _viewModel.PauseFromScroll();
+                Replan();
+                StateHasChanged();
+            }
+        });
     }
 
     protected override async Task OnInitializedAsync()
@@ -482,6 +545,21 @@
 
     public async ValueTask DisposeAsync()
     {
+        if (_selfRef is not null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("zenkinsConsole.dispose", ConsoleScrollElementId);
+            }
+            catch (JSDisconnectedException)
+            {
+                // The circuit is already gone; the JS state dies with the page.
+            }
+
+            _selfRef.Dispose();
+            _selfRef = null;
+        }
+
         if (_connection is not null)
         {
             // Unsubscribe first: disposing raises Closed, and no handler may touch the UI state
