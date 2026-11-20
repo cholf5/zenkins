@@ -24,6 +24,7 @@
     var SELECT = "[data-split-select]";
     var DETAIL = "[data-split-detail]";
     var SLOT = "[data-split-detail-slot]";
+    var DRAG = "[data-split-drag]";
     var PANE = "[data-split-pane]";
     var EMPTY = "[data-split-empty]";
     var TITLE = "[data-split-title]";
@@ -378,6 +379,154 @@
             refresh(row);
         }
     }, true);
+
+    // ---- Dragging a row to a new place (F-046) ----------------------------------------------------
+    // Only the handle carries draggable="true". A draggable row would swallow the text selection a reader
+    // makes inside its own fields, and the row already has a keyboard path (the summary button, and the
+    // list's own move buttons where it has them). Narrow screens hide the handle in app.css: HTML5 drag does
+    // not fire on a touch screen, and a handle that does nothing is worse than no handle.
+    //
+    // The row is moved with insertBefore - the same node, so a block the pane owns stays in the pane and an
+    // unselected row keeps the fields it holds. Nothing here re-renders a row.
+
+    var dragRow = null;
+
+    function editorUnder(node) {
+        return node && node.closest ? node.closest(EDITOR) : null;
+    }
+
+    // Where the row would land: before the first row whose middle is below the pointer, else after the last
+    // one. Reading the rows' own rects (not the event's target) is what makes a drop between two rows - or
+    // past the end of the list - work at all.
+    function dropPosition(editor, event) {
+        var rows = rowsOf(editor);
+        for (var i = 0; i < rows.length; i++) {
+            var rect = rows[i].getBoundingClientRect();
+            if (event.clientY < rect.top + rect.height / 2) {
+                return { row: rows[i], before: true };
+            }
+        }
+
+        return rows.length > 0 ? { row: rows[rows.length - 1], before: false } : null;
+    }
+
+    function clearDropMarks(editor) {
+        if (!editor) {
+            return;
+        }
+
+        all(editor, ROW).forEach(function (row) {
+            if (row.hasAttribute("data-drop")) {
+                row.removeAttribute("data-drop");
+            }
+        });
+    }
+
+    function markDrop(editor, position) {
+        var mark = position.before ? "before" : "after";
+        var rows = rowsOf(editor);
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i] === position.row) {
+                if (rows[i].getAttribute("data-drop") !== mark) {
+                    rows[i].setAttribute("data-drop", mark);
+                }
+            } else if (rows[i].hasAttribute("data-drop")) {
+                rows[i].removeAttribute("data-drop");
+            }
+        }
+    }
+
+    function finishDrag() {
+        if (!dragRow) {
+            return;
+        }
+
+        var editor = editorUnder(dragRow);
+        dragRow.removeAttribute("data-dragging");
+        clearDropMarks(editor);
+        dragRow = null;
+    }
+
+    function drop(row, position) {
+        var list = row.parentNode;
+        if (!list || position.row === row) {
+            return;
+        }
+
+        // Already in that place (a whitespace text node between two rows does not count as a difference):
+        // there is nothing to move and nothing to announce.
+        if (position.before
+            ? row.nextElementSibling === position.row
+            : row.previousElementSibling === position.row) {
+            return;
+        }
+
+        var reference = position.before ? position.row : position.row.nextSibling;
+        list.insertBefore(row, reference);
+
+        // Numbering is the list's own business - each list numbers its rows with its own attribute - so the
+        // frame says what happened and the editor's script answers.
+        list.dispatchEvent(new CustomEvent("split-reorder", { bubbles: true }));
+    }
+
+    document.addEventListener("dragstart", function (event) {
+        var handle = event.target.closest ? event.target.closest(DRAG) : null;
+        if (!handle || !event.dataTransfer) {
+            return;
+        }
+
+        var row = handle.closest(ROW);
+        var editor = editorUnder(row);
+        if (!editor) {
+            return;
+        }
+
+        dragRow = row;
+        row.setAttribute("data-dragging", "true");
+        event.dataTransfer.effectAllowed = "move";
+
+        // Firefox starts no drag without data on the transfer; this drag carries no payload.
+        event.dataTransfer.setData("text/plain", "");
+    });
+
+    document.addEventListener("dragover", function (event) {
+        var editor = editorUnder(dragRow);
+
+        // A row only reorders inside its own list: the four step lists share one form, and a step that
+        // jumped into another list would change what the run does.
+        if (!editor || editorUnder(event.target) !== editor) {
+            return;
+        }
+
+        var position = dropPosition(editor, event);
+        if (!position || position.row === dragRow) {
+            // Dropping a row onto itself is not a place to land; leaving the mark up would promise a move.
+            clearDropMarks(editor);
+            return;
+        }
+
+        event.preventDefault();
+        if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = "move";
+        }
+
+        markDrop(editor, position);
+    });
+
+    document.addEventListener("drop", function (event) {
+        var editor = editorUnder(dragRow);
+        if (editor && editorUnder(event.target) === editor) {
+            var position = dropPosition(editor, event);
+            if (position && position.row !== dragRow) {
+                event.preventDefault();
+                drop(dragRow, position);
+            }
+        }
+
+        finishDrag();
+    });
+
+    document.addEventListener("dragend", finishDrag);
 
     // The pane only exists at the wide breakpoint; crossing it has to move the open block, not just
     // restyle it.

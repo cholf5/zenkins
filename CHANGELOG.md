@@ -8,6 +8,16 @@ signed-in page, so a tag below can be checked against the binaries that carry it
 
 ## Unreleased
 
+- **Rows can be dragged to a new place (F-046).** Up and down buttons were the only way to reorder a
+  step - nine presses to move the tenth step to the top - and the parameters list had no ordering at
+  all. A row now moves where the pointer drops it: the gesture lives in the frame
+  (`js/split-list.js`), so both lists get it, and the handle is the only draggable element, so a
+  reader's text selection inside the fields still works. The row is moved with `insertBefore` and
+  never re-rendered, which is what keeps the open row's fields in the pane and an unselected row's
+  fields where they are. A drag stays inside its own list (the four step lists share one form). The
+  parameters list also gained ↑↓, because the handle is hidden where there is no room for the pane and
+  a touch screen never fires an HTML5 drag.
+
 - **The parameters editor joins the list and inspector (F-045).** A project's build parameters were
   rendered the way the steps were: one fully expanded card each, so ten parameters were ten blocks of
   five fields. They are now one line per parameter - its number, its name (or *unnamed*, for one that

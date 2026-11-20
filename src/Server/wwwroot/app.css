@@ -153,6 +153,37 @@ html.dark {
   padding-inline-end: 0.5rem;
 }
 
+/* F-046: the drag handle. Hidden below the pane's breakpoint on purpose - HTML5 drag never fires on a touch
+   screen, so a handle there would be a control that does nothing. The row's keyboard path is the summary
+   button (and, on the steps lists, the move buttons). */
+.zk-drag {
+  display: none;
+  flex: none;
+  align-items: center;
+  padding: 0 0.5rem;
+  color: var(--muted-foreground);
+  cursor: grab;
+  user-select: none;
+}
+
+.zk-drag:active {
+  cursor: grabbing;
+}
+
+/* The row being dragged, and the edge it would land on. Both are transient: js/split-list.js clears them on
+   dragend, so a cancelled drag leaves no mark behind. */
+.zk-split-row[data-dragging] {
+  opacity: 0.5;
+}
+
+.zk-split-row[data-drop="before"] {
+  box-shadow: inset 0 2px 0 var(--ring);
+}
+
+.zk-split-row[data-drop="after"] {
+  box-shadow: inset 0 -2px 0 var(--ring);
+}
+
 .zk-row-action {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -240,6 +271,12 @@ textarea.zk-input {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 1rem;
+  }
+
+  /* F-046: dragging is a pointer gesture, so the handle exists only where there is room for the two-column
+     layout - the same breakpoint that puts the pane there. */
+  .zk-drag {
+    display: flex;
   }
 
   /* In the pane the block is the pane's content; the row keeps only its line. */

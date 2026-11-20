@@ -28,7 +28,9 @@
                 var parameter = Parameters[parameterIndex];
                 <li data-parameter-row data-split-step class="zk-split-row">
                     <div class="zk-split-row-head">
-                        @* The whole line selects the parameter; the row stays where the remove action lives. *@
+                        <span data-split-drag class="zk-drag" draggable="true" aria-hidden="true">⠿</span>
+                        @* The whole line selects the parameter; the row stays where the move/remove
+                           actions live. *@
                         <button type="button" data-split-select
                                 aria-expanded="false"
                                 aria-controls="@PaneId"
@@ -38,6 +40,14 @@
                             <span data-split-chips class="zk-split-chips"></span>
                         </button>
                         <div class="zk-split-actions">
+                            @* F-046: the keyboard's way to reorder. Drag needs a pointer and a wide window;
+                               these do not. *@
+                            <button type="button" data-parameter-action="move-up"
+                                    class="zk-row-action"
+                                    aria-label="@L10n["Move parameter {0} up", parameterIndex + 1]">↑</button>
+                            <button type="button" data-parameter-action="move-down"
+                                    class="zk-row-action"
+                                    aria-label="@L10n["Move parameter {0} down", parameterIndex + 1]">↓</button>
                             <button type="button" data-parameter-action="remove"
                                     class="zk-row-action zk-row-action-danger"
                                     aria-label="@L10n["Remove parameter {0}", parameterIndex + 1]">@L10n["Remove"]</button>
@@ -61,6 +71,7 @@
        halves use, so the template cannot lose a field the saved row has. *@
     <template id="parameter-row-template"><li data-parameter-row data-split-step class="zk-split-row">
         <div class="zk-split-row-head">
+            <span data-split-drag class="zk-drag" draggable="true" aria-hidden="true">⠿</span>
             <button type="button" data-split-select
                     aria-expanded="false"
                     aria-controls="@PaneId"
@@ -70,6 +81,12 @@
                 <span data-split-chips class="zk-split-chips"></span>
             </button>
             <div class="zk-split-actions">
+                <button type="button" data-parameter-action="move-up"
+                        class="zk-row-action"
+                        aria-label="@L10n["Move parameter up"]">↑</button>
+                <button type="button" data-parameter-action="move-down"
+                        class="zk-row-action"
+                        aria-label="@L10n["Move parameter down"]">↓</button>
                 <button type="button" data-parameter-action="remove"
                         class="zk-row-action zk-row-action-danger"
                         aria-label="@L10n["Remove parameter"]">@L10n["Remove"]</button>

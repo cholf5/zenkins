@@ -166,4 +166,42 @@ public sealed class ProjectUiSplitEditorTests
 
         return count;
     }
+
+    [Fact(Timeout = 2 * 60 * 1000)]
+    public async Task Only_a_drag_handle_is_draggable_and_each_list_numbers_its_own_rows_after_a_drop()
+    {
+        Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
+        using var host = await SnippetTestHost.CreateAsync();
+        var owner = await host.SignInOwnerAsync();
+        var projectId = await host.CreateFreestyleProjectAsync(owner, "split-drag");
+
+        var page = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/pipelines");
+        var parametersPage = await AuthTestHost.GetStringAsync(owner, $"/projects/{projectId}/parameters");
+
+        // F-046: both lists carry the handle, including their row templates (a row added in the browser has to
+        // be draggable too), and the handle is the only draggable thing: a draggable row would swallow the text
+        // selection a reader makes inside its own fields.
+        Assert.Contains("data-split-drag", page, StringComparison.Ordinal);
+        Assert.Contains("data-split-drag", parametersPage, StringComparison.Ordinal);
+        Assert.Equal(CountOf(page, "data-split-drag"), CountOf(page, "draggable=\"true\""));
+        Assert.Equal(CountOf(parametersPage, "data-split-drag"), CountOf(parametersPage, "draggable=\"true\""));
+
+        var frame = await AuthTestHost.GetStringAsync(owner, "/js/split-list.js");
+
+        // The frame moves the same node (no clone) and announces the move; numbering stays the list's own job,
+        // because each list numbers its rows in its own attribute.
+        Assert.Contains("insertBefore(row, reference)", frame, StringComparison.Ordinal);
+        Assert.Contains("\"dragover\"", frame, StringComparison.Ordinal);
+        Assert.Contains("split-reorder", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("cloneNode", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("innerHTML", frame, StringComparison.Ordinal);
+
+        // Both editors answer the announcement; the parameters list also keeps a keyboard path, since drag needs
+        // a pointer and the handle is hidden where there is no room for it.
+        var steps = await AuthTestHost.GetStringAsync(owner, "/js/freestyle-steps.js");
+        var parameterRows = await AuthTestHost.GetStringAsync(owner, "/js/parameter-rows.js");
+        Assert.Contains("split-reorder", steps, StringComparison.Ordinal);
+        Assert.Contains("split-reorder", parameterRows, StringComparison.Ordinal);
+        Assert.Contains("moveRow(form, moving", parameterRows, StringComparison.Ordinal);
+    }
 }

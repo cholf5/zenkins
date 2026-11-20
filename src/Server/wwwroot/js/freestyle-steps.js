@@ -344,6 +344,15 @@
 
     installSummaries();
 
+    // F-046: a row a drag moved. The frame reorders the nodes; numbering them is this list's own job (four
+    // lists share this script, and each numbers its rows in its own attribute).
+    document.addEventListener("split-reorder", function (event) {
+        var list = event.target && event.target.closest ? event.target.closest(LIST_SELECTOR) : null;
+        if (list) {
+            renumber(list);
+        }
+    });
+
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", installSummaries);
     }

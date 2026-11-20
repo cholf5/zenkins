@@ -56,6 +56,21 @@
         }
     }
 
+    // F-046: the keyboard's way to reorder a row - drag is a pointer gesture and needs a wide window, so the
+    // same move (the same node, moved with insertBefore) has to exist without either.
+    function moveRow(form, row, offset) {
+        var all = rows(form);
+        var index = all.indexOf(row);
+        var target = index + offset;
+        if (index < 0 || target < 0 || target >= all.length) {
+            return;
+        }
+
+        var reference = offset < 0 ? all[index - 1] : all[index + 1].nextSibling;
+        row.parentNode.insertBefore(row, reference);
+        renumber(form);
+    }
+
     // What a collapsed row says: the parameter's name (or the editor's word for one that has none yet) and its
     // type. The words come from the editor's data-split-labels, so neither language lives in this file.
     function parameterSummary(row, ctx) {
@@ -145,9 +160,24 @@
                     }
                 }
                 break;
+            case "move-up":
+            case "move-down":
+                var moving = button.closest(ROW_SELECTOR);
+                if (moving) {
+                    moveRow(form, moving, button.getAttribute("data-parameter-action") === "move-up" ? -1 : 1);
+                }
+                break;
         }
 
         event.preventDefault();
+    });
+
+    // F-046: a row a drag moved. The frame reorders the nodes; numbering them is this list's own job.
+    document.addEventListener("split-reorder", function (event) {
+        var form = event.target && event.target.closest ? event.target.closest(FORM_SELECTOR) : null;
+        if (form) {
+            renumber(form);
+        }
     });
 
     installSummary();

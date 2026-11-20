@@ -27,6 +27,7 @@
                     class="zk-split-row"
                     data-split-error="@(stepIndex == ErrorRowIndex ? "true" : null)">
                     <div class="zk-split-row-head">
+                        <span data-split-drag class="zk-drag" draggable="true" aria-hidden="true">⠿</span>
                         @* The whole line is the button that selects the step: one target, and the row
                            itself stays the place the move/remove actions live. *@
                         <button type="button" data-split-select
@@ -72,6 +73,7 @@
     <template id="@TemplateId">
         <li data-freestyle-step data-split-step class="zk-split-row">
             <div class="zk-split-row-head">
+                <span data-split-drag class="zk-drag" draggable="true" aria-hidden="true">⠿</span>
                 <button type="button" data-split-select
                         aria-expanded="false"
                         aria-controls="@PaneId"
